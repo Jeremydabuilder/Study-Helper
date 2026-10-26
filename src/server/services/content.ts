@@ -185,7 +185,7 @@ export function subjectOverview(ctx: Ctx, id: string) {
     (SELECT COUNT(*) FROM source_chunks WHERE source_id = sources.id) chunks,
     (SELECT COUNT(*) FROM source_chunks WHERE source_id = sources.id AND uncertain = 1) uncertain_chunks FROM sources WHERE subject_id = ? ORDER BY created_at`, id);
   const concepts = ctx.db.all<any>('SELECT * FROM concepts WHERE subject_id = ? ORDER BY created_at, name', id).map((c) => {
-    const refs = ctx.db.all<any>('SELECT quote, label, source_id FROM concept_refs WHERE concept_id = ?', c.id);
+    const refs = ctx.db.all<any>('SELECT quote, label, source_id, stale FROM concept_refs WHERE concept_id = ?', c.id);
     const st = ctx.db.get<any>('SELECT state, level, due_at FROM concept_state WHERE concept_id = ?', c.id);
     return {
       id: c.id, name: c.name, summary: c.summary, status: c.status, skillTag: c.skill_tag, support: c.support, supportNote: c.support_note, origin: c.origin,

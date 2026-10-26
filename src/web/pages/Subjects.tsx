@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ApiError, del, patch, post, put, useApi, fmtDate } from '../api';
+import { ApiError, del, patch, post, put, upload, useApi, fmtDate } from '../api';
 import { Chip, Empty, ErrorBox, Field, LevelChip, Modal, Spinner, SUPPORT_TEXT } from '../ui';
 
 const SUGGESTIONS = ['Math', 'History', 'English', 'Science'];
@@ -83,13 +83,14 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
             {d.sources.map((s: any) => (
               <li key={s.id} className="upcoming">
                 <div><strong>{s.title}</strong> <Chip>{KINDS.find((k) => k[0] === s.kind)?.[1] ?? s.kind}</Chip>{s.origin === 'sample' && <> <Chip tone="warn">sample</Chip></>}
+                  {s.status === 'draft' && <> <Chip tone="warn">needs your review</Chip></>}{s.file_id && <> <Chip>{s.origin.replace('file:', '').toUpperCase()} · {s.page_count} page{s.page_count === 1 ? '' : 's'}</Chip></>}
                   <div className="small muted">{s.chars.toLocaleString()} characters · {s.chunks} passages · added {fmtDate(s.created_at)}{s.uncertain_chunks ? ` · ${s.uncertain_chunks} passages with uncertain text` : ''}</div></div>
-                <div className="row gap-s"><button className="btn small" onClick={() => setViewSrc(s.id)}>View</button><button className="btn small" disabled={!!busy} onClick={() => extract(s.id)}>Find concepts</button><button className="btn small ghost" disabled={!!busy} title="Run extraction again even if concepts exist" onClick={() => extract(s.id, false, true)}>Find again</button></div>
+                <div className="row gap-s">{s.file_id ? <a className="btn small" href={`#/review/${s.id}`}>{s.status === 'draft' ? 'Review text' : 'Compare with original'}</a> : <button className="btn small" onClick={() => setViewSrc(s.id)}>View</button>}{s.file_id && <button className="btn small ghost" onClick={() => setViewSrc(s.id)} title="Passages the AI is not shown, and why">AI view</button>}{s.status !== 'draft' && <><button className="btn small" disabled={!!busy} onClick={() => extract(s.id)}>Find concepts</button><button className="btn small ghost" disabled={!!busy} title="Run extraction again even if concepts exist" onClick={() => extract(s.id, false, true)}>Find again</button></>}</div>
               </li>
             ))}
           </ul>
         )}
-        <p className="small muted mt-s">PDF and image uploads (with OCR and page references) are <strong>not available yet</strong>. You can upload .txt/.md files or paste text.</p>
+        <p className="small muted mt-s">You can paste text, add a .txt/.md file, upload a <strong>PDF</strong> (text is read on this computer, page by page, and you check it first), or upload a <strong>PNG/JPEG/WebP screenshot</strong> or a scanned PDF to type out beside the original. There is no OCR: nothing is sent to an outside service to read your files.</p>
       </section>
 
       {proposed.length > 0 && (
@@ -116,7 +117,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
         </form>
       </section>
 
-      {adding && <AddMaterial subjectId={id} onClose={() => setAdding(false)} onAdded={async (sid, dup) => { setAdding(false); await ov.reload(); if (dup) setMsg('You already added that exact text.'); else await extract(sid); }} />}
+      {adding && <AddMaterial subjectId={id} onClose={() => setAdding(false)} onAdded={async (sid, dup) => { setAdding(false); await ov.reload(); if (dup) setMsg('You already added that exact text.'); else await extract(sid); }} onUploaded={(sid, dup) => { setAdding(false); if (dup) { setMsg('That exact file is already in this subject.'); ov.reload(); } else go(`/review/${sid}`); }} />}
       {viewSrc && <SourceViewer id={viewSrc} onClose={() => setViewSrc(null)} />}
     </div>
   );
@@ -143,7 +144,7 @@ function ConceptRow({ c, all, selectable, sel, setSel, reload, onPractice }: any
             <p className="small muted" style={{ margin: '.1rem 0' }}>{c.supportNote}</p>
             {c.refs.length > 0 && <>
               <button className="btn small ghost" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide' : 'Show'} source ({c.refs.length})</button>
-              {open && c.refs.map((r: any, i: number) => <div className="quote" key={i}>“{r.quote}” <span className="muted small">— {r.label}</span></div>)}</>}
+              {open && c.refs.map((r: any, i: number) => <div className="quote" key={i} style={r.stale ? { opacity: 0.65 } : undefined}>“{r.quote}” <span className="muted small">— {r.stale ? 'no longer in the current material' : r.label}</span></div>)}</>}
             {c.prereqIds.length > 0 && <p className="small muted" style={{ margin: '.1rem 0' }}>Builds on: {c.prereqIds.map((p: string) => all.find((x: any) => x.id === p)?.name).filter(Boolean).join(', ')}</p>}
             {c.status === 'confirmed' && c.dueAt && <p className="small muted" style={{ margin: '.1rem 0' }}>Next review: {fmtDate(c.dueAt)}{c.state && <> · {c.state.independentSuccesses} independent success{c.state.independentSuccesses === 1 ? '' : 'es'}</>}</p>}
             <div className="row gap-s">
@@ -158,10 +159,16 @@ function ConceptRow({ c, all, selectable, sel, setSel, reload, onPractice }: any
   );
 }
 
-function AddMaterial({ subjectId, onClose, onAdded }: { subjectId: string; onClose: () => void; onAdded: (sourceId: string, dup: boolean) => void }) {
+function AddMaterial({ subjectId, onClose, onAdded, onUploaded }: { subjectId: string; onClose: () => void; onAdded: (sourceId: string, dup: boolean) => void; onUploaded: (sourceId: string, dup: boolean) => void }) {
   const [title, setTitle] = useState(''), [kind, setKind] = useState('notes'), [text, setText] = useState('');
   const [err, setErr] = useState<ApiError | null>(null);
   const [saving, setSaving] = useState(false);
+  const onBinary = async (f?: File) => {
+    if (!f) return;
+    setSaving(true); setErr(null);
+    try { const r = await upload(`/subjects/${subjectId}/files?title=${encodeURIComponent(title)}&kind=${encodeURIComponent(kind)}`, f); onUploaded(r.id, r.duplicate); }
+    catch (e) { setErr(e as ApiError); } finally { setSaving(false); }
+  };
   const onFile = async (f?: File) => {
     if (!f) return;
     if (!/\.(txt|md|markdown)$/i.test(f.name) && !f.type.startsWith('text/')) { setErr(new ApiError(0, 'unsupported', 'Only .txt and .md files can be read for now. PDFs and images are not available yet — paste the text instead.')); return; }
@@ -178,7 +185,8 @@ function AddMaterial({ subjectId, onClose, onAdded }: { subjectId: string; onClo
       <Field label="What is it?"><select value={kind} onChange={(e) => setKind(e.target.value)}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
       <Field label="Paste text" hint="Tip: lines like “Term: definition”, headings, and “Page 2” markers help me find concepts and keep page references."><textarea value={text} onChange={(e) => setText(e.target.value)} rows={10} placeholder="Paste your notes, packet, passage, or rubric here…" /></Field>
       <div className="row gap-s mt-s"><label className="btn small">Choose a .txt / .md file<input type="file" accept=".txt,.md,.markdown,text/plain" hidden onChange={(e) => onFile(e.target.files?.[0])} /></label>
-        <button className="btn small unavailable" disabled title="Not available yet">PDF / image upload — coming later</button></div>
+        <label className="btn small">Upload a PDF or screenshot<input type="file" accept="application/pdf,image/png,image/jpeg,image/webp,.pdf,.png,.jpg,.jpeg,.webp" hidden onChange={(e) => { onBinary(e.target.files?.[0]); e.target.value = ''; }} /></label></div>
+      <p className="small muted mt-s"><strong>PDFs and images stay on this computer.</strong> Text PDFs are read locally (up to 15 MB and 60 pages); scanned pages and screenshots can’t be read automatically, so you type them beside the original. You review everything before it’s used.</p>
       <p className="small muted mt-s">Text you add is treated as <em>content</em>, never as instructions to this app. Only the passages needed for a task are sent to an AI model, and only if you have configured one.</p>
       {err && <ErrorBox error={err} />}
       <div className="row mt"><button className="btn primary" disabled={saving || text.trim().length < 20} onClick={submit}>{saving ? 'Saving…' : 'Add and find concepts'}</button><button className="btn" onClick={onClose}>Cancel</button></div>
@@ -204,7 +212,7 @@ function SourceViewer({ id, onClose }: { id: string; onClose: () => void }) {
             <div className="row gap-s">{f.excludedFromAi ? <button className="btn small" onClick={() => decide(f.id, 'include')}>Show this to the AI</button> : <button className="btn small" onClick={() => decide(f.id, 'exclude')}>Leave this out of the AI view</button>}{f.decision && <button className="btn small ghost" onClick={() => decide(f.id, null)}>Reset to default</button>}</div></li>)}</ul>
           <p className="muted">Changes apply to future AI requests; concepts and questions already made are not rewritten.</p>
         </div>}
-        <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '.92rem', margin: 0 }}>{parts.map((p, i) => p.flag ? <mark key={i} style={{ background: p.flag.excludedFromAi ? 'var(--warn-bg, #fde9c8)' : 'var(--info-bg, #e3eefc)' }}>{p.text}</mark> : <span key={i}>{p.text}</span>)}</pre>
+        <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '.92rem', margin: 0 }}>{parts.map((p, i) => p.flag ? <mark key={i} style={{ background: p.flag.excludedFromAi ? 'var(--warn-bg, #fde9c8)' : 'var(--info-bg, #e3eefc)' }}>{p.text.replace(/\f/g, '\n— page break —\n')}</mark> : <span key={i}>{p.text.replace(/\f/g, '\n— page break —\n')}</span>)}</pre>
       </>}
     </Modal>
   );

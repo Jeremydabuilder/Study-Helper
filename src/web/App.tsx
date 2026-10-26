@@ -4,6 +4,7 @@ import { useHashRoute } from './ui';
 import { Today } from './pages/Today';
 import { Study } from './pages/Study';
 import { Subjects, SubjectDetail } from './pages/Subjects';
+import { ReviewSource } from './pages/ReviewSource';
 import { Plan } from './pages/Plan';
 import { CalendarPage } from './pages/CalendarPage';
 import { Progress } from './pages/Progress';
@@ -21,6 +22,7 @@ export function App() {
 
   let page;
   if (path.startsWith('/study/')) page = <Study id={path.split('/')[2]} go={go} />;
+  else if (path.startsWith('/review/')) page = <ReviewSource id={path.split('/')[2]} go={go} />;
   else if (path.startsWith('/subjects/')) page = <SubjectDetail id={path.split('/')[2]} go={go} />;
   else if (path === '/subjects') page = <Subjects go={go} />;
   else if (path === '/plan') page = <Plan go={go} />;

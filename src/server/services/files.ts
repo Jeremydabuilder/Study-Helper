@@ -129,7 +129,7 @@ export function reviewPages(ctx: Ctx, id: string) {
   const meta = parse<any>(s.extraction, { pages: [] });
   const chunks = ctx.db.all<any>('SELECT page, uncertain FROM source_chunks WHERE source_id = ?', id);
   return {
-    file: { id: s.fid, name: s.filename, kind: s.fkind, bytes: s.bytes, url: `/api/files/${s.fid}` }, status: s.status, rev: s.rev, method: meta.method ?? 'none',
+    subjectId: s.subject_id as string, title: s.title as string, file: { id: s.fid, name: s.filename, kind: s.fkind, bytes: s.bytes, url: `/api/files/${s.fid}` }, status: s.status, rev: s.rev, method: meta.method ?? 'none',
     pages: texts.map((text, i) => ({ n: i + 1, text, chars: text.length, noText: text.replace(/\s/g, '').length < NO_TEXT_BELOW, warning: meta.pages?.[i]?.warning ?? null, reviewMath: chunks.some((c) => c.page === i + 1 && c.uncertain) })),
     revisions: ctx.db.all<any>('SELECT rev, kind, note, created_at at FROM source_revisions WHERE source_id = ? ORDER BY rev DESC LIMIT 10', id),
   };
