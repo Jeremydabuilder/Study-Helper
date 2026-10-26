@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { AIError } from '../../ai/provider';
 import { isMathSkill } from '../../core/mathgen';
-import { chunkText, verifyQuotes, Support, instructionRanges, isInstructionLike, stripInstructionLines } from '../../core/sources';
+import { chunkText, verifyQuotes, Support, looksLikeInjectedOutput } from '../../core/sources';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, parse } from './common';
+import { exclusionsFor, ensureFlags, modelChunks, sourceFlags } from './sourceSafety';
 
 export function listSubjects(ctx: Ctx) {
   const rows = ctx.db.all<any>(`SELECT s.*, 
@@ -56,7 +57,9 @@ export function addSource(ctx: Ctx, subjectId: string, b: { title?: string; kind
     for (const c of chunks) ctx.db.run('INSERT INTO source_chunks (id,source_id,idx,text,page,para,char_start,char_end,label,uncertain) VALUES (?,?,?,?,?,?,?,?,?,?)',
       uid(), id, c.idx, c.text, c.page, c.para, c.start, c.end, c.label, Number(c.uncertain));
   });
-  return { id, duplicate: false, chunks: chunks.length };
+  ensureFlags(ctx, id);
+  const flags = sourceFlags(ctx, id);
+  return { id, duplicate: false, chunks: chunks.length, flagged: { strong: flags.filter((f) => f.severity === 'strong').length, weak: flags.filter((f) => f.severity === 'weak').length } };
 }
 
 export function deleteSource(ctx: Ctx, id: string) { ctx.db.run('DELETE FROM sources WHERE id = ?', id); }
@@ -69,15 +72,15 @@ export async function extractConcepts(ctx: Ctx, sourceId: string, opts: { useOff
   // Don't pay for the same extraction twice: concepts already came from this exact text.
   const already = ctx.db.get<any>('SELECT COUNT(*) n FROM concepts WHERE source_id = ?', sourceId).n;
   if (already > 0 && !opts.force) return { created: 0, skippedExisting: already, discardedQuotes: 0, truncated: false, provider: 'none (already extracted)', reused: true };
-  const rows = ctx.db.all<any>('SELECT id, label, text, uncertain FROM source_chunks WHERE source_id = ? ORDER BY idx', sourceId);
+  const rows = ctx.db.all<any>('SELECT id, source_id, label, text, char_start, uncertain FROM source_chunks WHERE source_id = ? ORDER BY idx', sourceId);
+  // The model sees a masked view; the original text and every chunk stay as uploaded. What was left out is listed in the source viewer.
+  const visible = modelChunks(ctx, rows);
+  const excludedSpans = (exclusionsFor(ctx, [sourceId]).get(sourceId) ?? []).length;
   let used = 0; const chunks: { id: string; label: string; text: string }[] = [];
-  let ignoredLines = 0;
-  for (const r of rows) {
-    const clean = stripInstructionLines(r.text); ignoredLines += r.text.split('\n').length - clean.split('\n').length;
-    if (!clean.trim()) continue;
-    if (used + clean.length > EXTRACT_CHAR_BUDGET) break; chunks.push({ id: r.id, label: r.label, text: clean }); used += clean.length;
+  for (const r of visible) {
+    if (used + r.text.length > EXTRACT_CHAR_BUDGET) break; chunks.push({ id: r.id, label: r.label, text: r.text }); used += r.text.length;
   }
-  const truncated = chunks.length < rows.length;
+  const truncated = chunks.length < visible.length;
   const provider = opts.useOffline ? ctx.offline : ctx.ai;
   let out;
   try { out = await provider.extractConcepts({ subjectName: ctx.db.get<any>('SELECT name FROM subjects WHERE id=?', src.subject_id).name, chunks, maxConcepts: 12 }); }
@@ -85,7 +88,7 @@ export async function extractConcepts(ctx: Ctx, sourceId: string, opts: { useOff
     if (e instanceof AIError) throw e;
     throw new HttpError(422, 'nothing_found', 'I could not find clear concepts in this text. Try adding a definition list or headings, or add concepts by hand.');
   }
-  const badRanges = instructionRanges(src.text);
+  const excluded = exclusionsFor(ctx, [sourceId]).get(sourceId) ?? [];
   const existing = new Map(ctx.db.all<any>('SELECT id, lower(name) n FROM concepts WHERE subject_id = ?', src.subject_id).map((r) => [r.n, r.id]));
   const created: string[] = []; let skipped = 0, rejectedQuotes = 0, suspicious = 0;
   const idByName = new Map<string, string>(existing);
@@ -94,10 +97,11 @@ export async function extractConcepts(ctx: Ctx, sourceId: string, opts: { useOff
     for (const c of out.concepts) {
       const key = c.name.toLowerCase().trim();
       if (existing.has(key)) { skipped++; continue; }
-      if (isInstructionLike(c.name) || isInstructionLike(c.summary)) { suspicious++; continue; }
+      // a concept whose own wording reads like an order to an AI suggests the model followed an injection; it is dropped and counted, never silently
+      if (looksLikeInjectedOutput(c.name) || looksLikeInjectedOutput(c.summary)) { suspicious++; continue; }
       const vq = verifyQuotes(src.text, vchunks, c.quotes ?? []);
-      // quotes that sit inside instruction-like lines are not study material; a concept supported only by them is dropped
-      const inBad = vq.verified.filter((x) => badRanges.some((r) => x.start >= r.start && x.start <= r.end));
+      // quotes inside passages that were left out of the AI view are not evidence; a concept supported only by them is dropped
+      const inBad = vq.verified.filter((x) => excluded.some((r) => x.start < r.end && x.end > r.start));
       if (inBad.length && inBad.length === vq.verified.length) { suspicious++; continue; }
       const verified = vq.verified.filter((x) => !inBad.includes(x)), rejected = vq.rejected;
       rejectedQuotes += rejected.length;
@@ -121,7 +125,7 @@ export async function extractConcepts(ctx: Ctx, sourceId: string, opts: { useOff
       for (const p of c.prerequisites ?? []) { const pid = idByName.get(p.toLowerCase().trim()); if (pid && pid !== cid && !wouldCycle(ctx, cid, pid)) ctx.db.run('INSERT OR IGNORE INTO concept_prereqs (concept_id, prereq_id) VALUES (?,?)', cid, pid); }
     }
   });
-  return { created: created.length, skippedExisting: skipped, discardedQuotes: rejectedQuotes, truncated, provider: provider.label, ignoredInstructionLines: ignoredLines, droppedSuspiciousConcepts: suspicious };
+  return { created: created.length, skippedExisting: skipped, discardedQuotes: rejectedQuotes, truncated, provider: provider.label, excludedPassages: excludedSpans, droppedSuspiciousConcepts: suspicious };
 }
 
 function chunksForVerify(ctx: Ctx, sourceId: string) {
@@ -190,5 +194,5 @@ export function subjectOverview(ctx: Ctx, id: string) {
 export function getSource(ctx: Ctx, id: string) {
   const s = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', id);
   if (!s) throw new HttpError(404, 'not_found', 'Material not found.');
-  return { id: s.id, title: s.title, kind: s.kind, subjectId: s.subject_id, text: s.text, chunks: ctx.db.all<any>('SELECT idx, label, char_start start, char_end end, uncertain FROM source_chunks WHERE source_id = ? ORDER BY idx', id) };
+  return { id: s.id, title: s.title, kind: s.kind, subjectId: s.subject_id, text: s.text, originalIsUnchanged: s.original_text === s.text, chunks: ctx.db.all<any>('SELECT idx, label, char_start start, char_end end, uncertain FROM source_chunks WHERE source_id = ? ORDER BY idx', id), flags: sourceFlags(ctx, id) };
 }

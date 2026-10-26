@@ -9,6 +9,7 @@ import { DEFAULT_AVAILABILITY } from '../core/schedule';
 import { isValidTimeZone } from '../core/time';
 import { WorkspaceName } from './db';
 import { Runtime } from './context';
+import { setFlagDecision } from './services/sourceSafety';
 import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfile, getSetting, getWeights, setSetting, usageReport } from './services/common';
 import * as content from './services/content';
 import * as practice from './services/practice';
@@ -85,6 +86,7 @@ export function createApp(rt: Runtime) {
   app.delete('/api/subjects/:id', h((ctx, req) => content.deleteSubject(ctx, req.params.id)));
   app.post('/api/subjects/:id/sources', h((ctx, req) => content.addSource(ctx, req.params.id, z.object({ title: z.string().optional(), kind: z.string().optional(), text: z.string(), origin: z.string().optional() }).parse(req.body))));
   app.get('/api/sources/:id', h((ctx, req) => content.getSource(ctx, req.params.id)));
+  app.put('/api/sources/:id/flags/:flagId', h((ctx, req) => setFlagDecision(ctx, req.params.id, req.params.flagId, z.object({ decision: z.enum(['include', 'exclude']).nullable() }).parse(req.body).decision)));
   app.delete('/api/sources/:id', h((ctx, req) => content.deleteSource(ctx, req.params.id)));
   app.post('/api/sources/:id/extract', h((ctx, req) => content.extractConcepts(ctx, req.params.id, { useOffline: bool(req.body?.useOffline), force: bool(req.body?.force) })));
   app.post('/api/subjects/:id/concepts', h((ctx, req) => content.addConcept(ctx, req.params.id, z.object({ name: z.string(), summary: z.string().optional(), skillTag: z.string().nullable().optional() }).parse(req.body))));

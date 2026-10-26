@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ApiError, del, patch, post, useApi, fmtDate } from '../api';
+import { ApiError, del, patch, post, put, useApi, fmtDate } from '../api';
 import { Chip, Empty, ErrorBox, Field, LevelChip, Modal, Spinner, SUPPORT_TEXT } from '../ui';
 
 const SUGGESTIONS = ['Math', 'History', 'English', 'Science'];
@@ -59,7 +59,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
   const extract = (sid: string, useOffline = false, force = false) => run('Reading your material and finding concepts…', async () => {
     const r = await post(`/sources/${sid}/extract`, { useOffline, force });
     if (r.reused) { setMsg('Concepts were already found in this material, so nothing was re-run (that avoids paying for the same extraction twice). Use “Find again” to force it.'); return; }
-    setMsg(`Found ${r.created} new concept${r.created === 1 ? '' : 's'}${r.skippedExisting ? ` (${r.skippedExisting} you already had)` : ''}${r.discardedQuotes ? `. ${r.discardedQuotes} quote${r.discardedQuotes === 1 ? '' : 's'} could not be found in your text and ${r.discardedQuotes === 1 ? 'was' : 'were'} discarded` : ''}${r.truncated ? '. Only the first part of a long text was read' : ''}${r.ignoredInstructionLines ? `. ${r.ignoredInstructionLines} line${r.ignoredInstructionLines === 1 ? '' : 's'} that read like instructions to an AI ${r.ignoredInstructionLines === 1 ? 'was' : 'were'} ignored — your material is treated as content, never as commands` : ''}. Review them below.`);
+    setMsg(`Found ${r.created} new concept${r.created === 1 ? '' : 's'}${r.skippedExisting ? ` (${r.skippedExisting} you already had)` : ''}${r.discardedQuotes ? `. ${r.discardedQuotes} quote${r.discardedQuotes === 1 ? '' : 's'} could not be found in your text and ${r.discardedQuotes === 1 ? 'was' : 'were'} discarded` : ''}${r.truncated ? '. Only the first part of a long text was read' : ''}${r.excludedPassages ? `. ${r.excludedPassages} passage${r.excludedPassages === 1 ? '' : 's'} that read like orders to an AI ${r.excludedPassages === 1 ? 'was' : 'were'} left out of what the AI saw (your original is unchanged — open the material to review or restore ${r.excludedPassages === 1 ? 'it' : 'them'})` : ''}${r.droppedSuspiciousConcepts ? `. ${r.droppedSuspiciousConcepts} suggested concept${r.droppedSuspiciousConcepts === 1 ? '' : 's'} that looked like an injected command ${r.droppedSuspiciousConcepts === 1 ? 'was' : 'were'} dropped` : ''}. Review them below.`);
     await ov.reload();
   });
   const bulk = (status: 'confirmed' | 'rejected') => run('Saving…', async () => { await post('/concepts/bulk', { ids: [...sel], status }); setSel(new Set()); await ov.reload(); });
@@ -188,10 +188,24 @@ function AddMaterial({ subjectId, onClose, onAdded }: { subjectId: string; onClo
 
 function SourceViewer({ id, onClose }: { id: string; onClose: () => void }) {
   const s = useApi<any>(`/sources/${id}`);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const decide = async (flagId: string, decision: 'include' | 'exclude' | null) => { setErr(null); try { await put(`/sources/${id}/flags/${flagId}`, { decision }); await s.reload(); } catch (e) { setErr(e as ApiError); } };
+  const d = s.data;
+  const parts: { text: string; flag?: any }[] = [];
+  if (d) { let pos = 0; for (const f of d.flags) { if (f.start < pos) continue; if (f.start > pos) parts.push({ text: d.text.slice(pos, f.start) }); parts.push({ text: d.text.slice(f.start, f.end), flag: f }); pos = f.end; } parts.push({ text: d.text.slice(pos) }); }
   return (
-    <Modal title={s.data?.title ?? 'Material'} onClose={onClose}>
-      {s.loading && <Spinner />}{s.error && <ErrorBox error={s.error} onRetry={s.reload} />}
-      {s.data && <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '.92rem', margin: 0 }}>{s.data.text}</pre>}
+    <Modal title={d?.title ?? 'Material'} onClose={onClose}>
+      {s.loading && !d && <Spinner />}{s.error && <ErrorBox error={s.error} onRetry={s.reload} />}{err && <ErrorBox error={err} />}
+      {d && <>
+        {d.flags.length > 0 && <div className="notice info small" role="status">
+          <strong>{d.flags.length} passage{d.flags.length === 1 ? '' : 's'} flagged.</strong> Wording like this is sometimes an attempt to give orders to an AI, and sometimes ordinary text (a story, a lesson about AI). The check is a guess, not proof. Your original text is never changed; this only decides what an AI model is shown.
+          <ul>{d.flags.map((f: any) => <li key={f.id} className="mt-s"><Chip tone={f.excludedFromAi ? 'warn' : 'neutral'}>{f.excludedFromAi ? 'left out of AI view' : 'shown to AI'}</Chip> <span className="muted">{f.label || 'text'} · {f.severity === 'strong' ? 'reads like an order to an AI' : 'contains a phrase to watch'}</span>
+            <div className="quote">“{f.excerpt.length > 240 ? f.excerpt.slice(0, 240) + '…' : f.excerpt}”</div>
+            <div className="row gap-s">{f.excludedFromAi ? <button className="btn small" onClick={() => decide(f.id, 'include')}>Show this to the AI</button> : <button className="btn small" onClick={() => decide(f.id, 'exclude')}>Leave this out of the AI view</button>}{f.decision && <button className="btn small ghost" onClick={() => decide(f.id, null)}>Reset to default</button>}</div></li>)}</ul>
+          <p className="muted">Changes apply to future AI requests; concepts and questions already made are not rewritten.</p>
+        </div>}
+        <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '.92rem', margin: 0 }}>{parts.map((p, i) => p.flag ? <mark key={i} style={{ background: p.flag.excludedFromAi ? 'var(--warn-bg, #fde9c8)' : 'var(--info-bg, #e3eefc)' }}>{p.text}</mark> : <span key={i}>{p.text}</span>)}</pre>
+      </>}
     </Modal>
   );
 }

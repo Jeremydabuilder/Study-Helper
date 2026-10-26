@@ -6,7 +6,6 @@
 import { MATH_SKILLS, MathSkill, generateMathProblem, isMathSkill } from '../core/mathgen';
 import { rng } from '../core/mathgen';
 import { tokens } from '../core/retrieval';
-import { isInstructionLike } from '../core/sources';
 import { AIProvider, CallOpts, ExtractInput, GenerateInput, GradeInput } from './provider';
 import { ConceptExtraction, GeneratedQuestion, GradeResult, QuestionBatch } from './schemas';
 
@@ -40,7 +39,7 @@ export class OfflineProvider implements AIProvider {
       seen.add(key);
       out.push({ name: name.slice(0, 90), summary: summary.slice(0, 480), quotes: [quote.slice(0, 380)], prerequisites: [], skill_tag: tag ?? null });
     };
-    const text = i.chunks.map((c) => c.text).join('\n').split('\n').filter((l) => !isInstructionLike(l)).join('\n');
+    const text = i.chunks.map((c) => c.text).join('\n'); // chunks arrive already masked by the app
     // math skills first so they get generators. Prefer a "Term: definition" line over any other mention (headings mention everything).
     const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
     const defLine = /^[-*•]?\s*\**([A-Za-z][^:]{2,60}):\s+(.{15,})$/;
@@ -54,7 +53,6 @@ export class OfflineProvider implements AIProvider {
       add(MATH_SKILLS[tag], (m ? m[2] : best).trim(), best, tag);
     }
     for (const c of i.chunks) for (const raw of c.text.split('\n')) {
-      if (isInstructionLike(raw)) continue;
       const line = raw.trim().replace(/^[-*•]\s*/, '');
       const m = line.match(/^\**([A-Za-z][A-Za-z0-9 ,'()/-]{1,60}?)\**\s*(?::|\s[–—-]\s)\s+(.{15,})$/);
       if (m && m[1].split(' ').length <= 6) { add(m[1].replace(/\*/g, '').trim(), m[2].trim(), line); continue; }

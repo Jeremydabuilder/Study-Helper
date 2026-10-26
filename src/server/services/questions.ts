@@ -6,6 +6,7 @@ import { buildContext } from '../../core/retrieval';
 import { verifyQuotes } from '../../core/sources';
 import { uid } from '../db';
 import { Ctx, HttpError, parse } from './common';
+import { modelChunks } from './sourceSafety';
 import { AIError } from '../../ai/provider';
 
 export interface QuestionRow {
@@ -68,11 +69,11 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: { focus:
   const math = isMathSkill(c.skill_tag);
   // Math skills use verified deterministic generators: no model call, unlimited fresh variants.
   const provider = math || o.useOffline ? ctx.offline : ctx.ai;
-  const chunkRows = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id FROM source_chunks ch JOIN sources s ON s.id = ch.source_id WHERE s.subject_id = ? ORDER BY ch.source_id, ch.idx', c.subject_id);
+  const chunkRows = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id = ch.source_id WHERE s.subject_id = ? ORDER BY ch.source_id, ch.idx', c.subject_id);
   const refChunkIds = ctx.db.all<any>('SELECT chunk_id FROM concept_refs WHERE concept_id = ? AND chunk_id IS NOT NULL', conceptId).map((r) => r.chunk_id);
   const memories = ctx.db.all<any>('SELECT id, kind, text, subject_id AS subjectId, concept_id AS conceptId FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 30');
   const mis = ctx.db.all<any>("SELECT description, count FROM misconceptions WHERE concept_id = ? AND status = 'active' ORDER BY count DESC", conceptId);
-  const context = buildContext({ concept: { id: c.id, name: c.name, summary: c.summary, subjectId: c.subject_id }, chunks: chunkRows, refChunkIds, memories, misconceptions: mis });
+  const context = buildContext({ concept: { id: c.id, name: c.name, summary: c.summary, subjectId: c.subject_id }, chunks: modelChunks(ctx, chunkRows), refChunkIds, memories, misconceptions: mis });
   const existing = ctx.db.all<any>('SELECT prompt FROM questions WHERE concept_id = ?', conceptId).map((r) => r.prompt);
   const others = ctx.db.all<any>("SELECT name, summary FROM concepts WHERE subject_id = ? AND status = 'confirmed' AND id != ?", c.subject_id, conceptId);
   const batch = await provider.generateQuestions({

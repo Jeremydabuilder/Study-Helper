@@ -11,6 +11,7 @@ import { wilson } from '../../core/stats';
 import { HOUR, DAY } from '../../core/time';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, getProfile, getSchedulerParams, parse } from './common';
+import { modelChunks } from './sourceSafety';
 import { PickOpts, QuestionRow, getQuestion, pickQuestion, publicQuestion } from './questions';
 import { buildPlanInputs } from './plan';
 
@@ -239,9 +240,9 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
   // open-ended: rubric-based
   const rubric = parse<any>(q.rubric, { keyPoints: [], sample: null });
   const concept = ctx.db.get<any>('SELECT id, name, summary, subject_id FROM concepts WHERE id=?', q.concept_id);
-  const chunks = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text FROM source_chunks ch JOIN sources s ON s.id=ch.source_id WHERE s.subject_id=?', concept.subject_id);
+  const chunks = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id=ch.source_id WHERE s.subject_id=?', concept.subject_id);
   const refIds = ctx.db.all<any>('SELECT chunk_id FROM concept_refs WHERE concept_id=? AND chunk_id IS NOT NULL', concept.id).map((r) => r.chunk_id);
-  const context = buildContext({ concept: { ...concept, subjectId: concept.subject_id }, chunks, refChunkIds: refIds, memories: [], misconceptions: [], maxChars: 2500 });
+  const context = buildContext({ concept: { ...concept, subjectId: concept.subject_id }, chunks: modelChunks(ctx, chunks), refChunkIds: refIds, memories: [], misconceptions: [], maxChars: 2500 });
   try {
     const g = await ctx.ai.gradeAnswer({
       question: { prompt: q.prompt, kind: q.kind, rubric: rubric.keyPoints ?? [], sampleAnswer: rubric.sample ?? undefined },
