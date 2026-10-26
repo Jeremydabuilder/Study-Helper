@@ -1,0 +1,125 @@
+[
+ {
+  "id": "gen-hist-alliances",
+  "subject": "History",
+  "concept": {
+   "name": "Alliances",
+   "summary": "Formal agreements between countries to defend one another, such as the Triple Entente and the Triple Alliance.",
+   "skillTag": null
+  },
+  "excerpts": [
+   {
+    "label": "¶3",
+    "text": "Alliances: formal agreements between countries to defend one another, such as the Triple Entente and the Triple Alliance."
+   },
+   {
+    "label": "¶7",
+    "text": "July Crisis: the weeks of diplomacy and ultimatums after the assassination that ended with alliances pulling the great powers into war."
+   }
+  ],
+  "otherConcepts": [
+   {
+    "name": "Militarism",
+    "summary": "Build-up of armies and navies and belief that military strength should guide policy."
+   },
+   {
+    "name": "Imperialism",
+    "summary": "Competition between powers to build empires and control colonies."
+   }
+  ],
+  "practice": 3,
+  "heldout": 1,
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "gen-eng-evidence",
+  "subject": "English",
+  "concept": {
+   "name": "Claim and evidence",
+   "summary": "A strong answer states a clear claim and supports it with accurate quotations from the text.",
+   "skillTag": null
+  },
+  "excerpts": [
+   {
+    "label": "¶1",
+    "text": "She stood in the kitchen doorway and counted the boxes twice, as if the number might change. Her father had said the mainland school was a gift, and she had nodded as he spoke."
+   },
+   {
+    "label": "¶2",
+    "text": "The sea had always told her when to wake, and tonight it was loud. She ran her thumb along the worn railing one last time, then pulled her hand back and pushed it into her pocket, as though the rail might remember her."
+   }
+  ],
+  "otherConcepts": [
+   {
+    "name": "Quoting versus paraphrasing",
+    "summary": "A quotation uses the author's exact words; a paraphrase restates the idea in your own words."
+   }
+  ],
+  "practice": 3,
+  "heldout": 1,
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "gen-eng-quote",
+  "subject": "English",
+  "concept": {
+   "name": "Quoting versus paraphrasing",
+   "summary": "A quotation uses the author's exact words in quotation marks; a paraphrase restates the idea in your own words.",
+   "skillTag": null
+  },
+  "excerpts": [
+   {
+    "label": "¶1",
+    "text": "She stood in the kitchen doorway and counted the boxes twice, as if the number might change. Her father had said the mainland school was a gift, and she had nodded as he spoke."
+   },
+   {
+    "label": "¶2",
+    "text": "The sea had always told her when to wake, and tonight it was loud. She ran her thumb along the worn railing one last time, then pulled her hand back and pushed it into her pocket, as though the rail might remember her."
+   }
+  ],
+  "otherConcepts": [],
+  "practice": 3,
+  "heldout": 1,
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "gen-hist-imperialism",
+  "subject": "History",
+  "concept": {
+   "name": "Imperialism",
+   "summary": "Competition between powers to build empires and control colonies and resources.",
+   "skillTag": null
+  },
+  "excerpts": [
+   {
+    "label": "¶5",
+    "text": "Imperialism: competition between powers to build empires and control colonies and resources."
+   }
+  ],
+  "otherConcepts": [
+   {
+    "name": "Nationalism",
+    "summary": "Pride in one's nation, including ethnic groups seeking their own state."
+   }
+  ],
+  "practice": 3,
+  "heldout": 1,
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ }
+]

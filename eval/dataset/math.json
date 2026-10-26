@@ -1,0 +1,537 @@
+[
+ {
+  "id": "m01",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 7/2",
+   "variable": "x"
+  },
+  "student": "3.5",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m02",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 7/2",
+   "variable": "x"
+  },
+  "student": "x = 3.5",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m03",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 5 or x = -2",
+   "variable": "x"
+  },
+  "student": "-2, 5",
+  "expected": "correct",
+  "note": "order and notation",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m04",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 5 or x = -2",
+   "variable": "x"
+  },
+  "student": "{5, -2}",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m05",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x >= 4",
+   "variable": "x"
+  },
+  "student": "[4, ∞)",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m06",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x < 3",
+   "variable": "x"
+  },
+  "student": "(-inf, 3)",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m07",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "-1 < x <= 4",
+   "variable": "x"
+  },
+  "student": "(-1, 4]",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m08",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x < -1 or x > 4",
+   "variable": "x"
+  },
+  "student": "(−∞, −1) ∪ (4, ∞)",
+  "expected": "correct",
+  "note": "unicode minus and union",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m09",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "no solution",
+   "variable": "x"
+  },
+  "student": "∅",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m10",
+  "category": "equivalent_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "all real numbers",
+   "variable": "x"
+  },
+  "student": "(-inf, inf)",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m11",
+  "category": "endpoint",
+  "spec": {
+   "type": "math_set",
+   "answer": "x <= 3",
+   "variable": "x"
+  },
+  "student": "x < 3",
+  "expected": "partial",
+  "note": "endpoint exclusion error",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "endpoint_inclusion"
+  ]
+ },
+ {
+  "id": "m12",
+  "category": "endpoint",
+  "spec": {
+   "type": "math_set",
+   "answer": "x > 3",
+   "variable": "x"
+  },
+  "student": "x >= 3",
+  "expected": "partial",
+  "note": "endpoint inclusion error",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "endpoint_inclusion"
+  ]
+ },
+ {
+  "id": "m13",
+  "category": "endpoint",
+  "spec": {
+   "type": "math_set",
+   "answer": "[2, 5)",
+   "variable": "x"
+  },
+  "student": "(2, 5]",
+  "expected": "partial",
+  "note": "both endpoints swapped",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "endpoint_inclusion"
+  ]
+ },
+ {
+  "id": "m14",
+  "category": "endpoint",
+  "spec": {
+   "type": "math_set",
+   "answer": "-3 <= x < 7",
+   "variable": "x"
+  },
+  "student": "-3 < x <= 7",
+  "expected": "partial",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "endpoint_inclusion"
+  ]
+ },
+ {
+  "id": "m15",
+  "category": "misconception_flipped",
+  "spec": {
+   "type": "math_set",
+   "answer": "x > -2",
+   "variable": "x"
+  },
+  "student": "x < -2",
+  "expected": "incorrect",
+  "note": "forgot to flip the sign",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "flipped_inequality"
+  ]
+ },
+ {
+  "id": "m16",
+  "category": "sign_error",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 4",
+   "variable": "x"
+  },
+  "student": "x = -4",
+  "expected": "incorrect",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "sign_error"
+  ]
+ },
+ {
+  "id": "m17",
+  "category": "missing_case",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 5 or x = -2",
+   "variable": "x"
+  },
+  "student": "x = 5",
+  "expected": "partial",
+  "note": "only one absolute-value case",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "missing_solution"
+  ]
+ },
+ {
+  "id": "m18",
+  "category": "extraneous",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 5",
+   "variable": "x"
+  },
+  "student": "x = 5 or x = 1",
+  "expected": "partial",
+  "note": "kept an extraneous solution",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "extraneous_solution"
+  ]
+ },
+ {
+  "id": "m19",
+  "category": "wrong_answer",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 5 or x = -2",
+   "variable": "x"
+  },
+  "student": "x = 99",
+  "expected": "incorrect",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m20",
+  "category": "unparseable",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 3",
+   "variable": "x"
+  },
+  "student": "banana",
+  "expected": "unparseable",
+  "note": "must not be graded as wrong",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m21",
+  "category": "unparseable",
+  "spec": {
+   "type": "math_set",
+   "answer": "x > 3",
+   "variable": "x"
+  },
+  "student": "2x > 6",
+  "expected": "unparseable",
+  "note": "not solved for x",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m22",
+  "category": "unparseable",
+  "spec": {
+   "type": "math_set",
+   "answer": "x = 3",
+   "variable": "x"
+  },
+  "student": "process.exit(1)",
+  "expected": "unparseable",
+  "note": "code-like input is never executed",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m23",
+  "category": "equivalent_expression",
+  "spec": {
+   "type": "math_expr",
+   "answer": "2x+6",
+   "variable": "x"
+  },
+  "student": "2(x+3)",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m24",
+  "category": "equivalent_expression",
+  "spec": {
+   "type": "math_expr",
+   "answer": "(x-1)(x+1)",
+   "variable": "x"
+  },
+  "student": "x^2-1",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m25",
+  "category": "wrong_expression",
+  "spec": {
+   "type": "math_expr",
+   "answer": "2x+6",
+   "variable": "x"
+  },
+  "student": "2x+5",
+  "expected": "incorrect",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m26",
+  "category": "number",
+  "spec": {
+   "type": "math_number",
+   "answer": "3/4"
+  },
+  "student": "0.75",
+  "expected": "correct",
+  "note": "",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m27",
+  "category": "number_rounding_policy",
+  "spec": {
+   "type": "math_number",
+   "answer": "1/3"
+  },
+  "student": "0.33",
+  "expected": "incorrect",
+  "note": "STRICT: rounding policy is a product decision a teacher may want to relax",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m28",
+  "category": "set_operation",
+  "spec": {
+   "type": "math_set",
+   "answer": "{3, 4}",
+   "variable": "x"
+  },
+  "student": "{4, 3}",
+  "expected": "correct",
+  "note": "A ∩ B",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ },
+ {
+  "id": "m29",
+  "category": "set_operation",
+  "spec": {
+   "type": "math_set",
+   "answer": "{1, 2, 3, 4, 5}",
+   "variable": "x"
+  },
+  "student": "{1, 2, 3, 4}",
+  "expected": "partial",
+  "note": "missed an element of a union",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  },
+  "tags": [
+   "missing_solution"
+  ]
+ },
+ {
+  "id": "m30",
+  "category": "empty_set",
+  "spec": {
+   "type": "math_set",
+   "answer": "{}",
+   "variable": "x"
+  },
+  "student": "no solution",
+  "expected": "correct",
+  "note": "empty intersection",
+  "review": {
+   "status": "draft",
+   "by": null,
+   "at": null
+  }
+ }
+]
