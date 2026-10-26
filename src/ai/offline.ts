@@ -6,7 +6,8 @@
 import { MATH_SKILLS, MathSkill, generateMathProblem, isMathSkill } from '../core/mathgen';
 import { rng } from '../core/mathgen';
 import { tokens } from '../core/retrieval';
-import { AIProvider, ExtractInput, GenerateInput, GradeInput } from './provider';
+import { isInstructionLike } from '../core/sources';
+import { AIProvider, CallOpts, ExtractInput, GenerateInput, GradeInput } from './provider';
 import { ConceptExtraction, GeneratedQuestion, GradeResult, QuestionBatch } from './schemas';
 
 const sentences = (t: string) => t.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 15);
@@ -30,7 +31,7 @@ export class OfflineProvider implements AIProvider {
   readonly name = 'offline';
   readonly label = 'Offline mode (basic templates, no AI)';
 
-  async extractConcepts(i: ExtractInput): Promise<ConceptExtraction> {
+  async extractConcepts(i: ExtractInput, _o?: CallOpts): Promise<ConceptExtraction> {
     const out: ConceptExtraction['concepts'] = [];
     const seen = new Set<string>();
     const add = (name: string, summary: string, quote: string, tag?: string) => {
@@ -39,7 +40,7 @@ export class OfflineProvider implements AIProvider {
       seen.add(key);
       out.push({ name: name.slice(0, 90), summary: summary.slice(0, 480), quotes: [quote.slice(0, 380)], prerequisites: [], skill_tag: tag ?? null });
     };
-    const text = i.chunks.map((c) => c.text).join('\n');
+    const text = i.chunks.map((c) => c.text).join('\n').split('\n').filter((l) => !isInstructionLike(l)).join('\n');
     // math skills first so they get generators. Prefer a "Term: definition" line over any other mention (headings mention everything).
     const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
     const defLine = /^[-*•]?\s*\**([A-Za-z][^:]{2,60}):\s+(.{15,})$/;
@@ -53,6 +54,7 @@ export class OfflineProvider implements AIProvider {
       add(MATH_SKILLS[tag], (m ? m[2] : best).trim(), best, tag);
     }
     for (const c of i.chunks) for (const raw of c.text.split('\n')) {
+      if (isInstructionLike(raw)) continue;
       const line = raw.trim().replace(/^[-*•]\s*/, '');
       const m = line.match(/^\**([A-Za-z][A-Za-z0-9 ,'()/-]{1,60}?)\**\s*(?::|\s[–—-]\s)\s+(.{15,})$/);
       if (m && m[1].split(' ').length <= 6) { add(m[1].replace(/\*/g, '').trim(), m[2].trim(), line); continue; }
@@ -74,7 +76,7 @@ export class OfflineProvider implements AIProvider {
     return { concepts: out };
   }
 
-  async generateQuestions(i: GenerateInput): Promise<QuestionBatch> {
+  async generateQuestions(i: GenerateInput, _o?: CallOpts): Promise<QuestionBatch> {
     const total = i.practice + i.heldout;
     const qs: GeneratedQuestion[] = [];
     const avoid = new Set(i.avoidPrompts);
@@ -122,7 +124,7 @@ export class OfflineProvider implements AIProvider {
     return { questions: qs };
   }
 
-  async gradeAnswer(i: GradeInput): Promise<GradeResult> {
+  async gradeAnswer(i: GradeInput, _o?: CallOpts): Promise<GradeResult> {
     const a = `${i.answer} ${i.reasoning}`.toLowerCase();
     const pts = i.question.rubric.map((r) => {
       const kws = r.keywords.length ? r.keywords : top(r.point, 3);

@@ -57,7 +57,7 @@ export function Memory({ go }: { go: (p: string) => void }) {
 
       <section className="card" aria-labelledby="sum"><h2 id="sum">Recent sessions</h2>
         {d.summaries.length === 0 ? <p className="muted">No finished sessions yet.</p> : d.summaries.map((s: any) => <p key={s.id} className="small"><strong>{fmtDate(s.at)}</strong> · {s.mode} — {s.text}</p>)}</section>
-      <p className="small muted">Want to bring in or take out your study profile? Use <a href="#/settings">Settings → Import & export</a>. Imports are previewed first.</p>
+      <p className="small muted">Want to bring in or take out your study profile? Use <a href="#/settings?tab=data">Settings → Data</a>. Imports are previewed first.</p>
     </div>
   );
 }

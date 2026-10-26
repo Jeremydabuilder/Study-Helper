@@ -136,7 +136,8 @@ export class GoogleGateway implements CalendarGateway {
   }
 
   async revoke(t: TokenSet) {
-    try { await this.fetchImpl('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: t.refresh_token ?? t.access_token }) }); } catch { /* best effort */ }
+    const res = await this.fetchImpl('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: t.refresh_token ?? t.access_token }) });
+    if (!res.ok) throw new CalendarError('unavailable', 'Google did not confirm the revocation.'); // the caller still wipes local tokens
   }
 }
 

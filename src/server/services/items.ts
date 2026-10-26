@@ -145,15 +145,15 @@ export function attentionList(ctx: Ctx) {
 /* ------------------------------ schedule ------------------------------ */
 
 export function busyIntervals(ctx: Ctx, from: number, to: number, tz: string): BusyInterval[] {
-  const rows = ctx.db.all<any>(`SELECT e.*, c.all_day_busy FROM cal_events e JOIN cal_calendars c ON c.id=e.calendar_id
+  const rows = ctx.db.all<any>(`SELECT e.*, c.all_day_busy, c.label AS cal_label FROM cal_events e JOIN cal_calendars c ON c.id=e.calendar_id
     WHERE c.selected=1 AND c.counts_busy=1 AND e.status != 'cancelled' AND e.missing=0 AND e.transparent=0`);
   const out: BusyInterval[] = [];
   for (const e of rows) {
     if (e.all_day) {
       if (!e.all_day_busy) continue;
       const s = dayBounds(e.start_date, tz).start.getTime(), en = dayBounds(addDaysKey(e.end_date ?? e.start_date, 0), tz).end.getTime();
-      if (en > from && s < to) out.push({ start: s, end: en, label: e.title });
-    } else if (e.start_utc !== null && e.end_utc > from && e.start_utc < to) out.push({ start: e.start_utc, end: Math.max(e.end_utc, e.start_utc + 15 * MIN), label: e.title });
+      if (en > from && s < to) out.push({ start: s, end: en, label: e.title, heavy: e.cal_label !== 'school' });
+    } else if (e.start_utc !== null && e.end_utc > from && e.start_utc < to) out.push({ start: e.start_utc, end: Math.max(e.end_utc, e.start_utc + 15 * MIN), label: e.title, heavy: e.cal_label !== 'school' });
   }
   return out;
 }
@@ -189,7 +189,7 @@ export function computeSchedule(ctx: Ctx) {
   const titleOf = new Map(listItems(ctx, 'confirmed').map((i) => [i.id, i]));
   return {
     blocks: r.blocks.map((b) => ({ ...b, startLabel: new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(new Date(b.start)), itemType: titleOf.get(b.itemId)?.type ?? null })),
-    shortfalls: r.shortfalls, days: r.days.map((d) => ({ dateKey: d.dateKey, capMin: d.capMin, busyMin: d.busyMin, heavy: d.heavy, why: d.why, freeWindows: d.windows.length })), freeMinutesToday, changes,
+    shortfalls: r.shortfalls, days: r.days.map((d) => ({ dateKey: d.dateKey, capMin: d.capMin, busyMin: d.busyMin, loadMin: d.loadMin, heavy: d.heavy, why: d.why, freeWindows: d.windows.length })), freeMinutesToday, changes,
   };
 }
 export const markChangesSeen = (ctx: Ctx) => ctx.db.run('UPDATE cal_changes SET seen=1');

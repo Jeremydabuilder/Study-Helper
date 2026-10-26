@@ -56,9 +56,10 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
   const unassessed = confirmed.filter((c: any) => c.level === 'not_assessed');
 
   const run = async (label: string, fn: () => Promise<any>) => { setBusy(label); setErr(null); setMsg(null); try { return await fn(); } catch (e) { setErr(e as ApiError); } finally { setBusy(null); } };
-  const extract = (sid: string, useOffline = false) => run('Reading your material and finding concepts…', async () => {
-    const r = await post(`/sources/${sid}/extract`, { useOffline });
-    setMsg(`Found ${r.created} new concept${r.created === 1 ? '' : 's'}${r.skippedExisting ? ` (${r.skippedExisting} you already had)` : ''}${r.discardedQuotes ? `. ${r.discardedQuotes} quote${r.discardedQuotes === 1 ? '' : 's'} could not be found in your text and ${r.discardedQuotes === 1 ? 'was' : 'were'} discarded` : ''}${r.truncated ? '. Only the first part of a long text was read' : ''}. Review them below.`);
+  const extract = (sid: string, useOffline = false, force = false) => run('Reading your material and finding concepts…', async () => {
+    const r = await post(`/sources/${sid}/extract`, { useOffline, force });
+    if (r.reused) { setMsg('Concepts were already found in this material, so nothing was re-run (that avoids paying for the same extraction twice). Use “Find again” to force it.'); return; }
+    setMsg(`Found ${r.created} new concept${r.created === 1 ? '' : 's'}${r.skippedExisting ? ` (${r.skippedExisting} you already had)` : ''}${r.discardedQuotes ? `. ${r.discardedQuotes} quote${r.discardedQuotes === 1 ? '' : 's'} could not be found in your text and ${r.discardedQuotes === 1 ? 'was' : 'were'} discarded` : ''}${r.truncated ? '. Only the first part of a long text was read' : ''}${r.ignoredInstructionLines ? `. ${r.ignoredInstructionLines} line${r.ignoredInstructionLines === 1 ? '' : 's'} that read like instructions to an AI ${r.ignoredInstructionLines === 1 ? 'was' : 'were'} ignored — your material is treated as content, never as commands` : ''}. Review them below.`);
     await ov.reload();
   });
   const bulk = (status: 'confirmed' | 'rejected') => run('Saving…', async () => { await post('/concepts/bulk', { ids: [...sel], status }); setSel(new Set()); await ov.reload(); });
@@ -83,7 +84,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
               <li key={s.id} className="upcoming">
                 <div><strong>{s.title}</strong> <Chip>{KINDS.find((k) => k[0] === s.kind)?.[1] ?? s.kind}</Chip>{s.origin === 'sample' && <> <Chip tone="warn">sample</Chip></>}
                   <div className="small muted">{s.chars.toLocaleString()} characters · {s.chunks} passages · added {fmtDate(s.created_at)}{s.uncertain_chunks ? ` · ${s.uncertain_chunks} passages with uncertain text` : ''}</div></div>
-                <div className="row gap-s"><button className="btn small" onClick={() => setViewSrc(s.id)}>View</button><button className="btn small" disabled={!!busy} onClick={() => extract(s.id)}>Find concepts</button></div>
+                <div className="row gap-s"><button className="btn small" onClick={() => setViewSrc(s.id)}>View</button><button className="btn small" disabled={!!busy} onClick={() => extract(s.id)}>Find concepts</button><button className="btn small ghost" disabled={!!busy} title="Run extraction again even if concepts exist" onClick={() => extract(s.id, false, true)}>Find again</button></div>
               </li>
             ))}
           </ul>

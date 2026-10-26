@@ -4,14 +4,20 @@
   "private": true,
   "type": "module",
   "description": "Evidence-driven AI study coach: sources -> concepts -> diagnostic -> practice -> spaced review.",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "dev": "concurrently -k -n api,web \"tsx watch src/server/main.ts\" \"vite\"",
     "build": "vite build",
     "start": "NODE_ENV=production tsx src/server/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "eval": "tsx src/eval/cli.ts",
+    "eval:live": "tsx src/eval/cli.ts --live",
+    "smoke:ai": "tsx src/eval/smoke.ts",
+    "doctor": "tsx src/server/doctor.ts"
   },
   "dependencies": {
     "express": "^4.21.2",

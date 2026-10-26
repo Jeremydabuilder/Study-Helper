@@ -1,6 +1,6 @@
 # Study Helper
 
-An evidence-driven study coach. Its aim is to help you learn more **per minute** than ordinary AI chat — and to *measure* whether it does, rather than claim it.
+An evidence-driven study coach. It aims to help you learn more **per minute** than ordinary AI chat — and to *measure* whether it does, rather than claim it.
 
 Open the app and the Today screen answers: **what should I study next, why, and for how long?**
 
@@ -9,86 +9,101 @@ Add material → find concepts → confirm → short diagnostic → practice (hi
             → remember mistakes → spaced review      ·      calendar/tests → a realistic, fitted schedule
 ```
 
-AI generates and explains. **Application code** owns scheduling, persistence, grading rules for math, evidence counting, permissions and progress.
+AI generates and explains. **Application code** owns scheduling, persistence, math checking, evidence counting, budgets and progress.
 
-## Setup
+> **Security boundary — read this.** This is a **local, single-user app with no login**. It binds to `127.0.0.1` and rejects cross-origin writes. Student records and Google tokens are protected only by that boundary (plus token encryption at rest). **Do not expose it to a network.** Before any public hosting you must add authentication and per-user data isolation; neither exists yet. `npm run doctor` flags a non-local `HOST`.
+
+## Start it
 
 Requires Node ≥ 22.13 (uses the built-in `node:sqlite`; no native modules).
 
 ```bash
 npm install
-cp .env.example .env        # optional: add keys (see below)
-npm run build               # builds the web client into dist/
-npm start                   # http://localhost:8787
-# development with hot reload:  npm run dev   (API :8787, Vite :5173)
-npm run check               # typecheck + all tests
+cp .env.example .env     # optional — the app runs without it (Offline mode)
+npm run doctor           # checks your .env and explains what is missing (never prints secrets)
+npm run build
+npm start                # http://localhost:8787
+npm run dev              # hot reload (API :8787, Vite :5173)
+npm run check            # typecheck + all tests
 ```
 
-With no `.env` it runs in **Offline mode** (works fully for math; basic template questions elsewhere). Use **Explore with sample data** on the first screen, or **Settings → Data**, for the clearly-labelled demo workspace.
+Settings → **Setup & usage** shows the live state of everything:
 
-| Variable | Purpose |
+| State | Meaning |
 |---|---|
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Enables model-generated questions, concept extraction and rubric grading. Server-side only. |
-| `AI_DAILY_CALL_LIMIT`, `AI_TIMEOUT_MS` | Cost cap and per-call timeout. |
-| `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI`, `APP_SECRET` | Optional read-only Google Calendar. `APP_SECRET` encrypts stored tokens. |
-| `DATA_DIR`, `PORT`, `HOST` | Storage location (default `./data`), port, bind address (default `127.0.0.1`). |
+| **Offline mode** | No AI key. Math is fully supported (deterministic checker + generators). Other subjects: basic templates; open answers are keyword-checked and *never counted without your confirmation*. |
+| **AI configured — not yet verified** | A key is set but no request has succeeded yet. Press **Verify connection** (one tiny request per model). |
+| **AI connection verified** | A real request to every configured model has succeeded. |
+| **AI credentials rejected** | The provider returned an auth error. Fix `.env`, restart. |
+| **Calendar not set up / disconnected / connected / needs reconnecting** | See `docs/GOOGLE_SETUP.md`. The page shows the exact redirect URI to register. |
 
-**Google Calendar setup:** in Google Cloud Console enable the Calendar API, create an OAuth *Web application* client, add `GOOGLE_REDIRECT_URI` as an authorized redirect URI, then fill the four variables. Only `calendar.readonly` is requested. School-managed accounts may block third-party apps; the app explains this and manual entry works identically.
+## AI configuration
+
+Anthropic is the default and only provider unless you opt in to another. Models were checked against [Anthropic's models page](https://platform.claude.com/docs/en/about-claude/models/overview) and [pricing page](https://platform.claude.com/docs/en/about-claude/pricing) on 2026-10-26: `claude-sonnet-5-5` ($2 / $10 per million input/output tokens) and `claude-haiku-5-5` ($0.10 / $0.50 for prompts ≤100k tokens, more above). Everything is configurable in `.env` (see `.env.example`): default model, per-task model, per-task output ceiling and effort, daily budget, request cap, timeout.
+
+**Recommendation (and why):** run **Sonnet 5.5 for every task** (the default). It is the quality baseline, and grading errors change a student's record. Haiku 5.5 is the natural candidate for *concept extraction* and *straightforward question generation* — it's roughly 20× cheaper per token — but **it has not been evaluated yet**, so it is not routed by default. To decide, human-approve the labels in `eval/dataset/`, run `npm run eval:live -- --confirm-spend --models claude-sonnet-5-5,claude-haiku-5-5`, and opt in per task (`AI_MODEL_EXTRACT=claude-haiku-5-5`) only if the report supports it. Keep grading on Sonnet unless the margin is clear. Details: `docs/EVAL.md`. Defaults for output ceilings (4000/5000/1500 tokens) and effort (low/medium/medium) are **untuned**.
+
+**Cost control (server-side, enforced before every request):**
+- Every HTTP request is logged with provider-reported input/output/cache tokens, model, latency, attempt number and an *estimated* cost. A schema-repair retry is its own billable request, counted and budget-checked like any other.
+- A rolling-24h **estimated-dollar budget** (`AI_DAILY_BUDGET_USD`, default $1.00; editable in Settings; 0 = off) and a request cap. A request is refused if spent + its worst-case cost (all `max_tokens` used) would exceed the budget.
+- Output is capped per task; a response cut off at the cap is reported clearly and **not retried** (a retry would bill again).
+- Fewer calls: math practice makes none; only relevant source passages and a few memory notes are sent; existing unseen questions are reused before generating more; an already-extracted source isn't re-extracted unless forced.
+- Costs are **estimates** from list prices and provider token counts. **Your provider's billing is authoritative.**
+
+**Optional Groq** (`AI_PROVIDER=groq` + `GROQ_API_KEY` + `GROQ_MODEL`): off unless explicitly selected, no default model, **not verified against the live API**. One provider is active per server process; there is no automatic fallback and no switching mid-attempt. When on, student material goes to Groq instead of Anthropic. See `docs/EVAL.md`.
+
+**Prompt-injection hygiene:** uploaded text and answers are quoted data; lines that read like instructions to an AI are stripped before any model sees them, concepts/quotes supported only by such lines are dropped, quotes are re-verified against the source, and the model can't change app behaviour (output is schema-validated).
 
 ## What works
 
-**Core loop** — subjects (any, editable) → paste text or upload `.txt/.md` → concept *proposals* linked to verbatim, verified source quotes with page/paragraph labels → you confirm/edit → short varied diagnostic → practice → saved attempts → resume anywhere → due reviews.
+Core loop (subject → pasted source → verified concept proposals → confirm → diagnostic → practice with hints/feedback/new questions → saved attempts → resume → due reviews), evidence-based scheduling (hinted ≠ independent, delayed unaided counts most, uncertain grades change nothing until confirmed), deterministic math checking with independently verified generators, inspectable/editable memory with provenance, previewable import/export, progress with uncertainty (no grade predictions), exam mode, a sample workspace in a separate database, and read-only Google Calendar planning (calendar choice, confirmation screen showing the original event beside each proposal with unknowns marked, updates/cancellations/recurring exceptions/duplicates/all-day/time zones/DST, expired authorization, disconnect + deletion, a schedule fitted around busy time, buffers, bedtime, protected time and daily limits, with school class time *not* counted as a "heavy day").
 
-- **Grounding.** Every concept is tagged *From your material* / *Added by AI — verify* / *Needs verification*. Quotes a model returns are verified against the source text and discarded if not found. Source text is passed to models as quoted data, with delimiter tags neutralised; nothing in it can change app behaviour.
-- **Diagnose first.** *Not assessed* is distinct from *weak*. Attempts record correctness (incl. partial), reasoning, hints, shown answers, "I don't know", optional confidence and response time (context only, never a penalty). A confident wrong answer is flagged.
-- **Practice loop.** Attempt without the answer visible → two hint levels → specific feedback → explanation → a *new* question. "I don't know" shows a worked example and then an easier, lower-support item. Held-out questions stay unseen until reviews/transfer checks.
-- **Evidence rules** (`src/core/learning.ts`). Delayed unaided success counts most; hinted, just-explained, or answer-seen attempts never count as independent; repeating one question doesn't count twice; "holding up" needs ≥3 independent successes on ≥2 questions over ≥2 days incl. one delayed. Uncertain/failed grades change nothing until you confirm them.
-- **Spaced review.** Transparent, replaceable interval algorithm; due is inclusive at the boundary; solid topics aren't drilled; at most 5 tasks/6 reviews a day, "spread them out" instead of a backlog.
-- **Math** — deterministic checker (no `eval`; custom parser): equivalent expressions, interval/inequality/set notation, endpoints, extraneous solutions, unions; tags *sign slip* vs *flipped inequality* vs *missed case*; repeated slips become patterns. Generators produce unlimited problems whose answer keys are cross-verified by an independent numeric solver (also applied to model-written math).
-- **Mistake repair.** Misconception + linked attempt evidence → targeted repair task → fresh check ≥1 day later → marked repaired only after delayed independent success.
-- **Memory** — separate *you told me* / *observed* / *AI guess*, with provenance, timestamps, edit & delete. Only relevant snippets reach a model. Previewable import/export, selectable per item.
-- **Measurement** — delayed unaided recall, held-out vs practice accuracy, repeated mistake patterns, per-test coverage, minutes — all with sample sizes and Wilson ranges, no grade predictions.
-- **Today** — time chips (10/20/30/custom), prioritised tasks with reasons and inspectable inputs, configurable weights, skip/pin overrides, welcome-back handling, resume.
-- **Exam mode** — mixed questions on topics you linked to a test, feedback held to the end; report shows coverage and uncertainty.
+## What was actually tested
 
-**Google Calendar (read-only)** — choose calendars (school, homework, tests, tennis…); detects *possible* tests/quizzes/homework/projects/presentations; **confirmation screen shows the original event beside the proposal** with unknowns marked (due date, topics, subject, time needed are never invented; a timed event's start is not assumed to be a homework deadline); handles all-day events (dates, not instants), time zones/DST, recurring series (grouped), updates (your own edits are never overwritten), cancellations, vanished events, duplicates (unique keys + possible-duplicate warning); shows last successful sync and manual refresh; expired authorization is reported clearly while imported data and manual entry keep working; disconnect and delete-imported-data controls. **Schedule** (in-app only) is fitted around busy time with buffers, preferred hours, bedtime, protected time, daily limits and lighter busy-day caps, and re-fitted whenever deadlines or availability change. Homework completion is your own statement and never affects concept state.
+**Run in this build** (`npm run check`: typecheck clean, **168 tests in 13 files pass**; `npm run build` OK):
 
-## Limitations (honest list)
+- *Learning rules & core flow* (HTTP-level, in-memory/temp SQLite): scheduling and inclusive time boundaries, hint-assisted vs unaided evidence, uncertain/failed grades not changing mastery, no mastery from repetition, persistence/reopen/resume, duplicate submissions, misconception evidence and repair follow-ups, workspace separation, cross-origin rejection, import preview/commit.
+- *AI failure handling* with **fake transports**: malformed/invalid/truncated output, repair retry, 429/5xx/timeout mapping, request-cap and budget enforcement (including blocking the retry), usage accounting from provider-reported tokens, no key/secret in any API response or log, injection stripping.
+- *Math*: 1,080 generated problems cross-checked by the independent solver; 30 labelled checker cases (endpoints, equivalent forms, flipped signs, unparseable/code-like input).
+- *Google Calendar end to end* against a **fake Google** (real `GoogleGateway` + real HTTP routes): PKCE, state/CSRF and replay, read-only scope, token encryption at rest, access-token refresh and re-encryption, 401-retry, revoked refresh → reconnect-needed, school-policy 403, revocation on disconnect, deletion, moved/cancelled/vanished events, paging, and an assertion that **every Calendar API request is a GET**. Plus America/New_York DST (Mar 8: 23h day, Nov 1: 25h day, both transitions, repeated and skipped hours, all-day and midnight-edge events, 15:30 study start stable across the change) and recurring-event exceptions.
+- *Evaluation harness mechanics* with scripted fakes (a sycophantic grader is caught, budget cut-off, schema-failure reporting) and `npm run eval` on the **offline provider** (`docs/eval-results/offline-baseline.md`).
+- *Manual browser walkthroughs* (Chromium via Playwright; screenshots **viewed**): empty state → subject → paste → concept review → diagnostic (wrong, unreadable input preserved, correct, "I don't know") → reload on feedback → pause with draft → resume → summary → re-planned Today → Progress/Memory; sample workspace Today/Plan/Calendar-confirmation/Memory; Settings → Setup in its unverified and verified states; AI-graded practice through the real `AnthropicTransport` over HTTP **against a local mock of the Anthropic API**; mobile (bottom nav) and dark layouts. Testing and the walkthroughs found, and I fixed: mobile nav placement, body-less DELETE rejected, extraction quality, an extractor treating an injected line as a concept, disconnect not actually revoking at Google, a DST gap resolving backwards, and **every school day being capped as a "heavy day"**.
 
-- **Calendar cannot see Google Classroom or school-portal assignments.** The app says so and offers manual entry.
-- "Add study sessions to Calendar" (write permission + preview) is **not built**; the button is labelled unavailable. Original events are never modified.
-- PDF/image upload and OCR are **not built** (labelled unavailable). Page/uncertain-OCR plumbing exists in the chunker.
-- Single local user, no accounts/login: data separation is real-vs-sample workspaces (separate files). Do not expose the port publicly; it binds to localhost and rejects cross-origin writes.
-- Offline mode: non-math questions are templates (a few per concept), open answers are keyword-checked and always need your confirmation. History/English quality needs a model key.
-- AI features were validated with injected fake transports; they have **not** been exercised against the live Anthropic API in this build.
-- Numeric verifier covers one-variable relations on [-100,100]; sampling-based, not a proof. Calendar sync re-reads a [-2d,+60d] window (no incremental sync tokens).
-- No sync of the study schedule to other devices; no notifications.
+**Not done — requires credentials or a human:**
+- ❌ **No live Anthropic call has been made** (no key was available). The live smoke test and live evaluation are implemented and *opt-in*: `npm run smoke:ai -- --confirm-spend`, `npm run eval:live -- --confirm-spend`. They exit with code 2 and say so when credentials or consent are missing; they never fabricate results. Model quality, Haiku-vs-Sonnet, real latency/cost, and thinking-token behaviour are therefore **unmeasured**.
+- ❌ **No live Google OAuth** (no Google credentials). Behaviour is verified only against the fake. `docs/GOOGLE_SETUP.md` was written from Google's documented flow without access to Google's current docs; follow its "verify it yourself" checklist.
+- ❌ **Evaluation labels are drafts** written by the assistant, not human-reviewed (58 items). Agreement numbers are provisional until you approve them (`docs/EVAL.md`). Question *usefulness* needs human ratings (a review sheet is exported).
+- ❌ Groq transport untested live; Haiku routing unevaluated.
+- Not looked at in the browser this round: Subjects detail on mobile, Settings → Availability/Priorities/Data tabs (covered by API tests only).
+
+## Limitations
+
+- Calendar can't see **Google Classroom** or school-portal assignments; the app says so and supports manual entry. "Add study sessions to Calendar" (write permission + preview) is **not built** (button labelled unavailable). Original events are never modified.
+- PDF/image upload and OCR are **not built** (labelled unavailable).
+- No accounts or authentication (see the security boundary above).
+- Offline mode: non-math questions are templates (a few per concept); open answers are keyword-checked and always need your confirmation.
+- Google apps left in *Testing* status get refresh tokens that expire after ~7 days → periodic "needs reconnecting" (handled; see `docs/GOOGLE_SETUP.md`).
+- The numeric math verifier covers one-variable relations on [-100, 100] and is sampling-based, not a proof. Calendar sync re-reads a [-2 d, +60 d] window.
 
 ## Architecture (short)
 
 ```
-src/core/      pure, provider-independent: learning.ts (evidence+scheduler), priority.ts (Today plan),
-               math* (parser, sets, relations, checker, generators), sources.ts, retrieval.ts,
-               calendar.ts (normalise/classify/diff), schedule.ts (availability + study blocks), time.ts, stats.ts
-src/ai/        provider interface · llm.ts (prompts, zod validation, repair-retry, Anthropic transport with timeout/429/5xx mapping) · offline.ts
-src/server/    db.ts (node:sqlite, explicit SQL migrations, two workspace files) · services/* · app.ts (Express) · demoSeed.ts · crypto.ts
-src/web/       React + Vite client (hash routes, no UI framework)
-tests/         110+ tests (vitest)
+src/core/      pure, provider-independent: learning.ts (evidence + scheduler), priority.ts (Today plan), math*, sources.ts,
+               retrieval.ts, calendar.ts (normalise/classify/diff), schedule.ts (availability + study blocks), time.ts, stats.ts
+src/ai/        provider.ts (interface + per-request records) · llm.ts (prompts, zod validation, repair retry, Anthropic transport)
+               groq.ts (opt-in) · factory.ts (one provider per process) · pricing.ts · offline.ts
+src/eval/      dataset, scoring, runner, report, CLI, smoke test      eval/dataset/*.json   (58 draft-labelled items)
+src/server/    db.ts (node:sqlite, numbered SQL migrations 001–003, real/demo files) · services/* · app.ts · doctor.ts · demoSeed.ts
+src/web/       React + Vite client
 ```
 
-Key decisions: **SQLite via `node:sqlite`** (durable, zero native deps, explicit numbered migrations in `src/server/migrations`); **concept state is a replay of the attempt log**, so correcting a grade just recomputes; **UUID ids** so exports merge; **models only behind `AIProvider`** and every response is schema-validated, with quotes/evidence re-verified by the app; **daily AI call cap** and bulk generation (+ zero model calls for math) to avoid unnecessary calls; **tokens encrypted** (AES-256-GCM, key from `APP_SECRET`) and never sent to the browser; OAuth uses PKCE and the read-only scope only.
+Key decisions: concept state is a **replay of the attempt log** (correcting a grade just recomputes); models sit behind `AIProvider`/`LLMTransport` and every response is schema-validated, with quotes/math keys re-verified by the app; budget and call caps are enforced in one wrapper (`metered`) before each request; Google tokens are AES-256-GCM encrypted with `APP_SECRET` and never leave the server; the OAuth flow uses PKCE and the read-only scope only. More in `docs/ARCHITECTURE.md`.
 
-## Validation
+## Next steps
 
-`npm run check` → typecheck clean; **111 tests across 9 files** pass, covering: review scheduling & inclusive time boundaries; hint-assisted vs unaided evidence; uncertain-grade isolation; no mastery from repetition; persistence, reopen-the-app and resume; duplicate submission; invalid/malformed AI output, retry, timeout, 429, daily cap; grading failure keeps the answer and changes nothing; invented quotes dropped; source page references; prompt-injection containment; real vs sample workspace separation; cross-origin rejection; import preview writes nothing; calendar: updates, cancellations, missing events, all-day deadlines, time zones/DST, duplicates, expired authorization, OAuth refresh/`invalid_grant`/school-policy 403, encryption at rest, disconnect/deletion. 1,080 generated math problems are cross-checked by the independent solver.
-
-Manually walked through in a browser (Chromium): empty state → subject → pasted source → concept review → diagnostic (wrong, unreadable input preserved, correct, "I don't know") → reload on the feedback screen → pause with a draft → resume → summary → Today re-plan → Progress/Memory; plus the sample workspace's Plan, Calendar confirmation, Settings, and mobile and dark layouts. Defects found this way (bottom-nav on mobile, body-less DELETE rejected, extraction quality, wording) were fixed and, where possible, covered by tests.
-
-## Roadmap
-
-1. Run against the live Anthropic API; tune prompts; add a real math-expression editor.
-2. PDF/image upload with OCR confidence and page references; Classroom import via its own explicit read scopes.
-3. "Add study sessions to Calendar" with separate write consent, exact-event preview, idempotent event ids.
-4. Fit the review model to real data (compare interval policies on held-out recall) and add an A/B-able scheduler.
-5. Writing/rubric workflow for English that preserves the student's voice; chronology/comparison tasks for History.
-6. Accounts + per-user encryption if it is ever hosted; PWA/offline; notifications.
+1. **You:** add `ANTHROPIC_API_KEY`, run `npm run smoke:ai -- --confirm-spend`, then `npm run eval:live` on Sonnet; review/approve the eval labels; decide on Haiku for extraction.
+2. **You:** follow `docs/GOOGLE_SETUP.md` and the "verify it yourself" checklist with a real calendar.
+3. Tune effort/output ceilings from measured token use; add prompt caching for repeated source excerpts.
+4. PDF/image upload with OCR confidence; Classroom import with its own explicit read scopes.
+5. "Add study sessions to Calendar" with separate write consent and an exact-event preview.
+6. Authentication + per-user isolation before any hosting.

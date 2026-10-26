@@ -74,7 +74,7 @@ export function Plan({ go }: { go: (p: string) => void }) {
         {days.slice(0, 10).filter((d) => byDay.has(d.dateKey)).map((d) => (
           <div key={d.dateKey}>
             <div className="day-head"><span>{new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${d.dateKey}T12:00:00Z`))}</span>
-              <span className="small muted">{d.heavy ? 'Busy day · ' : ''}limit {d.capMin} min</span></div>
+              <span className="small muted">{d.heavy ? 'Heavy day · ' : ''}limit {d.capMin} min</span></div>
             {d.why.map((w: string, i: number) => <p key={i} className="small muted" style={{ margin: 0 }}>{w}</p>)}
             {byDay.get(d.dateKey)!.map((b: any, i: number) => <p key={i} style={{ margin: '.25rem 0' }}><strong>{b.startLabel}</strong> · {b.minutes} min · {b.title} <Chip>{KIND_LABEL[b.kind]}</Chip></p>)}
           </div>

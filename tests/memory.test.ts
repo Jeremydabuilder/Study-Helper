@@ -30,7 +30,7 @@ describe('offline extraction', () => {
 describe('cost and fairness guarantees', () => {
   it('math practice makes zero model calls; held-out questions are never served during practice but are used for review', async () => {
     let calls = 0;
-    const llm = new LLMProvider({ model: 'x', complete: async () => { calls++; return '{}'; } });
+    const llm = new LLMProvider({ provider: 'fake', defaultModel: 'x', complete: async () => { calls++; return '{}'; } });
     s = await startServer({ llm });
     const db = s.rt.ctx('real').db;
     const sub = (await s.call('POST', '/api/subjects', { name: 'Math' })).body.id;

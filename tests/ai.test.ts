@@ -4,7 +4,7 @@ import { AIError } from '../src/ai/provider';
 import { NOTES, startServer, TestServer, token } from './helpers';
 
 class Fake implements LLMTransport {
-  model = 'fake'; calls: { system: string; user: string }[] = [];
+  provider = 'fake'; defaultModel = 'fake'; calls: { system: string; user: string }[] = [];
   constructor(public handler: (user: string, n: number) => string | Error) {}
   async complete(req: { system: string; user: string }) {
     this.calls.push(req);
@@ -60,13 +60,13 @@ describe('LLM provider robustness', () => {
 
 describe('Anthropic transport error mapping', () => {
   const mk = (resp: () => Promise<Response>) => new AnthropicTransport('k', 'm', (async () => resp()) as typeof fetch);
-  const req = { system: 's', user: 'u', maxTokens: 10, timeoutMs: 50 };
+  const req = { system: 's', user: 'u', maxTokens: 10, timeoutMs: 50, model: 'm' };
   it('maps 429 with Retry-After, 5xx, auth failures and bad bodies', async () => {
     await expect(mk(async () => new Response('{}', { status: 429, headers: { 'retry-after': '7' } })).complete(req)).rejects.toMatchObject({ code: 'rate_limited', retryAfterMs: 7000 });
     await expect(mk(async () => new Response('{}', { status: 529 })).complete(req)).rejects.toMatchObject({ code: 'unavailable' });
     await expect(mk(async () => new Response('{}', { status: 401 })).complete(req)).rejects.toMatchObject({ code: 'not_configured' });
     await expect(mk(async () => new Response(JSON.stringify({ content: [] }), { status: 200 })).complete(req)).rejects.toMatchObject({ code: 'malformed' });
-    await expect(mk(async () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'hi' }] }), { status: 200 })).complete(req)).resolves.toBe('hi');
+    await expect(mk(async () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 5, output_tokens: 2 } }), { status: 200 })).complete(req)).resolves.toMatchObject({ text: 'hi' });
   });
   it('times out hung requests and reports network failure', async () => {
     const hang = new AnthropicTransport('k', 'm', ((_u: string, init: RequestInit) => new Promise((_r, rej) => init.signal!.addEventListener('abort', () => rej(Object.assign(new Error('x'), { name: 'AbortError' }))))) as unknown as typeof fetch);

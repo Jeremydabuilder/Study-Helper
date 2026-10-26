@@ -9,7 +9,7 @@ import { DEFAULT_AVAILABILITY } from '../core/schedule';
 import { isValidTimeZone } from '../core/time';
 import { WorkspaceName } from './db';
 import { Runtime } from './context';
-import { Ctx, HttpError, aiInfo, getAvailability, getProfile, getSetting, getWeights, setSetting } from './services/common';
+import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfile, getSetting, getWeights, setSetting, usageReport } from './services/common';
 import * as content from './services/content';
 import * as practice from './services/practice';
 import * as plan from './services/plan';
@@ -66,10 +66,11 @@ export function createApp(rt: Runtime) {
   }));
   app.get('/api/settings', h((ctx) => ({
     weights: getWeights(ctx.db), defaultWeights: DEFAULT_WEIGHTS, weightHelp: WEIGHT_HELP, availability: getAvailability(ctx.db), defaultAvailability: DEFAULT_AVAILABILITY,
-    aiDailyLimit: getSetting(ctx.db, 'ai_daily_limit', ctx.cfg.aiDailyLimit), ai: aiInfo(ctx),
+    aiDailyLimit: callLimit(ctx), aiDailyBudgetUsd: budgetUsd(ctx), ai: aiInfo(ctx),
   })));
   app.put('/api/settings', h((ctx, req) => {
-    const b = z.object({ weights: WeightsSchema.optional(), availability: AvailabilitySchema.optional(), aiDailyLimit: z.number().int().min(0).max(5000).optional() }).parse(req.body);
+    const b = z.object({ weights: WeightsSchema.optional(), availability: AvailabilitySchema.optional(), aiDailyLimit: z.number().int().min(0).max(5000).optional(), aiDailyBudgetUsd: z.number().min(0).max(1000).optional() }).parse(req.body);
+    if (b.aiDailyBudgetUsd !== undefined) setSetting(ctx.db, 'ai_daily_budget_usd', b.aiDailyBudgetUsd, ctx.now());
     if (b.weights) setSetting(ctx.db, 'priority_weights', b.weights, ctx.now());
     if (b.availability) setSetting(ctx.db, 'availability', b.availability, ctx.now());
     if (b.aiDailyLimit !== undefined) setSetting(ctx.db, 'ai_daily_limit', b.aiDailyLimit, ctx.now());
@@ -85,7 +86,7 @@ export function createApp(rt: Runtime) {
   app.post('/api/subjects/:id/sources', h((ctx, req) => content.addSource(ctx, req.params.id, z.object({ title: z.string().optional(), kind: z.string().optional(), text: z.string(), origin: z.string().optional() }).parse(req.body))));
   app.get('/api/sources/:id', h((ctx, req) => content.getSource(ctx, req.params.id)));
   app.delete('/api/sources/:id', h((ctx, req) => content.deleteSource(ctx, req.params.id)));
-  app.post('/api/sources/:id/extract', h((ctx, req) => content.extractConcepts(ctx, req.params.id, { useOffline: bool(req.body?.useOffline) })));
+  app.post('/api/sources/:id/extract', h((ctx, req) => content.extractConcepts(ctx, req.params.id, { useOffline: bool(req.body?.useOffline), force: bool(req.body?.force) })));
   app.post('/api/subjects/:id/concepts', h((ctx, req) => content.addConcept(ctx, req.params.id, z.object({ name: z.string(), summary: z.string().optional(), skillTag: z.string().nullable().optional() }).parse(req.body))));
   app.patch('/api/concepts/:id', h((ctx, req) => content.updateConcept(ctx, req.params.id, z.object({ name: z.string().optional(), summary: z.string().optional(), status: z.string().optional(), skillTag: z.string().nullable().optional(), prereqIds: z.array(z.string()).optional() }).parse(req.body))));
   app.post('/api/concepts/bulk', h((ctx, req) => { const b = z.object({ ids: z.array(z.string()), status: z.enum(['confirmed', 'rejected']) }).parse(req.body); content.bulkConceptStatus(ctx, b.ids, b.status); }));
@@ -171,6 +172,30 @@ export function createApp(rt: Runtime) {
   app.post('/api/calendar/disconnect', h((ctx, req) => cal.disconnect(ctx, z.object({ deleteImported: z.boolean(), keepItems: z.boolean().default(true) }).parse(req.body))));
   app.post('/api/calendar/changes/seen', h((ctx) => items.markChangesSeen(ctx)));
 
+  /* ---------------- setup status / AI verification / usage ---------------- */
+  app.get('/api/status', h((ctx) => {
+    const c = cal.connectionStatus(ctx);
+    const missing = ctx.cfg.google ? [] : (['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'APP_SECRET'] as const).filter((k) => !process.env[k]);
+    const calState = ctx.calendar.kind === 'memory' ? (c.status === 'disconnected' ? 'disconnected' : c.status) : !c.available ? 'not_configured' : c.status;
+    return {
+      workspace: ctx.workspace, ai: aiInfo(ctx),
+      calendar: { state: calState, demo: c.demo, missingEnv: ctx.calendar.kind === 'memory' ? [] : missing, partialConfig: ctx.cfg.googlePartial, redirectUri: ctx.cfg.googleRedirectUri, lastSyncOkAt: c.lastSyncOkAt, lastError: c.lastError },
+      boundary: 'Local single-user app with no login. Do not expose this server to a network until authentication and per-user data isolation exist.',
+    };
+  }));
+  app.get('/api/ai/usage', h((ctx) => usageReport(ctx)));
+  app.post('/api/ai/verify', h(async (ctx) => {
+    if (ctx.workspace === 'demo') throw new HttpError(409, 'demo_workspace', 'The sample workspace never calls a paid AI model.');
+    if (!ctx.ai.live || !ctx.ai.verify) throw new HttpError(409, 'no_ai', 'No AI provider is configured, so there is nothing to verify. See the setup steps in Settings.');
+    const models = [...new Set((['extract', 'generate', 'grade'] as const).map((t) => ctx.ai.modelFor!(t)))];
+    const results: { model: string; ok: boolean; latencyMs?: number; error?: string }[] = [];
+    for (const m of models) {
+      try { const r = await ctx.ai.verify(undefined, m); results.push({ model: m, ok: true, latencyMs: r.latencyMs }); }
+      catch (e) { results.push({ model: m, ok: false, error: e instanceof AIError ? e.message : 'failed' }); }
+    }
+    return { results, ai: aiInfo(ctx) };
+  }));
+
   /* ---------------- static client ---------------- */
   const dist = resolve(process.cwd(), 'dist');
   if (existsSync(join(dist, 'index.html'))) {
@@ -182,7 +207,7 @@ export function createApp(rt: Runtime) {
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: { code: err.code, message: err.message, ...err.extra } });
     if (err instanceof AIError) {
-      const status = err.code === 'rate_limited' || err.code === 'limit_reached' ? 429 : err.code === 'timeout' ? 504 : err.code === 'not_configured' ? 503 : 502;
+      const status = err.code === 'rate_limited' || err.code === 'limit_reached' || err.code === 'budget_reached' ? 429 : err.code === 'timeout' ? 504 : err.code === 'not_configured' ? 503 : 502;
       return res.status(status).json({ error: { code: `ai_${err.code}`, message: err.message, retryable: err.retryable, retryAfterMs: err.retryAfterMs ?? null, offlineFallback: true } });
     }
     if (err instanceof CalendarError) return res.status(err.code === 'reauth_required' ? 401 : err.code === 'rate_limited' ? 429 : err.code === 'org_blocked' || err.code === 'denied' ? 403 : err.code === 'not_configured' ? 503 : 502).json({ error: { code: `calendar_${err.code}`, message: err.message } });

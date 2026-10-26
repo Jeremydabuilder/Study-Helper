@@ -1,3 +1,4 @@
+import { stripInstructionLines } from './sources';
 /** Relevant-context retrieval: each AI call gets a small, ranked slice of memory — never the whole history. */
 const STOP = new Set('a an the of and or to in on for with is are was were be by as at it this that from which what how why do does your you i'.split(' '));
 export const tokens = (s: string) => (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((t) => t.length > 1 && !STOP.has(t));
@@ -51,7 +52,9 @@ export function buildContext(inp: ContextInput): BuiltContext {
   const excerpts: BuiltContext['sourceExcerpts'] = [];
   let chars = 0;
   for (const c of [...linked.slice(0, 3), ...extra]) {
-    const t = c.text.length > 1200 ? c.text.slice(0, 1200) : c.text;
+    const clean = stripInstructionLines(c.text);
+    if (!clean.trim()) continue;
+    const t = clean.length > 1200 ? clean.slice(0, 1200) : clean;
     if (chars + t.length > budget) break;
     excerpts.push({ id: c.id, label: c.label, text: t }); chars += t.length;
   }

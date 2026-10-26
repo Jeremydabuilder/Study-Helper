@@ -1,5 +1,5 @@
 import { AIProvider } from '../ai/provider';
-import { AnthropicTransport, LLMProvider } from '../ai/llm';
+import { buildProvider } from '../ai/factory';
 import { OfflineProvider } from '../ai/offline';
 import { WorkspaceName, Workspaces } from './db';
 import { AppConfig, Ctx, metered } from './services/common';
@@ -18,7 +18,7 @@ export interface Runtime {
 export function createRuntime(cfg: AppConfig, o: { now?: () => number; dir?: string | ':memory:'; llm?: AIProvider | null; gateway?: CalendarGateway } = {}): Runtime {
   const now = o.now ?? Date.now;
   const offline = new OfflineProvider();
-  const llm = o.llm !== undefined ? o.llm : cfg.anthropicKey ? new LLMProvider(new AnthropicTransport(cfg.anthropicKey, cfg.model), cfg.aiTimeoutMs) : null;
+  const llm = o.llm !== undefined ? o.llm : buildProvider(cfg);
   const demoGw = new MemoryGateway();
   const googleGw: CalendarGateway = o.gateway ?? (cfg.google ? new GoogleGateway(cfg.google) : new UnconfiguredGateway());
   let demoReady: Promise<void> | null = null;

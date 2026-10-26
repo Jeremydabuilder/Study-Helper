@@ -58,14 +58,20 @@ function offsetMs(utcMs: number, tz: string): number {
   return asUtc - Math.floor(utcMs / MIN) * MIN;
 }
 
-/** Wall-clock time in `tz` -> instant. Non-existent (spring-forward) times resolve forward. */
+/**
+ * Wall-clock time in `tz` -> instant.
+ * - Non-existent time (spring-forward gap, e.g. 02:30 on 2026-03-08 in New York) resolves FORWARD (03:30).
+ * - Ambiguous time (fall-back repeat, e.g. 01:30 on 2026-11-01) resolves to the FIRST occurrence.
+ */
 export function zonedToUtc(dateKey: string, hhmm: string, tz: string): Date {
   const [y, m, d] = dateKey.split('-').map(Number);
   const [h, mi] = hhmm.split(':').map(Number);
   const guess = Date.UTC(y, m - 1, d, h, mi, 0);
-  let utc = guess - offsetMs(guess, tz);
-  utc = guess - offsetMs(utc, tz);
-  return new Date(utc);
+  // offsets on either side of any transition near this wall-clock time
+  const before = guess - offsetMs(guess - 12 * HOUR, tz), after = guess - offsetMs(guess + 12 * HOUR, tz);
+  const matches = (utc: number) => { const p = localParts(new Date(utc), tz); return p.y === y && p.m === m && p.d === d && p.h === h && p.mi === mi; };
+  const valid = [before, after].filter(matches).sort((a, b) => a - b);
+  return new Date(valid.length ? valid[0] : Math.max(before, after)); // in a gap neither matches: the later instant is the "forward" one
 }
 
 /** [start, end) of a local calendar day; 23h/25h on DST days. */

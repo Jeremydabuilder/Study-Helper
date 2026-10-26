@@ -199,7 +199,7 @@ export function revealAnswer(ctx: Ctx, sessionId: string, questionId: string) {
 export interface Outcome {
   status: GradeStatus; correctness: number | null; source: GradeSource; confidence: 'high' | 'medium' | 'low' | null; feedback: string;
   tags: string[]; slip?: boolean; misconception?: { label: string; description: string; origin: 'observed' | 'ai_inferred' }; rubricPoints?: { point: string; met: boolean }[];
-  unparseable?: string; nextStep?: string;
+  unparseable?: string; nextStep?: string; model?: string | null;
 }
 
 const MATH_TAG_INFO: Record<string, { label: string; description: string; slip: boolean }> = {
@@ -249,6 +249,7 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
     });
     const sure = g.confidence !== 'low';
     return {
+      model: ctx.ai.live ? ctx.ai.modelFor?.('grade') ?? null : null,
       status: sure ? 'graded' : 'uncertain', correctness: g.correctness, source: ctx.ai.live ? 'ai' : g.confidence === 'high' ? 'deterministic' : 'heuristic', confidence: g.confidence, tags: [],
       feedback: g.feedback + (sure ? '' : ' (I am not sure about this grade — please confirm how you did.)'), rubricPoints: g.points.map((p) => ({ point: p.point, met: p.met })), nextStep: g.next_step,
       misconception: g.misconception && g.correctness < 0.8 ? { label: g.misconception.label, description: g.misconception.description, origin: 'ai_inferred' } : undefined,
@@ -294,9 +295,9 @@ export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput
   const revealUsed = cur.revealed || idk || skippedAfterReveal;
   const payload = buildFeedback(ctx, q, outcome, { hintsUsed: cur.hintsShown, revealed: revealUsed, idk, answer });
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO attempts (id,session_id,question_id,concept_id,answer_text,reasoning_text,confidence,hints_used,saw_answer,idk,response_ms,correctness,grade_status,grade_source,grade_confidence,feedback,diagnosis,feedback_shown,client_token,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attemptId, sessionId, q.id, q.concept_id, answer, reasoning, confidence, cur.hintsShown, Number(revealUsed), Number(idk), responseMs,
-      outcome.correctness, outcome.status, outcome.source, outcome.confidence, outcome.feedback, JSON.stringify(payload), Number(!hold), inp.clientToken, ctx.now());
+    ctx.db.run(`INSERT INTO attempts (id,session_id,question_id,concept_id,answer_text,reasoning_text,confidence,hints_used,saw_answer,idk,response_ms,correctness,grade_status,grade_source,grade_confidence,feedback,diagnosis,feedback_shown,client_token,created_at,grade_model)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attemptId, sessionId, q.id, q.concept_id, answer, reasoning, confidence, cur.hintsShown, Number(revealUsed), Number(idk), responseMs,
+      outcome.correctness, outcome.status, outcome.source, outcome.confidence, outcome.feedback, JSON.stringify(payload), Number(!hold), inp.clientToken, ctx.now(), outcome.model ?? null);
     cur.attemptId = attemptId;
     // advance slot bookkeeping: failures add one more application (max +2); two independent successes in a row end a practice slot early
     const slots = parse<Slot[]>(s.slots, []);
@@ -421,7 +422,7 @@ export async function regrade(ctx: Ctx, attemptId: string) {
   if (o.unparseable) throw new HttpError(422, 'unparseable', o.unparseable);
   const payload = buildFeedback(ctx, q, o, { hintsUsed: a.hints_used, revealed: !!a.saw_answer, idk: !!a.idk, answer: a.answer_text });
   ctx.db.tx(() => {
-    ctx.db.run('UPDATE attempts SET correctness=?, grade_status=?, grade_source=?, grade_confidence=?, feedback=?, diagnosis=? WHERE id=?', o.correctness, o.status, o.source, o.confidence, o.feedback, JSON.stringify(payload), attemptId);
+    ctx.db.run('UPDATE attempts SET correctness=?, grade_status=?, grade_source=?, grade_confidence=?, feedback=?, diagnosis=?, grade_model=? WHERE id=?', o.correctness, o.status, o.source, o.confidence, o.feedback, JSON.stringify(payload), o.model ?? null, attemptId);
     afterAttempt(ctx, attemptId, q, o, 'practice');
   });
   return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));

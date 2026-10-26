@@ -11,6 +11,7 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
   const [starting, setStarting] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
   const [conflict, setConflict] = useState<any>(null);
+  const status = useApi<any>('/status');
   const t = today.data;
 
   if (today.loading && !t) return <div className="narrow"><h1>Today</h1><div className="skeleton" style={{ height: 120 }} /><div className="skeleton" /><div className="skeleton" /></div>;
@@ -31,6 +32,14 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
       <p className="muted small" style={{ margin: 0 }}>{new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(t.now))}</p>
       <h1>{meta?.profile?.name ? `Hi ${meta.profile.name.replace(/ \(sample\)/, '')} 👋` : 'Today'}</h1>
 
+      {status.data && status.data.workspace === 'real' && (status.data.ai.mode !== 'verified' || ['reauth_required', 'error'].includes(status.data.calendar.state)) && (
+        <div className="notice info small" role="status">
+          {status.data.ai.mode === 'offline' && <>Running in <strong>Offline mode</strong> — math is fully supported; other subjects use basic questions. </>}
+          {status.data.ai.mode === 'configured_unverified' && <>AI is configured but <strong>not yet verified</strong>. </>}
+          {status.data.ai.mode === 'verify_failed' && <>The AI provider <strong>rejected the credentials</strong>. </>}
+          {status.data.calendar.state === 'reauth_required' && <>Your calendar needs reconnecting. </>}
+          <a href="#/settings">Setup & status</a>
+        </div>)}
       {t.welcomeBack && <div className="notice info" role="status">{t.welcomeBack.message}</div>}
       {err && <ErrorBox error={err} onRetry={() => start()} />}
 

@@ -332,3 +332,31 @@ describe('Google gateway (OAuth, refresh, errors) with a fake network', () => {
     expect(c.status).toBe(503); expect(c.body.error.code).toBe('calendar_not_configured');
   });
 });
+
+describe('heavy days reflect matches/tournaments, not class time', () => {
+  const setup = async (events: Record<string, RawGoogleEvent[]>, labels: Record<string, string>) => {
+    const gw = new MemoryGateway();
+    gw.calendars = Object.keys(events).map((id, i) => ({ id, name: id, tz: 'America/New_York', color: null, primary: i === 0 }));
+    for (const [id, e] of Object.entries(events)) gw.events.set(id, e);
+    s = await startServer({ gateway: gw });
+    await s.call('POST', '/api/calendar/connect', {});
+    await s.call('PUT', '/api/calendar/calendars', { calendars: Object.keys(events).map((id) => ({ id, selected: true, label: labels[id], allDayBusy: true })) });
+    await s.call('POST', '/api/calendar/sync', {});
+    await s.call('POST', '/api/items', { title: 'Worksheet', type: 'homework', dueDate: '2026-10-30', estimateMin: 200 });
+    return (await s.call('GET', '/api/schedule')).body.days as any[];
+  };
+  const day = (days: any[], k: string) => days.find((d) => d.dateKey === k);
+  it('a 7-hour School-calendar day is NOT heavy and keeps its normal limit; a 5-hour match day IS heavy and is capped', async () => {
+    const days = await setup({
+      school: [timed('s1', 'School day', '2026-10-27T12:00:00Z', 420), timed('s2', 'School day', '2026-10-28T12:00:00Z', 420)],
+      sports: [timed('m1', 'Away match', '2026-10-28T12:00:00Z', 300)],
+    }, { school: 'school', sports: 'activity' });
+    expect(day(days, '2026-10-27')).toMatchObject({ heavy: false, busyMin: 420, loadMin: 0, capMin: 60 }); // Tuesday limit from defaults
+    expect(day(days, '2026-10-28')).toMatchObject({ heavy: true, loadMin: 300, capMin: 20 });
+  });
+  it('an all-day tournament on an activity calendar is heavy; all-day on a school calendar is not', async () => {
+    const days = await setup({ school: [allDay('a', 'Inservice day', '2026-10-27')], sports: [allDay('t', 'Tournament', '2026-10-28')] }, { school: 'school', sports: 'activity' });
+    expect(day(days, '2026-10-27').heavy).toBe(false);
+    expect(day(days, '2026-10-28')).toMatchObject({ heavy: true, freeWindows: 0 }); // flagged heavy AND the whole day is blocked
+  });
+});

@@ -224,8 +224,11 @@ export function acknowledgeSync(ctx: Ctx, itemId: string, action: 'accept' | 'ke
   else ctx.db.run("UPDATE academic_items SET sync_state='ok', sync_note='', updated_at=? WHERE id=?", ctx.now(), itemId);
 }
 
-export function disconnect(ctx: Ctx, o: { deleteImported: boolean; keepItems: boolean }) {
+export async function disconnect(ctx: Ctx, o: { deleteImported: boolean; keepItems: boolean }) {
   const tokens = loadTokens(ctx);
+  // Ask Google to revoke the grant first (best effort: a network failure must not stop the local wipe).
+  let revoked = false;
+  if (tokens) { try { await ctx.calendar.revoke(tokens); revoked = true; } catch { revoked = false; } }
   ctx.db.tx(() => {
     ctx.db.run("UPDATE cal_connection SET status='disconnected', token_enc=NULL, last_error=NULL WHERE id=1");
     if (o.deleteImported) {
@@ -237,7 +240,7 @@ export function disconnect(ctx: Ctx, o: { deleteImported: boolean; keepItems: bo
       ctx.db.run('DELETE FROM cal_connection');
     }
   });
-  return { revoked: !!tokens, deleted: o.deleteImported };
+  return { revoked, deleted: o.deleteImported };
 }
 
 export const pendingEventsForUi = (ctx: Ctx) => ctx.db.get<any>("SELECT COUNT(*) n FROM academic_items WHERE status='proposed'").n as number;

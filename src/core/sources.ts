@@ -113,3 +113,30 @@ export function verifyQuotes(text: string, chunks: Chunk[], quotes: string[]): {
   }
   return { verified, rejected };
 }
+
+/* ---- instruction-like text inside uploaded material (prompt-injection defence in depth) ---- */
+const INSTRUCTION_PATTERNS: RegExp[] = [
+  /ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier)\s+(instructions?|rules?|prompts?)/i,
+  /disregard\s+(the\s+|all\s+)?(rubric|instructions?|rules?)/i,
+  /\bsystem\s+(instruction|prompt|message|override)/i,
+  /\byou\s+are\s+now\b/i,
+  /\b(note|message|instruction)s?\s+to\s+(the\s+)?(grader|grading\s+system|ai|assistant|model|llm)\b/i,
+  /\baward\s+(full|maximum)\s+(marks|credit|points)\b/i,
+  /\bdo\s+not\s+(mention|reveal|tell)\s+this\b/i,
+  /\boutput\s+(no\s+other|only)\b/i,
+  /\bnew\s+instructions?\s*:/i,
+];
+export const isInstructionLike = (s: string) => INSTRUCTION_PATTERNS.some((re) => re.test(s));
+
+/** Character ranges of lines that read like instructions to an AI rather than study material. */
+export function instructionRanges(text: string): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let off = 0;
+  for (const line of text.split('\n')) {
+    if (isInstructionLike(line)) out.push({ start: off, end: off + line.length });
+    off += line.length + 1;
+  }
+  return out;
+}
+/** Remove instruction-like lines before text is shown to a model or turned into concepts. */
+export const stripInstructionLines = (text: string) => text.split('\n').filter((l) => !isInstructionLike(l)).join('\n');

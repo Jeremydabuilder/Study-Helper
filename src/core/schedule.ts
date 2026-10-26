@@ -25,7 +25,8 @@ export const DEFAULT_AVAILABILITY: AvailabilitySettings = {
   testPrepDays: 5, defaultTestPrepMin: 120, defaultHomeworkMin: 30, homeworkBufferDays: 1,
 };
 
-export interface BusyInterval { start: number; end: number; label: string }
+/** `heavy: false` marks routine time (classes) that blocks study but does not make a day a "heavy" day (match/tournament). */
+export interface BusyInterval { start: number; end: number; label: string; heavy?: boolean }
 export interface Win { start: number; end: number }
 
 const mergeWins = (w: Win[]) => {
@@ -46,7 +47,7 @@ function subtract(wins: Win[], cut: Win[]): Win[] {
   return cur;
 }
 
-export interface DayCapacity { dateKey: string; windows: Win[]; capMin: number; busyMin: number; heavy: boolean; why: string[] }
+export interface DayCapacity { dateKey: string; windows: Win[]; capMin: number; busyMin: number; loadMin: number; heavy: boolean; why: string[] }
 
 export function dayCapacity(dateKey: string, s: AvailabilitySettings, busy: BusyInterval[], tz: string, now: number): DayCapacity {
   const why: string[] = [];
@@ -54,19 +55,20 @@ export function dayCapacity(dateKey: string, s: AvailabilitySettings, busy: Busy
   const bedEnd = zonedToUtc(dateKey, s.bedtime, tz).getTime() - s.windDownMin * MIN;
   const start = Math.max(zonedToUtc(dateKey, s.preferredStart, tz).getTime(), now);
   const end = Math.min(zonedToUtc(dateKey, s.preferredEnd, tz).getTime(), bedEnd);
-  if (end <= start) return { dateKey, windows: [], capMin: 0, busyMin: 0, heavy: false, why: ['Outside your preferred study hours / bedtime.'] };
+  if (end <= start) return { dateKey, windows: [], capMin: 0, busyMin: 0, loadMin: 0, heavy: false, why: ['Outside your preferred study hours / bedtime.'] };
   const dayStart = zonedToUtc(dateKey, '00:00', tz).getTime(), dayEnd = zonedToUtc(addDaysKey(dateKey, 1), '00:00', tz).getTime();
   const todays = busy.filter((b) => b.end > dayStart && b.start < dayEnd);
   const busyMin = Math.round(todays.reduce((a, b) => a + (Math.min(b.end, dayEnd) - Math.max(b.start, dayStart)), 0) / MIN);
+  const loadMin = Math.round(todays.filter((b) => b.heavy !== false).reduce((a, b) => a + (Math.min(b.end, dayEnd) - Math.max(b.start, dayStart)), 0) / MIN);
   const cuts: Win[] = todays.map((b) => ({ start: b.start - s.bufferBeforeMin * MIN, end: b.end + s.bufferAfterMin * MIN }));
   for (const p of s.protected) if (p.days.includes(dow)) {
     cuts.push({ start: zonedToUtc(dateKey, p.start, tz).getTime(), end: zonedToUtc(dateKey, p.end, tz).getTime() });
   }
   const windows = subtract([{ start, end }], cuts).filter((w) => (w.end - w.start) / MIN >= s.minBlockMin);
-  const heavy = busyMin >= s.heavyDayBusyMin;
+  const heavy = loadMin >= s.heavyDayBusyMin; // classes alone never make a heavy day
   let cap = s.dailyLimitMin[dow] ?? 0;
-  if (heavy && s.heavyDayLimitMin < cap) { cap = s.heavyDayLimitMin; why.push(`Busy day (${Math.round(busyMin / 60 * 10) / 10}h scheduled): study capped at ${cap} min.`); }
-  return { dateKey, windows, capMin: cap, busyMin, heavy, why };
+  if (heavy && s.heavyDayLimitMin < cap) { cap = s.heavyDayLimitMin; why.push(`Heavy day (${Math.round(loadMin / 60 * 10) / 10}h of matches/commitments outside school): study capped at ${cap} min.`); }
+  return { dateKey, windows, capMin: cap, busyMin, loadMin, heavy, why };
 }
 
 export type DemandKind = 'test_prep' | 'homework' | 'project';

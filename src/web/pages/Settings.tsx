@@ -6,17 +6,17 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WLABEL: Record<string, string> = { urgency: 'Deadline pressure', weakness: 'Needs work', overdue: 'Review overdue', prereq: 'Underpins other topics', unassessed: 'Not assessed yet', repair: 'Unresolved mistake' };
 
 export function Settings({ go, meta }: { go: (p: string) => void; meta: any }) {
-  const [tab, setTab] = useState<'profile' | 'priorities' | 'availability' | 'ai' | 'data'>('profile');
+  const [tab, setTab] = useState<'setup' | 'profile' | 'priorities' | 'availability' | 'data'>(() => (window.location.hash.includes('tab=') ? (window.location.hash.split('tab=')[1] as never) : 'setup'));
   return (
     <div className="narrow">
       <h1>Settings</h1>
       <div className="tabs" role="tablist">
-        {([['profile', 'Profile'], ['priorities', 'Priorities'], ['availability', 'Availability'], ['ai', 'AI & limits'], ['data', 'Data']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>)}
+        {([['setup', 'Setup & usage'], ['profile', 'Profile'], ['priorities', 'Priorities'], ['availability', 'Availability'], ['data', 'Data']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>)}
       </div>
+      {tab === 'setup' && <SetupTab />}
       {tab === 'profile' && <Profile meta={meta} />}
       {tab === 'priorities' && <Priorities />}
       {tab === 'availability' && <Availability />}
-      {tab === 'ai' && <AiTab />}
       {tab === 'data' && <DataTab go={go} />}
     </div>
   );
@@ -98,8 +98,8 @@ function Availability() {
         {num('windDownMin', 'Wind-down before bed (min)', 'No study scheduled in this window.')}
         {num('bufferBeforeMin', 'Buffer before busy events (min)', 'Travel / getting ready.')}
         {num('bufferAfterMin', 'Buffer after busy events (min)', 'Cool-down, snack, travel home.')}
-        {num('heavyDayBusyMin', 'A “busy day” has at least… (min of events)')}
-        {num('heavyDayLimitMin', 'Study limit on busy days (min)', 'Tournament or long match days get less.')}
+        {num('heavyDayBusyMin', 'A “heavy day” has at least… (min of non-school events)', 'Class time on a calendar labelled “School” never counts.')}
+        {num('heavyDayLimitMin', 'Study limit on heavy days (min)', 'Tournament or long match days get less.')}
         {num('minBlockMin', 'Shortest study block (min)')}{num('maxBlockMin', 'Longest study block (min)')}
         {num('testPrepDays', 'Start test prep this many days ahead')}{num('defaultTestPrepMin', 'Default total prep for a test (min)', 'Used when you haven’t said how much you need.')}
         {num('defaultHomeworkMin', 'Default time for homework (min)')}{num('homeworkBufferDays', 'Finish homework this many days early', '0 = work up to the due day.')}
@@ -120,24 +120,77 @@ function Availability() {
   );
 }
 
-function AiTab() {
-  const st = useApi<any>('/settings');
-  const [lim, setLim] = useState<number | null>(null);
+const AI_MODE: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; text: string }> = {
+  offline: { tone: 'neutral', text: 'Offline mode' }, configured_unverified: { tone: 'warn', text: 'AI configured — not yet verified' },
+  verified: { tone: 'good', text: 'AI connection verified' }, verify_failed: { tone: 'bad', text: 'AI credentials rejected' },
+};
+const CAL_STATE: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; text: string }> = {
+  not_configured: { tone: 'neutral', text: 'Google Calendar not set up on this server' }, disconnected: { tone: 'neutral', text: 'Calendar disconnected' },
+  connected: { tone: 'good', text: 'Calendar connected (read-only)' }, reauth_required: { tone: 'bad', text: 'Calendar needs reconnecting' }, error: { tone: 'warn', text: 'Calendar sync problem' },
+};
+const usd = (x: number) => `$${x < 0.01 && x > 0 ? x.toFixed(4) : x.toFixed(2)}`;
+
+function SetupTab() {
+  const st = useApi<any>('/status');
+  const us = useApi<any>('/ai/usage');
+  const cfg = useApi<any>('/settings');
+  const [budget, setBudget] = useState<number | null>(null);
+  const [limit, setLimit] = useState<number | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [vres, setVres] = useState<any>(null);
   const s = useSave();
-  useEffect(() => { if (st.data) setLim(st.data.aiDailyLimit); }, [st.data]);
-  if (!st.data || lim === null) return <Spinner />;
-  const ai = st.data.ai;
-  return (
-    <section className="card"><h2>AI & usage limits</h2>
-      <p><Chip tone={ai.live ? 'good' : 'warn'}>{ai.label}</Chip></p>
-      {ai.live ? <p className="muted small">Questions are generated and open answers are graded by the model. The API key lives only on the server. Grades are treated as fallible: low-confidence ones don’t count until you confirm them.</p>
-        : <p className="muted small">No API key is configured, so the app runs in <strong>Offline mode</strong>: math questions are generated and checked exactly by built-in tools; other subjects use basic template questions, and open answers are only keyword-checked (never counted without your confirmation). Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> and restart for richer questions and grading.</p>}
-      <p className="small">Model calls in the last 24 hours: <strong>{ai.callsToday}</strong> of {ai.dailyLimit}. Math practice never uses a model call.</p>
-      <Field label="Daily model-call limit" hint="A cap to control cost. Set 0 to turn AI off entirely."><input type="number" min={0} max={5000} value={lim} onChange={(e) => setLim(Number(e.target.value))} /></Field>
-      {s.err && <ErrorBox error={s.err} />}
-      <div className="row mt"><button className="btn primary" onClick={() => s.run(async () => { await put('/settings', { aiDailyLimit: lim }); st.reload(); })}>{s.state === 'saved' ? 'Saved ✓' : 'Save limit'}</button></div>
+  useEffect(() => { if (cfg.data) { setBudget(cfg.data.aiDailyBudgetUsd); setLimit(cfg.data.aiDailyLimit); } }, [cfg.data]);
+  if (!st.data || !us.data || budget === null || limit === null) return <Spinner />;
+  const ai = st.data.ai, cal = st.data.calendar, u = us.data;
+  const m = AI_MODE[ai.mode], c = CAL_STATE[cal.state];
+  const verify = async () => { setVerifying(true); setVres(null); try { setVres(await post('/ai/verify')); } catch (e) { setVres({ error: (e as ApiError).message }); } finally { setVerifying(false); st.reload(); us.reload(); } };
+  const pctSpent = Math.min(100, (u.spentUsd / Math.max(u.budgetUsd, 0.0001)) * 100);
+  return (<>
+    <section className="card" aria-labelledby="ai-h"><h2 id="ai-h">AI</h2>
+      <p><Chip tone={m.tone}>{m.text}</Chip> <span className="muted small">{ai.label}</span></p>
+      <p className="small muted">{ai.detail}</p>
+      {!ai.live ? (
+        <details open={ai.mode === 'offline'}><summary>How to turn on AI</summary>
+          <ol className="small"><li>Create an API key in the Anthropic Console.</li><li>Copy <code>.env.example</code> to <code>.env</code> and set <code>ANTHROPIC_API_KEY=…</code> (the key stays on the server and is never shown here).</li><li>Restart the app, then come back and press <strong>Verify connection</strong>.</li></ol></details>
+      ) : (<>
+        <div className="scroll-x"><table><thead><tr><th>Task</th><th>Model</th><th>Max output</th><th>Effort</th></tr></thead><tbody>
+          {ai.tasks.map((t: any) => <tr key={t.task}><td>{t.task === 'extract' ? 'Find concepts' : t.task === 'generate' ? 'Write questions' : 'Grade open answers'}</td><td className="mono">{t.model}</td><td>{t.maxOutputTokens} tokens</td><td>{t.effort ?? 'default'}</td></tr>)}</tbody></table></div>
+        <p className="small muted mt-s"><strong>Privacy:</strong> while AI is on, the passages of your material needed for a task, your answers to open questions, and a few relevant memory notes are sent to <strong>{ai.providerName === 'anthropic' ? 'Anthropic' : ai.providerName === 'groq' ? 'Groq' : ai.providerName}</strong> only. Nothing is sent to any other provider, and math practice never calls a model. Models are set in <code>.env</code> (see README).</p>
+        <div className="row"><button className="btn primary" onClick={verify} disabled={verifying}>{verifying ? 'Checking…' : 'Verify connection'}</button><span className="small muted">Makes one tiny request per configured model (a fraction of a cent).</span></div>
+        {vres?.error && <ErrorBox error={vres.error} />}
+        {vres?.results?.map((r: any) => <p key={r.model} className={`small ${r.ok ? '' : 'unknown'}`}>{r.ok ? '✓' : '✗'} <span className="mono">{r.model}</span> — {r.ok ? `ok (${r.latencyMs} ms)` : r.error}</p>)}
+      </>)}
     </section>
-  );
+
+    {ai.live && (
+      <section className="card" aria-labelledby="use-h"><h2 id="use-h">Usage & budget (last 24 hours)</h2>
+        <p className="metric" style={{ fontSize: '1.5rem' }}>{usd(u.spentUsd)} <span className="small muted">estimated of {usd(u.budgetUsd)} budget</span></p>
+        <div className="bar" role="img" aria-label={`${Math.round(pctSpent)} percent of the daily budget`}><span style={{ width: `${pctSpent}%`, background: pctSpent > 85 ? 'var(--bad)' : undefined }} /></div>
+        <p className="small muted mt-s">{u.requests} request{u.requests === 1 ? '' : 's'} ({u.billableRequests} billable) · limit {u.requestLimit} · latency p50 {u.latencyMs.p50 ?? '—'} ms, p95 {u.latencyMs.p95 ?? '—'} ms</p>
+        {u.byPurpose.length > 0 && <div className="scroll-x"><table><thead><tr><th>Purpose</th><th>Requests</th><th>Retries</th><th>Failed</th><th>Tokens in / out</th><th>Est. cost</th></tr></thead><tbody>
+          {u.byPurpose.map((r: any) => <tr key={r.key}><td>{r.key}</td><td>{r.requests}</td><td>{r.retries}</td><td>{r.failures}</td><td>{r.inputTokens.toLocaleString()} / {r.outputTokens.toLocaleString()}</td><td>{usd(r.usd)}</td></tr>)}</tbody></table></div>}
+        <div className="notice info small">{u.note} Prices as of {u.pricingAsOf}.{u.estimatedUsageRequests ? ` ${u.estimatedUsageRequests} request(s) had no provider token counts and are estimated.` : ''}{u.unknownPriceRequests ? ` ${u.unknownPriceRequests} request(s) used a model with no known price (a conservative fallback is applied) — set AI_PRICE_IN_PER_MTOK / AI_PRICE_OUT_PER_MTOK.` : ''}</div>
+        <div className="grid2">
+          <Field label="Daily budget (USD, estimated)" hint="Enforced on the server before every request, including retries. 0 turns AI off."><input type="number" min={0} step={0.25} value={budget} onChange={(e) => setBudget(Number(e.target.value))} /></Field>
+          <Field label="Daily request limit"><input type="number" min={0} max={5000} value={limit} onChange={(e) => setLimit(Number(e.target.value))} /></Field>
+        </div>
+        {s.err && <ErrorBox error={s.err} />}
+        <div className="row mt-s"><button className="btn primary" onClick={() => s.run(async () => { await put('/settings', { aiDailyBudgetUsd: budget, aiDailyLimit: limit }); st.reload(); us.reload(); })}>{s.state === 'saved' ? 'Saved ✓' : 'Save limits'}</button></div>
+        {u.recent.length > 0 && <details className="mt-s"><summary>Recent requests</summary><div className="scroll-x"><table><thead><tr><th>When</th><th>Purpose</th><th>Model</th><th>Try</th><th>Result</th><th>Tokens</th><th>ms</th><th>Cost</th></tr></thead><tbody>
+          {u.recent.map((r: any, i: number) => <tr key={i}><td>{new Date(r.at).toLocaleTimeString()}</td><td>{r.purpose}</td><td className="mono small">{r.model}</td><td>{r.attempt}</td><td>{r.outcome}</td><td>{r.inputTokens ?? '—'}/{r.outputTokens ?? '—'}</td><td>{r.latencyMs}</td><td>{usd(r.usd)}</td></tr>)}</tbody></table></div></details>}
+      </section>)}
+
+    <section className="card" aria-labelledby="cal-h"><h2 id="cal-h">Google Calendar</h2>
+      <p><Chip tone={c.tone}>{c.text}</Chip>{cal.demo && <> <Chip tone="warn">sample calendar</Chip></>}</p>
+      {cal.state === 'not_configured' && !cal.demo && <>
+        <p className="small muted">{cal.partialConfig ? 'Setup is incomplete: ' : 'To enable it, set '}{cal.missingEnv.length ? <>missing <code>{cal.missingEnv.join(', ')}</code> in <code>.env</code>.</> : 'the Google variables in .env.'} Manual entry works without it.</p>
+        <p className="small">Register exactly this <strong>Authorized redirect URI</strong> in Google Cloud Console: <code>{cal.redirectUri}</code></p></>}
+      {cal.state === 'reauth_required' && <p className="small">{cal.lastError} <a href="#/calendar">Reconnect</a></p>}
+      <p className="small"><a href="#/calendar">Open calendar settings</a>. Step-by-step Google Cloud setup is in <code>docs/GOOGLE_SETUP.md</code>. Only the read-only calendar permission is requested.</p>
+    </section>
+
+    <section className="card"><h2>Security boundary</h2><p className="small">{st.data.boundary} Secrets (API keys, Google tokens) stay on the server and are never sent to your browser or written to logs; Google tokens are stored encrypted.</p></section>
+  </>);
 }
 
 function DataTab({ go }: { go: (p: string) => void }) {
