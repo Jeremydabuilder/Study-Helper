@@ -32,10 +32,12 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
       <p className="muted small" style={{ margin: 0 }}>{new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(t.now))}</p>
       <h1>{meta?.profile?.name ? `Hi ${meta.profile.name.replace(/ \(sample\)/, '')} 👋` : 'Today'}</h1>
 
-      {status.data && status.data.workspace === 'real' && (status.data.ai.mode !== 'verified' || ['reauth_required', 'error'].includes(status.data.calendar.state)) && (
+      {status.data && status.data.workspace === 'real' && (status.data.ai.mode !== 'output_verified' || ['reauth_required', 'error'].includes(status.data.calendar.state)) && (
         <div className="notice info small" role="status">
           {status.data.ai.mode === 'offline' && <>Running in <strong>Offline mode</strong> — math is fully supported; other subjects use basic questions. </>}
           {status.data.ai.mode === 'configured_unverified' && <>AI is configured but <strong>not yet verified</strong>. </>}
+          {status.data.ai.mode === 'connection_verified' && <>AI connection works, but <strong>study output has not been verified</strong> yet. </>}
+          {status.data.ai.mode === 'output_problem' && <>AI is connected but its <strong>latest output was unusable</strong>. </>}
           {status.data.ai.mode === 'verify_failed' && <>The AI provider <strong>rejected the credentials</strong>. </>}
           {status.data.calendar.state === 'reauth_required' && <>Your calendar needs reconnecting. </>}
           <a href="#/settings">Setup & status</a>

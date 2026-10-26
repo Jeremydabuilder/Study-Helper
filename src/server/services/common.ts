@@ -1,6 +1,6 @@
-import { AIError, AIProvider, CallOpts, ExtractInput, GenerateInput, GradeInput, PreRequest, RequestRecord } from '../../ai/provider';
+import { AIProvider, CallOpts, ExtractInput, GenerateInput, GradeInput } from '../../ai/provider';
 import { DEFAULT_TASKS, type TaskConfig } from '../../ai/llm';
-import { PRICING_AS_OF, estimateCost, projectCost } from '../../ai/pricing';
+import { PRICING_AS_OF } from '../../ai/pricing';
 import { OfflineProvider } from '../../ai/offline';
 import { Db, WorkspaceName } from '../db';
 import { DEFAULT_WEIGHTS, PriorityWeights } from '../../core/priority';
@@ -48,49 +48,28 @@ export interface ProfileRow { name: string; grade: string; timezone: string; def
 export const getProfile = (db: Db) => db.get<ProfileRow>('SELECT name, grade, timezone, default_minutes, about FROM profile WHERE id = 1')!;
 
 const DAY_MS = 86_400_000;
-export const callLimit = (ctx: { db: Db; cfg: AppConfig }) => getSetting<number>(ctx.db, 'ai_daily_limit', ctx.cfg.aiDailyLimit);
-export const budgetUsd = (ctx: { db: Db; cfg: AppConfig }) => getSetting<number>(ctx.db, 'ai_daily_budget_usd', ctx.cfg.aiDailyBudgetUsd);
+export { budgetUsd, requestLimit as callLimit } from './ledger';
+import { DbLedger, budgetUsd as _budget, requestLimit as _limit, window as ledgerWindow, recoverExpired } from './ledger';
 
-/** Estimated spend and billable-request count over a rolling 24 hours. */
+/** Spend over a rolling 24 hours: confirmed estimates, plus holds for in-flight and unconfirmed-billing requests. */
 export function usageWindow(ctx: { db: Db; now: () => number }) {
-  const r = ctx.db.get<{ n: number; usd: number }>('SELECT COUNT(*) n, COALESCE(SUM(est_cost_usd),0) usd FROM ai_usage WHERE ts > ? AND outcome IN (\'ok\',\'invalid_output\',\'truncated\')', ctx.now() - DAY_MS)!;
-  const all = ctx.db.get<{ n: number }>('SELECT COUNT(*) n FROM ai_usage WHERE ts > ?', ctx.now() - DAY_MS)!.n;
-  return { billableRequests: r.n, requests: all, spentUsd: r.usd };
+  recoverExpired(ctx.db, ctx.now());
+  const w = ledgerWindow(ctx.db, ctx.now());
+  const billable = ctx.db.get<{ n: number }>("SELECT COUNT(*) n FROM ai_usage WHERE ts > ? AND billing IN ('reported','estimated')", ctx.now() - DAY_MS)!.n;
+  return { requests: w.n, billableRequests: billable, spentUsd: w.spent, heldUnknownUsd: w.unknown, reservedUsd: w.reserved, committedUsd: w.spent + w.unknown + w.reserved };
 }
 
 /**
- * Wraps a live provider with server-side enforcement: a daily request cap and a daily estimated-dollar budget,
- * checked BEFORE every HTTP request (a repair retry is checked and counted like any other). Every request is
- * logged with provider-reported tokens, model, latency and an estimated cost. Offline providers pass through.
+ * Wraps a live provider with server-side enforcement: a request cap and an estimated-dollar budget, both checked inside
+ * an atomic reservation BEFORE every request (retries included). See ai/pricing.ts for exactly what the reservation
+ * does and does not promise. Offline providers pass through.
  */
 export function metered(ctx: { db: Db; now: () => number; cfg: AppConfig }, inner: AIProvider): AIProvider {
   if (!inner.live) return inner;
-  const gate = (p: PreRequest) => {
-    const w = usageWindow(ctx);
-    if (w.requests >= callLimit(ctx)) throw new AIError('limit_reached', `Daily AI request limit reached (${callLimit(ctx)}). Offline mode still works, or raise the limit in Settings.`);
-    const budget = budgetUsd(ctx);
-    const worst = projectCost(p.model, p.inputChars, p.maxOutputTokens, ctx.cfg.aiPriceOverride);
-    if (w.spentUsd + worst > budget) {
-      throw new AIError('budget_reached', `Daily AI budget reached: about $${w.spentUsd.toFixed(3)} spent of $${budget.toFixed(2)} (this request could cost up to $${worst.toFixed(3)}). Offline mode still works, or raise the budget in Settings. Provider billing is authoritative.`);
-    }
-    lastPre.set(`${p.purpose}:${p.attempt}`, p);
-  };
-  const lastPre = new Map<string, PreRequest>();
-  const record = (r: RequestRecord) => {
-    const pre = lastPre.get(`${r.purpose}:${r.attempt}`);
-    const billed = r.outcome === 'ok' || r.outcome === 'invalid_output' || r.outcome === 'truncated';
-    let usage = { inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens };
-    let source = r.usageSource;
-    if (billed && source === 'none') { source = 'estimated'; usage = { ...usage, inputTokens: Math.ceil((pre?.inputChars ?? 0) / 3.5), outputTokens: Math.ceil((pre?.maxOutputTokens ?? 0) * 0.25) }; }
-    const cost = billed ? estimateCost(r.model, usage, ctx.cfg.aiPriceOverride) : { usd: 0, known: true };
-    ctx.db.run(`INSERT INTO ai_usage (ts,purpose,ok,error,ms,provider,model,attempt,outcome,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,usage_source,est_cost_usd,price_known,stop_reason,request_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ctx.now(), r.purpose, Number(r.outcome === 'ok'), r.outcome === 'ok' ? null : r.outcome, r.latencyMs, r.provider, r.model, r.attempt, r.outcome,
-      billed ? usage.inputTokens : null, billed ? usage.outputTokens : null, usage.cacheReadTokens, usage.cacheWriteTokens, billed ? source : 'none', cost.usd, Number(cost.known), r.stopReason, r.requestId);
-    lastPre.delete(`${r.purpose}:${r.attempt}`);
-  };
-  const o = (extra?: CallOpts): CallOpts => ({ beforeRequest: (p) => { extra?.beforeRequest?.(p); gate(p); }, onRequest: (r) => { record(r); extra?.onRequest?.(r); } });
+  const ledger = new DbLedger(ctx);
+  const o = (extra?: CallOpts): CallOpts => ({ ...extra, ledger });
   return {
-    name: inner.name, live: true, label: inner.label, modelFor: inner.modelFor?.bind(inner),
+    name: inner.name, live: true, label: inner.label, providerId: inner.providerId, credentialFingerprint: inner.credentialFingerprint, modelFor: inner.modelFor?.bind(inner),
     verify: inner.verify ? (opts, model) => inner.verify!(o(opts), model) : undefined,
     extractConcepts: (i: ExtractInput, opts?: CallOpts) => inner.extractConcepts(i, o(opts)),
     generateQuestions: (i: GenerateInput, opts?: CallOpts) => inner.generateQuestions(i, o(opts)),
@@ -98,35 +77,64 @@ export function metered(ctx: { db: Db; now: () => number; cfg: AppConfig }, inne
   };
 }
 
-export type AiMode = 'offline' | 'configured_unverified' | 'verified' | 'verify_failed';
+/* ------------------------------ verification state ------------------------------ */
+
+export type AiMode = 'offline' | 'configured_unverified' | 'connection_verified' | 'output_verified' | 'output_problem' | 'verify_failed';
+export type TaskVerification = 'unverified' | 'connection_verified' | 'output_verified' | 'output_invalid' | 'auth_failed';
+const TASKS = ['extract', 'generate', 'grade'] as const;
+
+/**
+ * Verification is keyed by provider + model + credential fingerprint, and the NEWEST evidence wins:
+ *  - "connection verified": an authenticated HTTP 200 with provider-reported usage for this exact provider/model/credential.
+ *    Says nothing about whether the model's study output is usable.
+ *  - "output verified": a schema-valid result of that very task, from that exact model/credential.
+ *  - an invalid/empty/truncated/refused study output is NOT evidence that the integration works.
+ *  - a later authentication failure overrides earlier successes; a different model or key starts unverified.
+ */
+export function deriveVerification(db: Db, provider: AIProvider) {
+  const fp = provider.credentialFingerprint ?? null;
+  const pid = provider.providerId ?? provider.name.split(':')[0];
+  const q = (model: string, where: string, ...args: unknown[]) =>
+    db.get<{ t: number | null }>(`SELECT MAX(ts) t FROM ai_usage WHERE provider = ? AND model = ? AND cred_fp IS ? AND status = 'settled' AND ${where}`, pid, model, fp, ...args)?.t ?? 0;
+  return TASKS.map((task) => {
+    const model = provider.modelFor!(task);
+    const auth = q(model, "outcome = 'not_configured'");
+    const conn = q(model, "billing = 'reported'");
+    const okAt = q(model, "purpose = ? AND outcome = 'ok'", task);
+    const badAt = q(model, "purpose = ? AND outcome IN ('invalid_output','empty','truncated','refused')", task);
+    let status: TaskVerification = 'unverified';
+    if (auth > Math.max(conn, okAt)) status = 'auth_failed';
+    else if (okAt && okAt >= badAt) status = 'output_verified';
+    else if (badAt > okAt && conn) status = 'output_invalid';
+    else if (conn) status = 'connection_verified';
+    return { task, model, status, connectionAt: conn || null, outputAt: okAt || null, lastInvalidAt: badAt > okAt ? badAt : null };
+  });
+}
 
 export function aiInfo(ctx: Ctx) {
   const w = usageWindow(ctx);
   const live = ctx.ai.live;
-  const tasks = (['extract', 'generate', 'grade'] as const).map((t) => ({ task: t, model: ctx.ai.modelFor?.(t) ?? null, maxOutputTokens: ctx.cfg.aiTasks[t]?.maxOutputTokens ?? DEFAULT_TASKS[t].maxOutputTokens, effort: ctx.cfg.aiTasks[t]?.effort ?? DEFAULT_TASKS[t].effort ?? null }));
-  const models = [...new Set(tasks.map((t) => t.model).filter((m): m is string => !!m))];
+  const tasks = TASKS.map((t) => ({ task: t, model: ctx.ai.modelFor?.(t) ?? null, maxOutputTokens: ctx.cfg.aiTasks[t]?.maxOutputTokens ?? DEFAULT_TASKS[t].maxOutputTokens, effort: ctx.cfg.aiTasks[t]?.effort ?? DEFAULT_TASKS[t].effort ?? null }));
   let mode: AiMode = 'offline', detail = ctx.cfg.aiProvider === 'groq' ? 'AI_PROVIDER=groq is set but GROQ_API_KEY and GROQ_MODEL are both required.' : 'No ANTHROPIC_API_KEY is set. Math works fully offline; other subjects use basic templates.';
-  let verifiedAt: number | null = null, lastError: string | null = null;
+  let verification: ReturnType<typeof deriveVerification> = [];
   if (live) {
-    const okRows = ctx.db.all<{ model: string; ts: number }>("SELECT model, MAX(ts) ts FROM ai_usage WHERE outcome IN ('ok','invalid_output') GROUP BY model");
-    const okBy = new Map(okRows.map((r) => [r.model, r.ts]));
-    const unverified = models.filter((m) => !okBy.has(m));
-    const lastAuth = ctx.db.get<{ ts: number; model: string }>("SELECT ts, model FROM ai_usage WHERE outcome = 'not_configured' ORDER BY ts DESC LIMIT 1");
-    const authFailedLast = lastAuth && models.includes(lastAuth.model) && lastAuth.ts > (okBy.get(lastAuth.model) ?? 0);
-    verifiedAt = models.length ? Math.min(...models.map((m) => okBy.get(m) ?? Infinity)) : null;
-    if (verifiedAt === Infinity) verifiedAt = null;
-    if (authFailedLast) { mode = 'verify_failed'; lastError = 'The provider rejected the API key.'; detail = 'The provider rejected the credentials. Check the key in .env and restart.'; }
-    else if (unverified.length) { mode = 'configured_unverified'; detail = `Credentials are configured but no request has succeeded yet for ${unverified.join(', ')}. Use “Verify connection”.`; }
-    else { mode = 'verified'; detail = 'A real request to each configured model has succeeded.'; }
+    verification = deriveVerification(ctx.db, ctx.ai);
+    const st = verification.map((v) => v.status);
+    const names = (s: TaskVerification) => verification.filter((v) => v.status === s).map((v) => v.task).join(', ');
+    if (st.includes('auth_failed')) { mode = 'verify_failed'; detail = 'The provider rejected the credentials for a configured model since the last success. Fix the key in .env and restart.'; }
+    else if (st.every((s) => s === 'output_verified')) { mode = 'output_verified'; detail = 'Each task has returned schema-valid study output from its configured model and credential.'; }
+    else if (st.includes('output_invalid')) { mode = 'output_problem'; detail = `The connection works but the latest ${names('output_invalid')} output was unusable (invalid, empty, truncated or refused). That is not proof the integration works — check the model/limits and run "Verify study output".`; }
+    else if (st.every((s) => s !== 'unverified')) { mode = 'connection_verified'; detail = `Authenticated connection confirmed. Study output (the structured results the app relies on) is verified for: ${names('output_verified') || 'no task yet'}; not yet for: ${verification.filter((v) => v.status !== 'output_verified').map((v) => v.task).join(', ')}. Run "Verify study output".`; }
+    else { mode = 'configured_unverified'; detail = `Credentials are configured but no authenticated request has succeeded yet for ${[...new Set(verification.filter((v) => v.status === 'unverified').map((v) => v.model))].join(', ')}. Use “Verify connection”.`; }
   }
-  const limit = callLimit(ctx);
   return {
-    mode, detail, provider: ctx.ai.name, live, label: ctx.ai.label, providerName: live ? ctx.ai.name.split(':')[0] : 'offline', tasks, verifiedAt, lastError,
-    callsToday: w.requests, dailyLimit: limit, spentUsd: w.spentUsd, dailyBudgetUsd: budgetUsd(ctx), pricingAsOf: PRICING_AS_OF,
+    mode, detail, provider: ctx.ai.name, live, label: ctx.ai.label, providerName: live ? ctx.ai.providerId ?? ctx.ai.name.split(':')[0] : 'offline', tasks, verification,
+    callsToday: w.requests, dailyLimit: _limit(ctx), spentUsd: w.spentUsd, heldUsd: w.heldUnknownUsd + w.reservedUsd, committedUsd: w.committedUsd, dailyBudgetUsd: _budget(ctx), pricingAsOf: PRICING_AS_OF,
   };
 }
 
 export function usageReport(ctx: Ctx) {
+  const w = usageWindow(ctx);
   const since = ctx.now() - DAY_MS;
   const rows = ctx.db.all<any>('SELECT * FROM ai_usage WHERE ts > ? ORDER BY ts DESC', since);
   const sum = <K extends string>(key: (r: any) => K) => {
@@ -140,12 +148,17 @@ export function usageReport(ctx: Ctx) {
   };
   const lat = rows.filter((r) => r.outcome === 'ok').map((r) => r.ms as number).sort((a, b) => a - b);
   const pct = (p: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(p * lat.length))] : null);
+  const by = (b: string) => rows.filter((r) => r.billing === b).length;
   return {
-    windowHours: 24, ...usageWindow(ctx), budgetUsd: budgetUsd(ctx), requestLimit: callLimit(ctx), pricingAsOf: PRICING_AS_OF,
-    note: 'Costs are estimates from published list prices and provider-reported token counts. Your provider’s billing is authoritative.',
+    windowHours: 24, requests: w.requests, billableRequests: w.billableRequests, spentUsd: w.spentUsd, heldUsd: w.heldUnknownUsd + w.reservedUsd, committedUsd: w.committedUsd,
+    inFlight: rows.filter((r) => r.status === 'reserved').length, reservedUsd: w.reservedUsd,
+    unknownBilling: { requests: rows.filter((r) => r.billing === 'unknown').length, heldUsd: w.heldUnknownUsd },
+    billing: { reported: by('reported'), estimated: by('estimated'), noneReported: by('none_reported'), notSent: by('not_sent'), unknown: by('unknown') },
+    budgetUsd: _budget(ctx), requestLimit: _limit(ctx), pricingAsOf: PRICING_AS_OF,
+    policy: 'Before each request the server reserves a conservative worst case (input ≤ bytes sent + overhead, output ≤ max_tokens, +10%) against budget minus everything already spent or held, then reconciles with provider-reported usage. Requests with unknown billing (e.g. a timeout) stay held at their worst case for 24 h. This is a guardrail based on list-price estimates, NOT a guaranteed dollar ceiling; your provider’s billing is authoritative.',
     byPurpose: sum((r) => r.purpose), byModel: sum((r) => r.model ?? 'unknown'),
-    latencyMs: { p50: pct(0.5), p95: pct(0.95) }, estimatedUsageRequests: rows.filter((r) => r.usage_source === 'estimated').length, unknownPriceRequests: rows.filter((r) => !r.price_known).length,
-    recent: rows.slice(0, 15).map((r) => ({ at: r.ts, purpose: r.purpose, model: r.model, attempt: r.attempt, outcome: r.outcome, inputTokens: r.input_tokens, outputTokens: r.output_tokens, latencyMs: r.ms, usd: r.est_cost_usd })),
+    latencyMs: { p50: pct(0.5), p95: pct(0.95) }, estimatedUsageRequests: by('estimated'), unknownPriceRequests: rows.filter((r) => !r.price_known).length,
+    recent: rows.filter((r) => r.status !== 'reserved' || true).slice(0, 15).map((r) => ({ at: r.ts, purpose: r.purpose, model: r.model, attempt: r.attempt, outcome: r.outcome, billing: r.billing, inputTokens: r.input_tokens, outputTokens: r.output_tokens, latencyMs: r.ms, usd: r.est_cost_usd, heldUsd: r.unknown_usd + r.reserved_usd })),
   };
 }
 

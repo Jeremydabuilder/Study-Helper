@@ -35,7 +35,23 @@ export function estimateCost(model: string, u: Usage, ov: Override = {}): { usd:
   return { usd, known };
 }
 
-/** Worst case for one request before sending it: all output tokens used. ~3.5 chars/token is deliberately pessimistic for English. */
-export function projectCost(model: string, inputChars: number, maxOutputTokens: number, ov: Override = {}): number {
-  return estimateCost(model, { inputTokens: Math.ceil(inputChars / 3.5), outputTokens: maxOutputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 }, ov).usd;
+/**
+ * RESERVATION POLICY (what the budget gate does, and what it does not promise)
+ *
+ * Before a request is sent we reserve a worst-case amount:
+ *   input tokens  ≤ UTF-8 byte length of what we send + OVERHEAD_INPUT_TOKENS
+ *                   (assumption: a token spans at least one byte, so tokens ≤ bytes; the overhead covers message framing)
+ *   output tokens ≤ max_tokens (the API's hard limit; thinking tokens count toward it)
+ *   × PRICE_MARGIN to absorb small list-price drift.
+ * This is a deliberately conservative BOUND under those assumptions. It is not a guaranteed dollar ceiling:
+ * published prices can change, unlisted surcharges can apply, and the provider's own billing is authoritative.
+ * We do not call a token-counting endpoint: it would add a request (latency, rate limit) per call, and the exact count
+ * is not needed because the reservation is reconciled against provider-reported usage as soon as the response arrives.
+ */
+export const OVERHEAD_INPUT_TOKENS = 300;
+export const PRICE_MARGIN = 1.1;
+
+export function reservationUsd(model: string, inputBytes: number, maxOutputTokens: number, ov: Override = {}): number {
+  const u: Usage = { inputTokens: inputBytes + OVERHEAD_INPUT_TOKENS, outputTokens: maxOutputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  return estimateCost(model, u, ov).usd * PRICE_MARGIN;
 }

@@ -122,7 +122,8 @@ function Availability() {
 
 const AI_MODE: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; text: string }> = {
   offline: { tone: 'neutral', text: 'Offline mode' }, configured_unverified: { tone: 'warn', text: 'AI configured — not yet verified' },
-  verified: { tone: 'good', text: 'AI connection verified' }, verify_failed: { tone: 'bad', text: 'AI credentials rejected' },
+  connection_verified: { tone: 'warn', text: 'Connection works — study output not verified yet' }, output_verified: { tone: 'good', text: 'Study output verified' },
+  output_problem: { tone: 'bad', text: 'Connected, but recent study output was unusable' }, verify_failed: { tone: 'bad', text: 'AI credentials rejected' },
 };
 const CAL_STATE: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; text: string }> = {
   not_configured: { tone: 'neutral', text: 'Google Calendar not set up on this server' }, disconnected: { tone: 'neutral', text: 'Calendar disconnected' },
@@ -143,7 +144,7 @@ function SetupTab() {
   if (!st.data || !us.data || budget === null || limit === null) return <Spinner />;
   const ai = st.data.ai, cal = st.data.calendar, u = us.data;
   const m = AI_MODE[ai.mode], c = CAL_STATE[cal.state];
-  const verify = async () => { setVerifying(true); setVres(null); try { setVres(await post('/ai/verify')); } catch (e) { setVres({ error: (e as ApiError).message }); } finally { setVerifying(false); st.reload(); us.reload(); } };
+  const verify = async (level: 'connection' | 'output') => { setVerifying(true); setVres(null); try { setVres(await post('/ai/verify', { level })); } catch (e) { setVres({ error: (e as ApiError).message }); } finally { setVerifying(false); st.reload(); us.reload(); } };
   const pctSpent = Math.min(100, (u.spentUsd / Math.max(u.budgetUsd, 0.0001)) * 100);
   return (<>
     <section className="card" aria-labelledby="ai-h"><h2 id="ai-h">AI</h2>
@@ -156,28 +157,31 @@ function SetupTab() {
         <div className="scroll-x"><table><thead><tr><th>Task</th><th>Model</th><th>Max output</th><th>Effort</th></tr></thead><tbody>
           {ai.tasks.map((t: any) => <tr key={t.task}><td>{t.task === 'extract' ? 'Find concepts' : t.task === 'generate' ? 'Write questions' : 'Grade open answers'}</td><td className="mono">{t.model}</td><td>{t.maxOutputTokens} tokens</td><td>{t.effort ?? 'default'}</td></tr>)}</tbody></table></div>
         <p className="small muted mt-s"><strong>Privacy:</strong> while AI is on, the passages of your material needed for a task, your answers to open questions, and a few relevant memory notes are sent to <strong>{ai.providerName === 'anthropic' ? 'Anthropic' : ai.providerName === 'groq' ? 'Groq' : ai.providerName}</strong> only. Nothing is sent to any other provider, and math practice never calls a model. Models are set in <code>.env</code> (see README).</p>
-        <div className="row"><button className="btn primary" onClick={verify} disabled={verifying}>{verifying ? 'Checking…' : 'Verify connection'}</button><span className="small muted">Makes one tiny request per configured model (a fraction of a cent).</span></div>
+        <div className="row"><button className="btn" onClick={() => verify('connection')} disabled={verifying}>{verifying ? 'Checking…' : 'Verify connection'}</button> <button className="btn primary" onClick={() => verify('output')} disabled={verifying}>{verifying ? 'Checking…' : 'Verify study output'}</button></div>
+        <p className="small muted">“Connection” only proves the key and network work (one tiny request per model). “Study output” runs one tiny real task per role — find concepts, write a question, grade an answer — and passes only if the reply is valid. Both cost a fraction of a cent.</p>
+        {ai.verification?.length > 0 && <div className="scroll-x"><table><thead><tr><th>Task</th><th>Model</th><th>Status</th></tr></thead><tbody>{ai.verification.map((v: any) => <tr key={v.task}><td>{v.task}</td><td className="mono small">{v.model}</td><td>{({ unverified: 'not verified', connection_verified: 'connection only', output_verified: 'valid output seen', output_invalid: 'last output was unusable', auth_failed: 'credentials rejected' } as Record<string, string>)[v.status]}</td></tr>)}</tbody></table></div>}
         {vres?.error && <ErrorBox error={vres.error} />}
-        {vres?.results?.map((r: any) => <p key={r.model} className={`small ${r.ok ? '' : 'unknown'}`}>{r.ok ? '✓' : '✗'} <span className="mono">{r.model}</span> — {r.ok ? `ok (${r.latencyMs} ms)` : r.error}</p>)}
+        {vres?.results?.map((r: any) => <p key={`${r.task}${r.model}`} className={`small ${r.ok ? '' : 'unknown'}`}>{r.ok ? '✓' : '✗'} {r.task ? `${r.task} · ` : ''}<span className="mono">{r.model}</span> — {r.ok ? `ok (${r.latencyMs} ms)` : r.error}</p>)}
       </>)}
     </section>
 
     {ai.live && (
       <section className="card" aria-labelledby="use-h"><h2 id="use-h">Usage & budget (last 24 hours)</h2>
-        <p className="metric" style={{ fontSize: '1.5rem' }}>{usd(u.spentUsd)} <span className="small muted">estimated of {usd(u.budgetUsd)} budget</span></p>
+        <p className="metric" style={{ fontSize: '1.5rem' }}>{usd(u.spentUsd)} <span className="small muted">spent (estimated) of {usd(u.budgetUsd)} budget{u.heldUsd > 0 && <> · <strong>{usd(u.heldUsd)}</strong> held</>}</span></p>
         <div className="bar" role="img" aria-label={`${Math.round(pctSpent)} percent of the daily budget`}><span style={{ width: `${pctSpent}%`, background: pctSpent > 85 ? 'var(--bad)' : undefined }} /></div>
         <p className="small muted mt-s">{u.requests} request{u.requests === 1 ? '' : 's'} ({u.billableRequests} billable) · limit {u.requestLimit} · latency p50 {u.latencyMs.p50 ?? '—'} ms, p95 {u.latencyMs.p95 ?? '—'} ms</p>
         {u.byPurpose.length > 0 && <div className="scroll-x"><table><thead><tr><th>Purpose</th><th>Requests</th><th>Retries</th><th>Failed</th><th>Tokens in / out</th><th>Est. cost</th></tr></thead><tbody>
           {u.byPurpose.map((r: any) => <tr key={r.key}><td>{r.key}</td><td>{r.requests}</td><td>{r.retries}</td><td>{r.failures}</td><td>{r.inputTokens.toLocaleString()} / {r.outputTokens.toLocaleString()}</td><td>{usd(r.usd)}</td></tr>)}</tbody></table></div>}
-        <div className="notice info small">{u.note} Prices as of {u.pricingAsOf}.{u.estimatedUsageRequests ? ` ${u.estimatedUsageRequests} request(s) had no provider token counts and are estimated.` : ''}{u.unknownPriceRequests ? ` ${u.unknownPriceRequests} request(s) used a model with no known price (a conservative fallback is applied) — set AI_PRICE_IN_PER_MTOK / AI_PRICE_OUT_PER_MTOK.` : ''}</div>
+        {(u.inFlight > 0 || u.unknownBilling.requests > 0) && <p className="small muted">{u.inFlight > 0 && <>{u.inFlight} request(s) in flight. </>}{u.unknownBilling.requests > 0 && <>{u.unknownBilling.requests} request(s) have <strong>unknown billing</strong> (e.g. a timeout — the provider may still have charged); {usd(u.unknownBilling.heldUsd)} stays held against the budget for 24 h.</>}</p>}
+        <div className="notice info small">{u.policy} Prices as of {u.pricingAsOf}.{u.estimatedUsageRequests ? ` ${u.estimatedUsageRequests} request(s) had no provider token counts and are estimated.` : ''}{u.unknownPriceRequests ? ` ${u.unknownPriceRequests} request(s) used a model with no known price (a conservative fallback is applied) — set AI_PRICE_IN_PER_MTOK / AI_PRICE_OUT_PER_MTOK.` : ''}</div>
         <div className="grid2">
-          <Field label="Daily budget (USD, estimated)" hint="Enforced on the server before every request, including retries. 0 turns AI off."><input type="number" min={0} step={0.25} value={budget} onChange={(e) => setBudget(Number(e.target.value))} /></Field>
+          <Field label="Daily budget (USD, estimated)" hint="Checked on the server before every request (including retries) against spend plus held amounts. A guardrail from list-price estimates, not a guaranteed ceiling. 0 turns AI off."><input type="number" min={0} step={0.25} value={budget} onChange={(e) => setBudget(Number(e.target.value))} /></Field>
           <Field label="Daily request limit"><input type="number" min={0} max={5000} value={limit} onChange={(e) => setLimit(Number(e.target.value))} /></Field>
         </div>
         {s.err && <ErrorBox error={s.err} />}
         <div className="row mt-s"><button className="btn primary" onClick={() => s.run(async () => { await put('/settings', { aiDailyBudgetUsd: budget, aiDailyLimit: limit }); st.reload(); us.reload(); })}>{s.state === 'saved' ? 'Saved ✓' : 'Save limits'}</button></div>
-        {u.recent.length > 0 && <details className="mt-s"><summary>Recent requests</summary><div className="scroll-x"><table><thead><tr><th>When</th><th>Purpose</th><th>Model</th><th>Try</th><th>Result</th><th>Tokens</th><th>ms</th><th>Cost</th></tr></thead><tbody>
-          {u.recent.map((r: any, i: number) => <tr key={i}><td>{new Date(r.at).toLocaleTimeString()}</td><td>{r.purpose}</td><td className="mono small">{r.model}</td><td>{r.attempt}</td><td>{r.outcome}</td><td>{r.inputTokens ?? '—'}/{r.outputTokens ?? '—'}</td><td>{r.latencyMs}</td><td>{usd(r.usd)}</td></tr>)}</tbody></table></div></details>}
+        {u.recent.length > 0 && <details className="mt-s"><summary>Recent requests</summary><div className="scroll-x"><table><thead><tr><th>When</th><th>Purpose</th><th>Model</th><th>Try</th><th>Result</th><th>Tokens</th><th>ms</th><th>Billing</th><th>Cost</th></tr></thead><tbody>
+          {u.recent.map((r: any, i: number) => <tr key={i}><td>{new Date(r.at).toLocaleTimeString()}</td><td>{r.purpose}</td><td className="mono small">{r.model}</td><td>{r.attempt}</td><td>{r.outcome}</td><td>{r.inputTokens ?? '—'}/{r.outputTokens ?? '—'}</td><td>{r.latencyMs}</td><td>{r.billing?.replace('_', ' ')}</td><td>{usd(r.usd)}{r.heldUsd > 0 && <span className="muted"> (+{usd(r.heldUsd)} held)</span>}</td></tr>)}</tbody></table></div></details>}
       </section>)}
 
     <section className="card" aria-labelledby="cal-h"><h2 id="cal-h">Google Calendar</h2>

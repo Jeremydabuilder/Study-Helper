@@ -1,8 +1,15 @@
 import type { ConceptExtraction, GradeResult, QuestionBatch } from './schemas';
 
 export type AIErrorCode = 'budget_reached' | 'timeout' | 'rate_limited' | 'unavailable' | 'malformed' | 'limit_reached' | 'not_configured' | 'rejected';
+/**
+ * What we know about whether a failed request could have been billed.
+ *  not_sent      – it never left this machine (e.g. connection refused, DNS failure): confirmed zero cost
+ *  none_reported – the provider answered with an error status and reported no usage: treated as zero, labelled as such
+ *  unknown       – we sent it and got no usable answer (timeout, reset, unreadable body): it MAY have been billed
+ */
+export type BillingHint = 'not_sent' | 'none_reported' | 'unknown';
 export class AIError extends Error {
-  constructor(public code: AIErrorCode, message: string, public retryAfterMs?: number) { super(message); }
+  constructor(public code: AIErrorCode, message: string, public retryAfterMs?: number, public billing?: BillingHint) { super(message); }
   get retryable() { return this.code === 'timeout' || this.code === 'rate_limited' || this.code === 'unavailable' || this.code === 'malformed'; }
 }
 
@@ -25,24 +32,45 @@ export interface GradeInput {
 
 export type AITask = 'extract' | 'generate' | 'grade';
 
-/** One billable HTTP request to a provider. A repair retry is a separate record. */
+/** How a request's cost is known. 'estimated' and 'unknown' are held at the conservative reservation, never at zero. */
+export type BillingKind = 'reported' | 'estimated' | 'none_reported' | 'not_sent' | 'unknown';
+
+/** One HTTP request to a provider. A repair retry is a separate record. */
 export interface RequestRecord {
   purpose: string; provider: string; model: string; attempt: number;
-  outcome: string; // ok | invalid_output | truncated | <AIErrorCode>
+  /** ok | invalid_output | empty | truncated | refused | <AIErrorCode> */
+  outcome: string;
   latencyMs: number;
   inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number; cacheWriteTokens: number;
-  usageSource: 'provider' | 'estimated' | 'none';
+  billing: BillingKind;
   stopReason: string | null; requestId: string | null;
 }
-export interface PreRequest { purpose: string; provider: string; model: string; attempt: number; maxOutputTokens: number; inputChars: number }
-export interface CallOpts {
-  /** Called once per HTTP request, after it finishes (including failures). */
-  onRequest?: (r: RequestRecord) => void;
-  /** Called before each HTTP request; throw an AIError to block it (budget / call cap). */
-  beforeRequest?: (p: PreRequest) => void;
+export interface PreRequest {
+  purpose: string; provider: string; model: string; attempt: number; maxOutputTokens: number;
+  /** UTF-8 bytes of everything sent (system + user). A token covers at least one byte, so this bounds input tokens. */
+  inputBytes: number;
+  /** Non-reversible fingerprint of the credential + endpoint, so verification never carries over to a different key. */
+  credFp: string | null;
 }
 
+/**
+ * Spend accounting for provider requests. `reserve` is synchronous and atomic: it checks the budget against
+ * everything already spent AND everything currently reserved, and records the reservation in the same step, so
+ * concurrent callers cannot each spend the same remaining budget. Exactly one of settle/fail follows each reserve.
+ */
+export interface RequestLedger {
+  /** Returns a unique request id, or throws AIError('budget_reached' | 'limit_reached') without sending anything. */
+  reserve(p: PreRequest): string;
+  settle(id: string, r: RequestRecord): void;
+  fail(id: string, f: { outcome: string; billing: BillingKind; latencyMs: number }): void;
+}
+export interface CallOpts { ledger?: RequestLedger }
+
 export interface AIProvider {
+  /** 'anthropic' | 'groq' for live providers. */
+  readonly providerId?: string;
+  /** Non-reversible fingerprint of the credential + endpoint; verification never carries over to a different key. */
+  readonly credentialFingerprint?: string;
   /** Model that will serve a task (for display and for recording which model graded an attempt). */
   modelFor?(task: AITask): string;
   /** Tiny real request proving the credentials work. Offline providers omit it. */

@@ -5,8 +5,9 @@
  * Cost accounting: every HTTP request (including a repair retry) is reported through CallOpts.onRequest with
  * provider-reported token usage, and may be blocked beforehand through CallOpts.beforeRequest.
  */
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { AIError, AIProvider, AITask, CallOpts, ExtractInput, GenerateInput, GradeInput, RequestRecord } from './provider';
+import { AIError, AIProvider, AITask, BillingHint, CallOpts, ExtractInput, GenerateInput, GradeInput } from './provider';
 import { ConceptExtraction, GradeResult, QuestionBatch } from './schemas';
 
 export interface LLMRequest { system: string; user: string; maxTokens: number; timeoutMs: number; model: string; effort?: Effort; allowEmpty?: boolean }
@@ -18,6 +19,8 @@ export type Effort = 'low' | 'medium' | 'high';
 export interface LLMTransport {
   readonly provider: string;
   readonly defaultModel: string;
+  /** Non-reversible fingerprint of credential + endpoint (never the secret itself). */
+  readonly credentialFingerprint?: string;
   /** May return a bare string (tests); real transports return usage. */
   complete(req: LLMRequest): Promise<LLMResponse | string>;
 }
@@ -59,58 +62,78 @@ export class LLMProvider implements AIProvider {
     this.label = `${t.provider === 'anthropic' ? 'Anthropic' : t.provider === 'groq' ? 'Groq' : t.provider} (${models.join(', ')})`;
   }
   modelFor(task: AITask) { return this.tasks[task].model ?? this.t.defaultModel; }
-  get providerName() { return this.t.provider; }
+  get providerId() { return this.t.provider; }
+  get credentialFingerprint() { return this.t.credentialFingerprint; }
   taskConfig(task: AITask) { return { model: this.modelFor(task), ...this.tasks[task] }; }
 
-  /** One logical call = up to 2 billable requests (the second is a repair retry). */
+  /**
+   * Send ONE HTTP request through the ledger. The ledger reserves worst-case spend first (and may refuse), and exactly one
+   * of settle/fail is called afterwards, so no request can be sent unaccounted or settled twice.
+   */
+  private async sendOnce(a: { purpose: string; model: string; system: string; user: string; maxTokens: number; effort?: Effort; attempt: number; allowEmpty?: boolean }, opts: CallOpts) {
+    const ledger = opts.ledger;
+    const id = ledger?.reserve({
+      purpose: a.purpose, provider: this.t.provider, model: a.model, attempt: a.attempt, maxOutputTokens: a.maxTokens,
+      inputBytes: Buffer.byteLength(a.system) + Buffer.byteLength(a.user), credFp: this.t.credentialFingerprint ?? null,
+    });
+    const t0 = Date.now();
+    let resp: LLMResponse;
+    try {
+      const raw = await this.t.complete({ system: a.system, user: a.user, maxTokens: a.maxTokens, timeoutMs: this.o.timeoutMs ?? 45_000, model: a.model, effort: a.effort, allowEmpty: a.allowEmpty });
+      resp = typeof raw === 'string' ? { text: raw, model: a.model, stopReason: 'end_turn', requestId: null, usage: null } : raw;
+    } catch (e) {
+      const billing: BillingHint = e instanceof AIError ? e.billing ?? 'unknown' : 'unknown';
+      if (id) ledger!.fail(id, { outcome: e instanceof AIError ? e.code : 'error', billing, latencyMs: Date.now() - t0 });
+      throw e;
+    }
+    let settled = false;
+    const settle = (outcome: string) => {
+      if (settled || !id) return;
+      settled = true;
+      ledger!.settle(id, {
+        purpose: a.purpose, provider: this.t.provider, model: resp.model || a.model, attempt: a.attempt, outcome, latencyMs: Date.now() - t0,
+        inputTokens: resp.usage ? resp.usage.input : null, outputTokens: resp.usage ? resp.usage.output : null,
+        cacheReadTokens: resp.usage?.cacheRead ?? 0, cacheWriteTokens: resp.usage?.cacheWrite ?? 0,
+        billing: resp.usage ? 'reported' : 'estimated', stopReason: resp.stopReason, requestId: resp.requestId,
+      });
+    };
+    return { resp, settle };
+  }
+
+  /** One logical call = up to 2 billable requests (the second is a repair retry, accounted separately). */
   private async call<T>(task: AITask, purpose: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, user: string, opts: CallOpts = {}): Promise<T> {
     const cfg = this.taskConfig(task);
     let lastErr = '';
     for (let attempt = 1; attempt <= 2; attempt++) {
       const prompt = attempt === 1 ? user : `${user}\n\nYour previous reply was invalid (${lastErr}). Reply again with ONLY a valid JSON object in the requested shape.`;
-      opts.beforeRequest?.({ purpose, provider: this.t.provider, model: cfg.model, attempt, maxOutputTokens: cfg.maxOutputTokens, inputChars: SYSTEM.length + prompt.length });
-      const t0 = Date.now();
-      const rec = (r: Partial<RequestRecord> & { outcome: string }, resp?: LLMResponse | null) => opts.onRequest?.({
-        purpose, provider: this.t.provider, model: resp?.model ?? cfg.model, attempt, latencyMs: Date.now() - t0,
-        inputTokens: resp?.usage ? resp.usage.input : null, outputTokens: resp?.usage ? resp.usage.output : null,
-        cacheReadTokens: resp?.usage?.cacheRead ?? 0, cacheWriteTokens: resp?.usage?.cacheWrite ?? 0,
-        usageSource: resp?.usage ? 'provider' : 'none', stopReason: resp?.stopReason ?? null, requestId: resp?.requestId ?? null, ...r,
-      });
-      let resp: LLMResponse;
+      const { resp, settle } = await this.sendOnce({ purpose, model: cfg.model, system: SYSTEM, user: prompt, maxTokens: cfg.maxOutputTokens, effort: cfg.effort, attempt }, opts);
+      let outcome = 'invalid_output'; // if anything below throws unexpectedly, the response still gets settled with its reported usage
       try {
-        const raw = await this.t.complete({ system: SYSTEM, user: prompt, maxTokens: cfg.maxOutputTokens, timeoutMs: this.o.timeoutMs ?? 45_000, model: cfg.model, effort: cfg.effort });
-        resp = typeof raw === 'string' ? { text: raw, model: cfg.model, stopReason: 'end_turn', requestId: null, usage: null } : raw;
-      } catch (e) { rec({ outcome: e instanceof AIError ? e.code : 'error' }); throw e; }
-
-      if (resp.stopReason === 'max_tokens' || resp.stopReason === 'length') {
-        rec({ outcome: 'truncated' }, resp);
-        // A retry would hit the same ceiling and bill again, so fail clearly instead.
-        throw new AIError('malformed', `The model's answer was cut off at the ${cfg.maxOutputTokens}-token output limit. Raise AI_MAX_OUTPUT_${task.toUpperCase()} or lower its effort.`);
-      }
-      if (resp.stopReason === 'refusal') { rec({ outcome: 'rejected' }, resp); throw new AIError('rejected', 'The model declined this request.'); }
-      try {
-        const parsed = schema.safeParse(extractJson(resp.text));
-        if (parsed.success) { rec({ outcome: 'ok' }, resp); return parsed.data; }
-        lastErr = parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-      } catch (e) { lastErr = e instanceof Error ? e.message : 'unparseable'; }
-      rec({ outcome: 'invalid_output' }, resp);
+        if (resp.stopReason === 'max_tokens' || resp.stopReason === 'length') {
+          outcome = 'truncated';
+          // A retry would hit the same ceiling and bill again, so fail clearly instead.
+          throw new AIError('malformed', `The model's answer was cut off at the ${cfg.maxOutputTokens}-token output limit. Raise AI_MAX_OUTPUT_${task.toUpperCase()} or lower its effort.`);
+        }
+        if (resp.stopReason === 'refusal') { outcome = 'refused'; throw new AIError('rejected', 'The model declined this request.'); }
+        if (!resp.text.trim()) { outcome = 'empty'; lastErr = 'the reply was empty'; continue; }
+        try {
+          const parsed = schema.safeParse(extractJson(resp.text));
+          if (parsed.success) { outcome = 'ok'; return parsed.data; }
+          lastErr = parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+        } catch (e) { lastErr = e instanceof Error ? e.message : 'unparseable'; }
+        outcome = 'invalid_output';
+      } finally { settle(outcome); }
     }
     throw new AIError('malformed', `The model returned an invalid response (${lastErr}).`);
   }
 
+  /** Cheapest possible proof of an authenticated HTTP round trip. Says nothing about whether study output is valid. */
   async verify(opts: CallOpts = {}, modelOverride?: string) {
     const model = modelOverride ?? this.modelFor('grade');
-    opts.beforeRequest?.({ purpose: 'verify', provider: this.t.provider, model, attempt: 1, maxOutputTokens: 256, inputChars: 80 });
     const t0 = Date.now();
-    try {
-      const raw = await this.t.complete({ system: 'Reply with the single word OK.', user: 'Connection check.', maxTokens: 256, timeoutMs: this.o.timeoutMs ?? 45_000, model, effort: 'low', allowEmpty: true });
-      const resp: LLMResponse = typeof raw === 'string' ? { text: raw, model, stopReason: 'end_turn', requestId: null, usage: null } : raw;
-      opts.onRequest?.({ purpose: 'verify', provider: this.t.provider, model: resp.model, attempt: 1, outcome: 'ok', latencyMs: Date.now() - t0, inputTokens: resp.usage?.input ?? null, outputTokens: resp.usage?.output ?? null, cacheReadTokens: resp.usage?.cacheRead ?? 0, cacheWriteTokens: resp.usage?.cacheWrite ?? 0, usageSource: resp.usage ? 'provider' : 'none', stopReason: resp.stopReason, requestId: resp.requestId });
-      return { model: resp.model, latencyMs: Date.now() - t0 };
-    } catch (e) {
-      opts.onRequest?.({ purpose: 'verify', provider: this.t.provider, model, attempt: 1, outcome: e instanceof AIError ? e.code : 'error', latencyMs: Date.now() - t0, inputTokens: null, outputTokens: null, cacheReadTokens: 0, cacheWriteTokens: 0, usageSource: 'none', stopReason: null, requestId: null });
-      throw e;
-    }
+    const { resp, settle } = await this.sendOnce({ purpose: 'verify', model, system: 'Reply with the single word OK.', user: 'Connection check.', maxTokens: 256, effort: 'low', attempt: 1, allowEmpty: true }, opts);
+    settle('ok'); // HTTP 200 with usage: the connection works. Study-output validity is verified separately.
+    return { model: resp.model, latencyMs: Date.now() - t0 };
   }
 
   extractConcepts(i: ExtractInput, opts?: CallOpts) {
@@ -156,9 +179,23 @@ JSON shape: {"correctness":0.0-1.0,"confidence":"high|medium|low","feedback":"sp
 /** Models that accept output_config.effort (per the Anthropic effort docs, 2026-10). */
 export const supportsEffort = (model: string) => /^claude-(fable|mythos|opus|sonnet|haiku)-5/.test(model) || /^claude-(opus|sonnet)-4-[5-9]/.test(model);
 
+/** Errors raised before any byte could have reached the provider: confirmed zero cost. */
+const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ERR_INVALID_URL', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID', 'SELF_SIGNED_CERT_IN_CHAIN']);
+export function classifyFetchFailure(e: unknown): { code: 'timeout' | 'unavailable'; billing: BillingHint; message: string } {
+  if (e instanceof Error && e.name === 'AbortError') return { code: 'timeout', billing: 'unknown', message: 'The AI request timed out.' }; // we sent it; it may still be billed
+  const err = e as { code?: string; cause?: { code?: string } };
+  const c = err?.cause?.code ?? err?.code;
+  if (c && NOT_SENT.has(c)) return { code: 'unavailable', billing: 'not_sent', message: 'Could not reach the AI service.' };
+  return { code: 'unavailable', billing: 'unknown', message: 'Could not reach the AI service.' };
+}
+export const credentialFingerprint = (provider: string, secret: string, endpoint: string) => createHash('sha256').update(`${provider}\0${secret}\0${endpoint}`).digest('hex').slice(0, 12);
+
 export class AnthropicTransport implements LLMTransport {
   readonly provider = 'anthropic';
-  constructor(private apiKey: string, public readonly defaultModel: string, private fetchImpl: typeof fetch = fetch, private baseUrl = 'https://api.anthropic.com') {}
+  readonly credentialFingerprint: string;
+  constructor(private apiKey: string, public readonly defaultModel: string, private fetchImpl: typeof fetch = fetch, private baseUrl = 'https://api.anthropic.com') {
+    this.credentialFingerprint = credentialFingerprint('anthropic', apiKey, baseUrl);
+  }
   async complete(req: LLMRequest): Promise<LLMResponse> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), req.timeoutMs);
@@ -171,25 +208,26 @@ export class AnthropicTransport implements LLMTransport {
         headers: { 'content-type': 'application/json', 'x-api-key': this.apiKey, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify(body),
       });
+      // Error statuses: the provider answered and reported no usage.
       if (res.status === 429) {
         const ra = Number(res.headers.get('retry-after'));
-        throw new AIError('rate_limited', 'The AI service is busy (rate limited). Try again in a moment.', Number.isFinite(ra) && ra > 0 ? ra * 1000 : 15_000);
+        throw new AIError('rate_limited', 'The AI service is busy (rate limited). Try again in a moment.', Number.isFinite(ra) && ra > 0 ? ra * 1000 : 15_000, 'none_reported');
       }
-      if (res.status === 401 || res.status === 403) throw new AIError('not_configured', 'The AI provider rejected the API key.');
-      if (res.status >= 500 || res.status === 529) throw new AIError('unavailable', 'The AI service is temporarily unavailable.');
-      if (!res.ok) throw new AIError('rejected', `The AI service rejected the request (${res.status}).`);
-      const j = (await res.json()) as { id?: string; model?: string; stop_reason?: string; content?: { type: string; text?: string }[]; usage?: Record<string, number> };
-      // thinking blocks (if any) are ignored; only text blocks are the answer
+      if (res.status === 401 || res.status === 403) throw new AIError('not_configured', 'The AI provider rejected the API key.', undefined, 'none_reported');
+      if (res.status >= 500 || res.status === 529) throw new AIError('unavailable', 'The AI service is temporarily unavailable.', undefined, 'none_reported');
+      if (!res.ok) throw new AIError('rejected', `The AI service rejected the request (${res.status}).`, undefined, 'none_reported');
+      let j: { id?: string; model?: string; stop_reason?: string; content?: { type: string; text?: string }[]; usage?: Record<string, number> };
+      try { j = await res.json(); } catch { throw new AIError('malformed', 'The AI service sent an unreadable response.', undefined, 'unknown'); } // a 200 we could not read: usage unknown, may be billed
+      // thinking blocks (if any) are ignored; only text blocks are the answer. A refused / empty / truncated 200 is RETURNED
+      // (not thrown) so its reported usage is preserved and billed; the caller decides what the content means.
       const text = (j.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
       const u = j.usage;
       const usage = u && typeof u.input_tokens === 'number' ? { input: u.input_tokens, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 } : null;
-      const out: LLMResponse = { text, model: j.model ?? model, stopReason: j.stop_reason ?? null, requestId: res.headers.get('request-id') ?? j.id ?? null, usage };
-      if (!text && !req.allowEmpty && j.stop_reason !== 'max_tokens') throw new AIError('malformed', 'The AI service returned an empty response.');
-      return out;
+      return { text, model: j.model ?? model, stopReason: j.stop_reason ?? null, requestId: res.headers.get('request-id') ?? j.id ?? null, usage };
     } catch (e) {
       if (e instanceof AIError) throw e;
-      if (e instanceof Error && e.name === 'AbortError') throw new AIError('timeout', 'The AI request timed out.');
-      throw new AIError('unavailable', 'Could not reach the AI service.');
+      const f = classifyFetchFailure(e);
+      throw new AIError(f.code, f.message, undefined, f.billing);
     } finally { clearTimeout(timer); }
   }
 }

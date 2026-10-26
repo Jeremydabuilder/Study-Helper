@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { recoverOrphans } from './services/ledger';
 
 // node:sqlite is loaded via createRequire so bundlers/test runners that don't know the builtin still work.
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
@@ -67,6 +68,7 @@ export class Workspaces {
     let db = this.dbs.get(name);
     if (!db) {
       db = openDb(this.dir === ':memory:' ? ':memory:' : join(this.dir, name === 'demo' ? 'demo.db' : 'study.db'));
+      recoverOrphans(db); // reservations left by a process that died mid-request stay held as unknown billing
       this.dbs.set(name, db);
     }
     return db;

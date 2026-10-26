@@ -5,7 +5,7 @@ describe('storage & migrations', () => {
   it('applies migrations once and is idempotent on reopen', () => {
     const db = openDb(':memory:');
     const v = db.all<{ version: number }>('SELECT version FROM schema_migrations ORDER BY version').map((r) => r.version);
-    expect(v).toEqual([1, 2, 3]);
+    expect(v).toEqual([1, 2, 3, 4]);
     expect(db.get('SELECT id FROM profile')?.id).toBe(1);
   });
   it('rolls back failed transactions and enforces foreign keys/cascades', () => {

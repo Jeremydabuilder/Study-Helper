@@ -184,16 +184,32 @@ export function createApp(rt: Runtime) {
     };
   }));
   app.get('/api/ai/usage', h((ctx) => usageReport(ctx)));
-  app.post('/api/ai/verify', h(async (ctx) => {
+  app.post('/api/ai/verify', h(async (ctx, req) => {
     if (ctx.workspace === 'demo') throw new HttpError(409, 'demo_workspace', 'The sample workspace never calls a paid AI model.');
     if (!ctx.ai.live || !ctx.ai.verify) throw new HttpError(409, 'no_ai', 'No AI provider is configured, so there is nothing to verify. See the setup steps in Settings.');
-    const models = [...new Set((['extract', 'generate', 'grade'] as const).map((t) => ctx.ai.modelFor!(t)))];
-    const results: { model: string; ok: boolean; latencyMs?: number; error?: string }[] = [];
-    for (const m of models) {
-      try { const r = await ctx.ai.verify(undefined, m); results.push({ model: m, ok: true, latencyMs: r.latencyMs }); }
-      catch (e) { results.push({ model: m, ok: false, error: e instanceof AIError ? e.message : 'failed' }); }
+    const level = (req.body as { level?: string } | undefined)?.level === 'output' ? 'output' : 'connection';
+    const results: { task?: string; model: string; ok: boolean; latencyMs?: number; error?: string }[] = [];
+    if (level === 'connection') {
+      // Proves only that an authenticated HTTP round trip works. It says nothing about study output quality or schema validity.
+      for (const m of [...new Set((['extract', 'generate', 'grade'] as const).map((t) => ctx.ai.modelFor!(t)))]) {
+        try { const r = await ctx.ai.verify(undefined, m); results.push({ model: m, ok: true, latencyMs: r.latencyMs }); }
+        catch (e) { results.push({ model: m, ok: false, error: e instanceof AIError ? e.message : 'failed' }); }
+      }
+    } else {
+      // Runs one tiny real task per model role and requires schema-valid output; invalid output is reported as a failure.
+      const probes: Record<'extract' | 'generate' | 'grade', () => Promise<unknown>> = {
+        extract: () => ctx.ai.extractConcepts({ subjectName: 'Verification', maxConcepts: 3, chunks: [{ id: '0', label: 'Probe p.1', text: 'The absolute value of a number is its distance from zero. For example |-4| = 4 and |4| = 4. To solve |x| < 3, write -3 < x < 3.' }] }, {}),
+        generate: () => ctx.ai.generateQuestions({ subjectName: 'Verification', concept: { name: 'Absolute value', summary: 'Distance from zero.', skillTag: null }, excerpts: [{ label: 'Probe p.1', text: 'The absolute value of a number is its distance from zero. |-4| = 4.' }], otherConcepts: [], misconceptions: [], studentNotes: [], practice: 1, heldout: 0, avoidPrompts: [], seed: 1 }, {}),
+        grade: () => ctx.ai.gradeAnswer({ question: { prompt: 'What is the absolute value of -4, and why?', kind: 'short_answer', rubric: [{ point: 'States 4', keywords: ['4', 'four'] }, { point: 'Distance from zero', keywords: ['distance', 'zero'] }] }, answer: '4, because it is the distance from zero.', reasoning: '', excerpts: [{ label: 'Probe p.1', text: 'The absolute value of a number is its distance from zero. |-4| = 4.' }] }, {}),
+      };
+      for (const task of ['extract', 'generate', 'grade'] as const) {
+        const t0 = Date.now();
+        try { await probes[task](); results.push({ task, model: ctx.ai.modelFor!(task), ok: true, latencyMs: Date.now() - t0 }); }
+        catch (e) { results.push({ task, model: ctx.ai.modelFor!(task), ok: false, error: e instanceof AIError ? e.message : 'failed' }); }
+      }
     }
-    return { results, ai: aiInfo(ctx) };
+    return { level, results, ai: aiInfo(ctx) };
+
   }));
 
   /* ---------------- static client ---------------- */

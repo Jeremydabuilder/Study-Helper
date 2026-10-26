@@ -1,5 +1,5 @@
-import { AIError, AIProvider, AITask, CallOpts, RequestRecord } from '../ai/provider';
-import { estimateCost, projectCost } from '../ai/pricing';
+import { AIError, AIProvider, AITask, CallOpts } from '../ai/provider';
+import { MemoryLedger } from '../ai/ledger';
 import { chunkText } from '../core/sources';
 import { Dataset, loadDataset, reviewStatus } from './dataset';
 import { GenerationScore, GradeScore, ExtractionScore, MathScore, percentile, pct, scoreExtraction, scoreGeneration, scoreGrade, scoreMath } from './score';
@@ -29,23 +29,11 @@ export interface Report {
   caveats: string[];
 }
 
-/** Collects every request and refuses to start one that could push the run over budget. */
+/** Collects every request through the same reservation ledger the app uses, so the budget guard holds here too. */
 export function makeCollector(o: { budgetUsd?: number; priceOverride?: { inPerM?: number; outPerM?: number } }) {
-  const recs: (RequestRecord & { usd: number; known: boolean })[] = [];
-  let spent = 0;
-  const opts = (): CallOpts => ({
-    beforeRequest: (p) => {
-      if (o.budgetUsd === undefined) return;
-      const worst = projectCost(p.model, p.inputChars, p.maxOutputTokens, o.priceOverride);
-      if (spent + worst > o.budgetUsd) throw new AIError('budget_reached', `Evaluation budget $${o.budgetUsd.toFixed(2)} would be exceeded (spent ≈ $${spent.toFixed(4)}, next request could cost up to $${worst.toFixed(4)}).`);
-    },
-    onRequest: (r) => {
-      const billed = ['ok', 'invalid_output', 'truncated'].includes(r.outcome);
-      const c = billed && r.usageSource === 'provider' ? estimateCost(r.model, { inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens }, o.priceOverride) : { usd: 0, known: true };
-      spent += c.usd; recs.push({ ...r, usd: c.usd, known: c.known });
-    },
-  });
-  return { recs, opts, get spent() { return spent; } };
+  const ledger = new MemoryLedger({ budgetUsd: o.budgetUsd, priceOverride: o.priceOverride });
+  const opts = (): CallOpts => ({ ledger });
+  return { ledger, get recs() { return ledger.rows; }, opts, get spent() { return ledger.spentUsd; } };
 }
 
 const cat = <T extends { category: string; ok: boolean }>(xs: T[]) => { const m: Record<string, [number, number]> = {}; for (const x of xs) { const e = (m[x.category] ??= [0, 0]); e[1]++; if (x.ok) e[0]++; } return m; };
@@ -118,13 +106,13 @@ export async function runEval(o: RunOptions): Promise<Report> {
   }
 
   report.stoppedEarly = stopped;
-  const recs = col.recs, billed = recs.filter((r) => ['ok', 'invalid_output', 'truncated'].includes(r.outcome)), lat = recs.filter((r) => r.outcome === 'ok').map((r) => r.latencyMs);
+  const recs = col.recs, billed = recs.filter((r) => r.billing === 'reported' || r.billing === 'estimated' || r.billing === 'unknown'), lat = recs.filter((r) => r.outcome === 'ok').map((r) => r.latencyMs);
   const byTask: UsageSummary['byTask'] = {};
   for (const t of ['extract', 'generate', 'grade'] as AITask[]) { const rs = recs.filter((r) => r.purpose === t); if (rs.length) byTask[t] = { requests: rs.length, estUsd: rs.reduce((a, r) => a + r.usd, 0), p50: percentile(rs.filter((r) => r.outcome === 'ok').map((r) => r.latencyMs), 0.5) }; }
   report.usage = {
     requests: recs.length, billableRequests: billed.length, repairRetries: recs.filter((r) => r.attempt > 1).length, invalidOutputs: recs.filter((r) => r.outcome === 'invalid_output').length, truncated: recs.filter((r) => r.outcome === 'truncated').length,
-    errors: recs.filter((r) => !['ok', 'invalid_output', 'truncated'].includes(r.outcome)).length, inputTokens: billed.reduce((a, r) => a + (r.inputTokens ?? 0), 0), outputTokens: billed.reduce((a, r) => a + (r.outputTokens ?? 0), 0),
-    estUsd: col.spent, unknownPrice: recs.some((r) => !r.known), usageEstimated: billed.some((r) => r.usageSource !== 'provider'), latencyMs: { p50: percentile(lat, 0.5), p95: percentile(lat, 0.95) }, byTask,
+    errors: recs.filter((r) => !['ok', 'invalid_output', 'truncated', 'empty', 'refused'].includes(r.outcome)).length, inputTokens: billed.reduce((a, r) => a + (r.inputTokens ?? 0), 0), outputTokens: billed.reduce((a, r) => a + (r.outputTokens ?? 0), 0),
+    estUsd: col.spent, unknownPrice: recs.some((r) => !r.known), usageEstimated: billed.some((r) => r.billing !== 'reported'), latencyMs: { p50: percentile(lat, 0.5), p95: percentile(lat, 0.95) }, byTask,
   };
   report.schemaFailureRate = billed.length ? (report.usage.invalidOutputs + report.usage.truncated) / billed.length : null;
   const fails = (report.grading?.failed ?? 0) + (report.extraction?.failed ?? 0) + (report.generation?.failed ?? 0);
