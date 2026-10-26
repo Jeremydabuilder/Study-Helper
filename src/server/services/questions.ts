@@ -1,0 +1,130 @@
+import { OfflineProvider } from '../../ai/offline';
+import { GeneratedQuestion } from '../../ai/schemas';
+import { verifyMathSpec } from '../../core/mathCheck';
+import { isMathSkill } from '../../core/mathgen';
+import { buildContext } from '../../core/retrieval';
+import { verifyQuotes } from '../../core/sources';
+import { uid } from '../db';
+import { Ctx, HttpError, parse } from './common';
+import { AIError } from '../../ai/provider';
+
+export interface QuestionRow {
+  id: string; concept_id: string; subject_id: string; kind: string; prompt: string; choices: string | null; answer_spec: string; rubric: string | null;
+  hints: string; worked_example: string; explanation: string; difficulty: number; family: string | null; heldout: number; origin: string;
+  verified: number | null; verify_note: string; source_note: string;
+}
+
+/** What the browser may see *before* answering: never the key, rubric, or explanation. */
+export function publicQuestion(q: QuestionRow) {
+  const choices = parse<{ text: string }[] | null>(q.choices, null);
+  const spec = parse<any>(q.answer_spec, {});
+  return {
+    id: q.id, conceptId: q.concept_id, kind: q.kind, prompt: q.prompt, choices: choices?.map((c) => c.text) ?? null,
+    answerType: spec.type as string, hintCount: parse<string[]>(q.hints, []).length, difficulty: q.difficulty,
+    origin: q.origin, keyVerified: q.verified === null ? null : !!q.verified, sourceNote: q.source_note,
+  };
+}
+
+export function getQuestion(ctx: Ctx, id: string): QuestionRow {
+  const q = ctx.db.get<QuestionRow>('SELECT * FROM questions WHERE id = ?', id);
+  if (!q) throw new HttpError(404, 'not_found', 'Question not found.');
+  return q;
+}
+
+export interface PickOpts { conceptId: string; purpose: 'diagnostic' | 'practice' | 'review' | 'repair' | 'transfer' | 'exam'; exclude: string[]; lastKind?: string | null; easier?: boolean; useOffline?: boolean }
+
+function unseen(ctx: Ctx, conceptId: string, exclude: string[], heldout: 0 | 1): QuestionRow[] {
+  const rows = ctx.db.all<QuestionRow>(`SELECT * FROM questions q WHERE concept_id = ? AND heldout = ? AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.question_id = q.id) ORDER BY created_at, rowid`, conceptId, heldout);
+  return rows.filter((r) => !exclude.includes(r.id));
+}
+
+/** Choose a question the student has never attempted; generate more only when the bank is empty. */
+export async function pickQuestion(ctx: Ctx, o: PickOpts): Promise<QuestionRow> {
+  const wantHeld = o.purpose === 'review' || o.purpose === 'transfer' || o.purpose === 'exam';
+  const choose = (): QuestionRow | null => {
+    const order: (0 | 1)[] = wantHeld ? [1, 0] : [0];
+    for (const h of order) {
+      const cands = unseen(ctx, o.conceptId, o.exclude, h);
+      if (!cands.length) continue;
+      const varied = o.purpose === 'diagnostic' && o.lastKind ? cands.find((c) => c.kind !== o.lastKind) : undefined;
+      if (varied) return varied;
+      if (o.easier) { const e = [...cands].sort((a, b) => a.difficulty - b.difficulty)[0]; return e; }
+      return cands[0];
+    }
+    return null;
+  };
+  let q = choose();
+  if (!q) {
+    await generateQuestions(ctx, o.conceptId, { focus: o.purpose === 'repair' ? 'repair' : o.purpose === 'diagnostic' ? 'diagnostic' : wantHeld ? 'transfer' : 'practice', useOffline: o.useOffline });
+    q = choose();
+  }
+  if (!q) throw new HttpError(409, 'no_new_questions', ctx.ai.live ? 'No new questions could be made for this concept right now.' : 'Offline mode has run out of new template questions for this concept. Add more material, or connect an AI provider for unlimited fresh questions.');
+  return q;
+}
+
+export async function generateQuestions(ctx: Ctx, conceptId: string, o: { focus: 'diagnostic' | 'practice' | 'transfer' | 'repair'; useOffline?: boolean }) {
+  const c = ctx.db.get<any>('SELECT c.*, s.name AS subject_name FROM concepts c JOIN subjects s ON s.id = c.subject_id WHERE c.id = ?', conceptId);
+  if (!c) throw new HttpError(404, 'not_found', 'Concept not found.');
+  const math = isMathSkill(c.skill_tag);
+  // Math skills use verified deterministic generators: no model call, unlimited fresh variants.
+  const provider = math || o.useOffline ? ctx.offline : ctx.ai;
+  const chunkRows = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id FROM source_chunks ch JOIN sources s ON s.id = ch.source_id WHERE s.subject_id = ? ORDER BY ch.source_id, ch.idx', c.subject_id);
+  const refChunkIds = ctx.db.all<any>('SELECT chunk_id FROM concept_refs WHERE concept_id = ? AND chunk_id IS NOT NULL', conceptId).map((r) => r.chunk_id);
+  const memories = ctx.db.all<any>('SELECT id, kind, text, subject_id AS subjectId, concept_id AS conceptId FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 30');
+  const mis = ctx.db.all<any>("SELECT description, count FROM misconceptions WHERE concept_id = ? AND status = 'active' ORDER BY count DESC", conceptId);
+  const context = buildContext({ concept: { id: c.id, name: c.name, summary: c.summary, subjectId: c.subject_id }, chunks: chunkRows, refChunkIds, memories, misconceptions: mis });
+  const existing = ctx.db.all<any>('SELECT prompt FROM questions WHERE concept_id = ?', conceptId).map((r) => r.prompt);
+  const others = ctx.db.all<any>("SELECT name, summary FROM concepts WHERE subject_id = ? AND status = 'confirmed' AND id != ?", c.subject_id, conceptId);
+  const batch = await provider.generateQuestions({
+    subjectName: c.subject_name, concept: { name: c.name, summary: c.summary, skillTag: c.skill_tag }, excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })),
+    otherConcepts: others, misconceptions: context.misconceptions, studentNotes: context.memories,
+    practice: o.focus === 'diagnostic' ? 2 : 3, heldout: 1, avoidPrompts: existing, seed: existing.length + 1, focus: o.focus,
+  });
+  const sourceText = c.source_id ? ctx.db.get<any>('SELECT text FROM sources WHERE id = ?', c.source_id)?.text ?? '' : '';
+  const ordered = [...batch.questions];
+  let inserted = 0, dropped = 0;
+  ctx.db.tx(() => {
+    ordered.forEach((q, i) => {
+      if (existing.includes(q.prompt)) { dropped++; return; }
+      const row = toRow(ctx, q, c, provider, sourceText, i >= ordered.length - 1 && ordered.length > 1);
+      if (!row) { dropped++; return; }
+      ctx.db.run(`INSERT INTO questions (id,concept_id,subject_id,kind,prompt,choices,answer_spec,rubric,hints,worked_example,explanation,difficulty,family,heldout,origin,verified,verify_note,source_note,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid(), c.id, c.subject_id, row.kind, q.prompt, row.choices, row.answer_spec, row.rubric, JSON.stringify(q.hints), q.worked_example, q.explanation,
+        q.difficulty ?? 2, row.family, row.heldout, row.origin, row.verified, row.verify_note, row.source_note, ctx.now());
+      inserted++;
+    });
+  });
+  if (!inserted) throw new AIError('malformed', 'None of the generated questions passed validation. Please try again.');
+  return { inserted, dropped };
+}
+
+function toRow(ctx: Ctx, q: GeneratedQuestion, c: any, provider: { live: boolean }, sourceText: string, heldout: boolean) {
+  let answer_spec: any; let choices: string | null = null; let rubric: string | null = null;
+  let verified: number | null = null, verify_note = '';
+  const kind = q.kind;
+  if (kind === 'multiple_choice') {
+    choices = JSON.stringify(q.choices); answer_spec = { type: 'choice', correct: q.correct_choice };
+    verify_note = 'Multiple-choice key comes from the generator; check it if it looks wrong.';
+  } else if (kind === 'math') {
+    const type = q.math_type === 'expr' ? 'math_expr' : q.math_type === 'number' ? 'math_number' : 'math_set';
+    answer_spec = { type, answer: q.answer, variable: 'x', ...(q.relation ? { relation: q.relation } : {}) };
+    if (type === 'math_set') {
+      const v = verifyMathSpec(answer_spec);
+      if (v.verified === false) return null; // answer key contradicts an independent solve: discard, never show
+      verified = v.verified === true ? 1 : null; verify_note = v.note;
+    } else verify_note = 'Answer key not independently verified.';
+    if (!provider.live) { verified = verified ?? null; }
+  } else {
+    answer_spec = { type: 'text', ...(q.answer ? { accept: [q.answer] } : {}) };
+    rubric = JSON.stringify({ keyPoints: (q.rubric?.key_points ?? []).map((k) => ({ point: k.point, keywords: k.keywords })), sample: q.rubric?.sample_answer ?? null });
+  }
+  let source_note = '';
+  if (q.source_quote && sourceText) {
+    const { verified: ok } = verifyQuotes(sourceText, [], [q.source_quote]);
+    source_note = ok.length ? 'Based on your material.' : '';
+  }
+  return {
+    kind, choices, answer_spec: JSON.stringify(answer_spec), rubric, family: (q as any).family ?? null, heldout: Number(heldout), verified, verify_note, source_note,
+    origin: isMathSkill(c.skill_tag) ? 'generator' : provider.live ? 'ai' : 'template',
+  };
+}
