@@ -240,7 +240,7 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
   // open-ended: rubric-based
   const rubric = parse<any>(q.rubric, { keyPoints: [], sample: null });
   const concept = ctx.db.get<any>('SELECT id, name, summary, subject_id FROM concepts WHERE id=?', q.concept_id);
-  const chunks = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id=ch.source_id WHERE s.subject_id=?', concept.subject_id);
+  const chunks = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id=ch.source_id WHERE s.subject_id=? AND s.status=\'confirmed\'', concept.subject_id);
   const refIds = ctx.db.all<any>('SELECT chunk_id FROM concept_refs WHERE concept_id=? AND chunk_id IS NOT NULL', concept.id).map((r) => r.chunk_id);
   const context = buildContext({ concept: { ...concept, subjectId: concept.subject_id }, chunks: modelChunks(ctx, chunks), refChunkIds: refIds, memories: [], misconceptions: [], maxChars: 2500 });
   try {

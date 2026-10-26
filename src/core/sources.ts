@@ -9,7 +9,13 @@ export function suspiciousMath(text: string): boolean {
   return /�/.test(text) || /[0-9][lI][0-9]/.test(text) || /[=<>]\s*[=<>]{2,}/.test(text) || /\bx\s?[0-9]\s?x\b/.test(text);
 }
 
-export function chunkText(text: string, opts: { ocr?: boolean } = {}): Chunk[] {
+/** Characters that usually mean a glyph was mis-mapped (private-use area, replacement char) or that the extractor had to guess a superscript/subscript. */
+export function needsMathReview(text: string): boolean {
+  return suspiciousMath(text) || /[\uE000-\uF8FF]/.test(text) || /[\^_][(A-Za-z0-9]/.test(text);
+}
+
+/** `ocr`/`review`: flag chunks whose characters should be double-checked by the student. `paged`: number pages even when the text has a single page. */
+export function chunkText(text: string, opts: { ocr?: boolean; review?: boolean; paged?: boolean } = {}): Chunk[] {
   const chunks: Chunk[] = [];
   let page: number | null = null;
   let para = 0;
@@ -45,14 +51,14 @@ export function chunkText(text: string, opts: { ocr?: boolean } = {}): Chunk[] {
       chunks.push({
         idx: chunks.length, text: text.slice(ps, pe), page, para, start: ps, end: pe,
         label: `${page !== null ? `p. ${page}, ` : ''}¶${para}${pieces.length > 1 ? ` (part ${pieces.findIndex((x) => x[0] === ps) + 1})` : ''}`,
-        uncertain: !!opts.ocr && suspiciousMath(t),
+        uncertain: (!!opts.ocr && suspiciousMath(t)) || (!!opts.review && needsMathReview(t)),
       });
     }
   };
   const segments = text.split('\f');
   let segBase = 0;
   segments.forEach((seg, si) => {
-    if (segments.length > 1) { flush(); page = si + 1; para = 0; }
+    if (segments.length > 1 || opts.paged) { flush(); page = si + 1; para = 0; }
     let off = segBase;
     for (const line of seg.split(/(?<=\n)/)) {
       const start = off; off += line.length;

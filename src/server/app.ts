@@ -12,6 +12,7 @@ import { Runtime } from './context';
 import { setFlagDecision } from './services/sourceSafety';
 import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfile, getSetting, getWeights, setSetting, usageReport } from './services/common';
 import * as content from './services/content';
+import * as files from './services/files';
 import * as practice from './services/practice';
 import * as plan from './services/plan';
 import * as mem from './services/memory';
@@ -32,6 +33,10 @@ const AvailabilitySchema = z.object({
 });
 const WeightsSchema = z.object(Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, z.number().min(0).max(10)])) as Record<keyof typeof DEFAULT_WEIGHTS, z.ZodNumber>);
 
+const UPLOAD_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'application/octet-stream'];
+const isUploadRoute = (req: Request) => req.method === 'POST' && (/^\/api\/subjects\/[^/]+\/files$/.test(req.path) || /^\/api\/sources\/[^/]+\/replace$/.test(req.path));
+const rawUpload = express.raw({ type: UPLOAD_TYPES, limit: '16mb' });
+
 export function createApp(rt: Runtime) {
   const app = express();
   app.disable('x-powered-by');
@@ -41,7 +46,7 @@ export function createApp(rt: Runtime) {
   app.use((req, res, next) => {
     const origin = req.headers.origin, host = req.headers.host;
     if (origin && host) { try { if (new URL(origin).host !== host) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-origin requests are not allowed.' } }); } catch { return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Bad origin.' } }); } }
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.is('application/json') === false) return res.status(415).json({ error: { code: 'unsupported', message: 'JSON only.' } });
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.is('application/json') === false && !(isUploadRoute(req) && req.is(UPLOAD_TYPES))) return res.status(415).json({ error: { code: 'unsupported', message: 'JSON only.' } });
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store');
     next();
   });
@@ -85,6 +90,12 @@ export function createApp(rt: Runtime) {
   app.patch('/api/subjects/:id', h((ctx, req) => content.updateSubject(ctx, req.params.id, z.object({ name: z.string().optional(), description: z.string().optional(), aliases: z.array(z.string()).optional(), archived: z.boolean().optional() }).parse(req.body))));
   app.delete('/api/subjects/:id', h((ctx, req) => content.deleteSubject(ctx, req.params.id)));
   app.post('/api/subjects/:id/sources', h((ctx, req) => content.addSource(ctx, req.params.id, z.object({ title: z.string().optional(), kind: z.string().optional(), text: z.string(), origin: z.string().optional() }).parse(req.body))));
+  app.post('/api/subjects/:id/files', rawUpload, h((ctx, req) => content.noDemoUpload(ctx) ?? files.uploadFile(ctx, req.params.id, { data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? ''), title: req.query.title as string | undefined, kind: req.query.kind as string | undefined })));
+  app.post('/api/sources/:id/replace', rawUpload, h((ctx, req) => files.replaceFile(ctx, req.params.id, { data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? '') })));
+  app.get('/api/files/:id', h((ctx, req, res) => { const f = files.getFile(ctx, req.params.id); res.setHeader('Content-Type', f.mime); res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`); res.setHeader('Cache-Control', 'private, max-age=3600'); res.send(f.data); }));
+  app.get('/api/sources/:id/review', h((ctx, req) => files.reviewPages(ctx, req.params.id)));
+  app.put('/api/sources/:id/pages/:n', h((ctx, req) => { const b = z.object({ text: z.string(), baseRev: z.number().int() }).parse(req.body); return files.savePage(ctx, req.params.id, Number(req.params.n), b.text, b.baseRev); }));
+  app.post('/api/sources/:id/confirm', h((ctx, req) => files.confirmSource(ctx, req.params.id, { acknowledgeEmptyPages: bool(req.body?.acknowledgeEmptyPages) })));
   app.get('/api/sources/:id', h((ctx, req) => content.getSource(ctx, req.params.id)));
   app.put('/api/sources/:id/flags/:flagId', h((ctx, req) => setFlagDecision(ctx, req.params.id, req.params.flagId, z.object({ decision: z.enum(['include', 'exclude']).nullable() }).parse(req.body).decision)));
   app.delete('/api/sources/:id', h((ctx, req) => content.deleteSource(ctx, req.params.id)));
@@ -230,6 +241,7 @@ export function createApp(rt: Runtime) {
     }
     if (err instanceof CalendarError) return res.status(err.code === 'reauth_required' ? 401 : err.code === 'rate_limited' ? 429 : err.code === 'org_blocked' || err.code === 'denied' ? 403 : err.code === 'not_configured' ? 503 : 502).json({ error: { code: `calendar_${err.code}`, message: err.message } });
     if (err instanceof ZodError) return res.status(400).json({ error: { code: 'invalid', message: `Invalid request: ${err.issues[0]?.path.join('.') || 'body'} ${err.issues[0]?.message ?? ''}`.trim() } });
+    if ((err as any)?.type === 'entity.too.large') return res.status(413).json({ error: { code: 'file_too_large', message: 'That file is too large to upload (the limit is 15 MB for a PDF, 10 MB for an image).' } });
     if (err instanceof SyntaxError) return res.status(400).json({ error: { code: 'invalid_json', message: 'Malformed JSON.' } });
     console.error('[server error]', err instanceof Error ? err.message : err);
     res.status(500).json({ error: { code: 'internal', message: 'Something went wrong on the server. Your data was not changed by this request.' } });

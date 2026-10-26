@@ -3,7 +3,7 @@ import { GeneratedQuestion } from '../../ai/schemas';
 import { verifyMathSpec } from '../../core/mathCheck';
 import { isMathSkill } from '../../core/mathgen';
 import { buildContext } from '../../core/retrieval';
-import { verifyQuotes } from '../../core/sources';
+import { findQuote } from '../../core/sources';
 import { uid } from '../db';
 import { Ctx, HttpError, parse } from './common';
 import { modelChunks } from './sourceSafety';
@@ -35,7 +35,7 @@ export function getQuestion(ctx: Ctx, id: string): QuestionRow {
 export interface PickOpts { conceptId: string; purpose: 'diagnostic' | 'practice' | 'review' | 'repair' | 'transfer' | 'exam'; exclude: string[]; lastKind?: string | null; easier?: boolean; useOffline?: boolean }
 
 function unseen(ctx: Ctx, conceptId: string, exclude: string[], heldout: 0 | 1): QuestionRow[] {
-  const rows = ctx.db.all<QuestionRow>(`SELECT * FROM questions q WHERE concept_id = ? AND heldout = ? AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.question_id = q.id) ORDER BY created_at, rowid`, conceptId, heldout);
+  const rows = ctx.db.all<QuestionRow>(`SELECT * FROM questions q WHERE concept_id = ? AND heldout = ? AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.question_id = q.id) ORDER BY created_at, rowid`, conceptId, heldout);
   return rows.filter((r) => !exclude.includes(r.id));
 }
 
@@ -69,7 +69,7 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: { focus:
   const math = isMathSkill(c.skill_tag);
   // Math skills use verified deterministic generators: no model call, unlimited fresh variants.
   const provider = math || o.useOffline ? ctx.offline : ctx.ai;
-  const chunkRows = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id = ch.source_id WHERE s.subject_id = ? ORDER BY ch.source_id, ch.idx', c.subject_id);
+  const chunkRows = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id = ch.source_id WHERE s.subject_id = ? AND s.status = \'confirmed\' ORDER BY ch.source_id, ch.idx', c.subject_id);
   const refChunkIds = ctx.db.all<any>('SELECT chunk_id FROM concept_refs WHERE concept_id = ? AND chunk_id IS NOT NULL', conceptId).map((r) => r.chunk_id);
   const memories = ctx.db.all<any>('SELECT id, kind, text, subject_id AS subjectId, concept_id AS conceptId FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 30');
   const mis = ctx.db.all<any>("SELECT description, count FROM misconceptions WHERE concept_id = ? AND status = 'active' ORDER BY count DESC", conceptId);
@@ -89,14 +89,29 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: { focus:
       if (existing.includes(q.prompt)) { dropped++; return; }
       const row = toRow(ctx, q, c, provider, sourceText, i >= ordered.length - 1 && ordered.length > 1);
       if (!row) { dropped++; return; }
+      const qid = uid();
+      const ev = q.source_quote ? findEvidence(ctx, c.subject_id, c.source_id, q.source_quote) : null;
+      if (ev) row.source_note = `Based on your material (${ev.sourceTitle}, ${ev.label}).`;
       ctx.db.run(`INSERT INTO questions (id,concept_id,subject_id,kind,prompt,choices,answer_spec,rubric,hints,worked_example,explanation,difficulty,family,heldout,origin,verified,verify_note,source_note,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid(), c.id, c.subject_id, row.kind, q.prompt, row.choices, row.answer_spec, row.rubric, JSON.stringify(q.hints), q.worked_example, q.explanation,
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, qid, c.id, c.subject_id, row.kind, q.prompt, row.choices, row.answer_spec, row.rubric, JSON.stringify(q.hints), q.worked_example, q.explanation,
         q.difficulty ?? 2, row.family, row.heldout, row.origin, row.verified, row.verify_note, row.source_note, ctx.now());
+      if (ev) ctx.db.run('INSERT OR IGNORE INTO question_evidence (question_id,source_id,quote,char_start,char_end,label) VALUES (?,?,?,?,?,?)', qid, ev.sourceId, ev.quote, ev.start, ev.end, ev.label);
       inserted++;
     });
   });
   if (!inserted) throw new AIError('malformed', 'None of the generated questions passed validation. Please try again.');
   return { inserted, dropped };
+}
+
+/** Locate a model-supplied quote in the student's confirmed materials; only a verbatim hit counts as evidence. */
+function findEvidence(ctx: Ctx, subjectId: string, preferred: string | null, quote: string) {
+  const srcs = ctx.db.all<any>("SELECT id, title, text FROM sources WHERE subject_id = ? AND status = 'confirmed' ORDER BY (id = ?) DESC, created_at", subjectId, preferred ?? '');
+  for (const src of srcs) {
+    const hit = findQuote(src.text, quote); if (!hit) continue;
+    const ch = ctx.db.get<any>('SELECT label FROM source_chunks WHERE source_id = ? AND char_start <= ? AND char_end > ? ORDER BY idx LIMIT 1', src.id, hit.start, hit.start);
+    return { sourceId: src.id as string, sourceTitle: src.title as string, quote: (src.text as string).slice(hit.start, hit.end), start: hit.start, end: hit.end, label: (ch?.label as string) ?? 'location unknown' };
+  }
+  return null;
 }
 
 function toRow(ctx: Ctx, q: GeneratedQuestion, c: any, provider: { live: boolean }, sourceText: string, heldout: boolean) {
@@ -119,11 +134,7 @@ function toRow(ctx: Ctx, q: GeneratedQuestion, c: any, provider: { live: boolean
     answer_spec = { type: 'text', ...(q.answer ? { accept: [q.answer] } : {}) };
     rubric = JSON.stringify({ keyPoints: (q.rubric?.key_points ?? []).map((k) => ({ point: k.point, keywords: k.keywords })), sample: q.rubric?.sample_answer ?? null });
   }
-  let source_note = '';
-  if (q.source_quote && sourceText) {
-    const { verified: ok } = verifyQuotes(sourceText, [], [q.source_quote]);
-    source_note = ok.length ? 'Based on your material.' : '';
-  }
+  const source_note = ''; // filled in by the caller once the quote is located (with its page) in the student's material
   return {
     kind, choices, answer_spec: JSON.stringify(answer_spec), rubric, family: (q as any).family ?? null, heldout: Number(heldout), verified, verify_note, source_note,
     origin: isMathSkill(c.skill_tag) ? 'generator' : provider.live ? 'ai' : 'template',

@@ -4,6 +4,7 @@ import { isMathSkill } from '../../core/mathgen';
 import { chunkText, verifyQuotes, Support, looksLikeInjectedOutput } from '../../core/sources';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, parse } from './common';
+import { sweepOrphanFiles } from './files';
 import { exclusionsFor, ensureFlags, modelChunks, sourceFlags } from './sourceSafety';
 
 export function listSubjects(ctx: Ctx) {
@@ -62,13 +63,18 @@ export function addSource(ctx: Ctx, subjectId: string, b: { title?: string; kind
   return { id, duplicate: false, chunks: chunks.length, flagged: { strong: flags.filter((f) => f.severity === 'strong').length, weak: flags.filter((f) => f.severity === 'weak').length } };
 }
 
-export function deleteSource(ctx: Ctx, id: string) { ctx.db.run('DELETE FROM sources WHERE id = ?', id); }
+export function noDemoUpload(ctx: Ctx): never | undefined {
+  if (ctx.workspace === 'demo') throw new HttpError(409, 'demo_workspace', 'The sample workspace is read-only for uploads. Switch to your own workspace to add files.');
+  return undefined;
+}
+export function deleteSource(ctx: Ctx, id: string) { ctx.db.tx(() => { ctx.db.run('DELETE FROM sources WHERE id = ?', id); sweepOrphanFiles(ctx); }); }
 
 const EXTRACT_CHAR_BUDGET = 14_000;
 /** Ask the provider for concept *proposals*. Nothing is trusted until the student confirms. */
 export async function extractConcepts(ctx: Ctx, sourceId: string, opts: { useOffline?: boolean; force?: boolean } = {}) {
   const src = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', sourceId);
   if (!src) throw new HttpError(404, 'not_found', 'Material not found.');
+  if (src.status !== 'confirmed') throw new HttpError(409, 'not_confirmed', 'Review and confirm the extracted text first. Nothing is built from a file until you have checked what was read from it.');
   // Don't pay for the same extraction twice: concepts already came from this exact text.
   const already = ctx.db.get<any>('SELECT COUNT(*) n FROM concepts WHERE source_id = ?', sourceId).n;
   if (already > 0 && !opts.force) return { created: 0, skippedExisting: already, discardedQuotes: 0, truncated: false, provider: 'none (already extracted)', reused: true };
@@ -175,7 +181,7 @@ export function deleteConcept(ctx: Ctx, id: string) { ctx.db.run('DELETE FROM co
 export function subjectOverview(ctx: Ctx, id: string) {
   const s = ctx.db.get<any>('SELECT * FROM subjects WHERE id = ?', id);
   if (!s) throw new HttpError(404, 'not_found', 'Subject not found.');
-  const sources = ctx.db.all<any>(`SELECT id, title, kind, origin, ocr, created_at, length(text) chars,
+  const sources = ctx.db.all<any>(`SELECT id, title, kind, origin, ocr, created_at, length(text) chars, status, file_id, page_count,
     (SELECT COUNT(*) FROM source_chunks WHERE source_id = sources.id) chunks,
     (SELECT COUNT(*) FROM source_chunks WHERE source_id = sources.id AND uncertain = 1) uncertain_chunks FROM sources WHERE subject_id = ? ORDER BY created_at`, id);
   const concepts = ctx.db.all<any>('SELECT * FROM concepts WHERE subject_id = ? ORDER BY created_at, name', id).map((c) => {
