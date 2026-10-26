@@ -23,11 +23,14 @@ export interface GenerateInput {
   studentNotes: string[];
   practice: number; heldout: number;
   avoidPrompts: string[]; seed: number;
+  /** The student's own description of their grade/course (data, may be empty). Used to pitch reading level and difficulty. */
+  gradeLevel?: string;
   focus?: 'diagnostic' | 'practice' | 'transfer' | 'repair';
 }
 export interface GradeInput {
   question: { prompt: string; kind: string; rubric: { point: string; keywords: string[] }[]; sampleAnswer?: string };
   answer: string; reasoning: string; excerpts: { label: string; text: string }[];
+  gradeLevel?: string;
 }
 
 export type AITask = 'extract' | 'generate' | 'grade';

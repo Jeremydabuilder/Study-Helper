@@ -32,9 +32,13 @@ Settings → **Setup & usage** shows the live state of everything:
 | State | Meaning |
 |---|---|
 | **Offline mode** | No AI key. Math is fully supported (deterministic checker + generators). Other subjects: basic templates; open answers are keyword-checked and *never counted without your confirmation*. |
-| **AI configured — not yet verified** | A key is set but no request has succeeded yet. Press **Verify connection** (one tiny request per model). |
-| **AI connection verified** | A real request to every configured model has succeeded. |
-| **AI credentials rejected** | The provider returned an auth error. Fix `.env`, restart. |
+| **AI configured — not yet verified** | A key is set but no authenticated request has succeeded for the current provider + model + key. |
+| **Connection works — study output not verified** | An HTTP round trip succeeded (**Verify connection**). That proves the key and network only. |
+| **Study output verified** | Each task (find concepts, write questions, grade) has returned *schema-valid* output from its configured model (**Verify study output** runs one tiny real task per role). Invalid, empty, truncated or refused replies never count. |
+| **Connected, but recent study output was unusable** | The connection works but the latest reply for a task was invalid/empty/truncated/refused. |
+| **AI credentials rejected** | The provider rejected the key more recently than any success. Fix `.env`, restart. |
+
+Verification is keyed to provider, model and a fingerprint of the credential: change the model or the key and the state goes back to "not verified".
 | **Calendar not set up / disconnected / connected / needs reconnecting** | See `docs/GOOGLE_SETUP.md`. The page shows the exact redirect URI to register. |
 
 ## AI configuration
@@ -44,23 +48,33 @@ Anthropic is the default and only provider unless you opt in to another. Models 
 **Recommendation (and why):** run **Sonnet 5.5 for every task** (the default). It is the quality baseline, and grading errors change a student's record. Haiku 5.5 is the natural candidate for *concept extraction* and *straightforward question generation* — it's roughly 20× cheaper per token — but **it has not been evaluated yet**, so it is not routed by default. To decide, human-approve the labels in `eval/dataset/`, run `npm run eval:live -- --confirm-spend --models claude-sonnet-5-5,claude-haiku-5-5`, and opt in per task (`AI_MODEL_EXTRACT=claude-haiku-5-5`) only if the report supports it. Keep grading on Sonnet unless the margin is clear. Details: `docs/EVAL.md`. Defaults for output ceilings (4000/5000/1500 tokens) and effort (low/medium/medium) are **untuned**.
 
 **Cost control (server-side, enforced before every request):**
-- Every HTTP request is logged with provider-reported input/output/cache tokens, model, latency, attempt number and an *estimated* cost. A schema-repair retry is its own billable request, counted and budget-checked like any other.
-- A rolling-24h **estimated-dollar budget** (`AI_DAILY_BUDGET_USD`, default $1.00; editable in Settings; 0 = off) and a request cap. A request is refused if spent + its worst-case cost (all `max_tokens` used) would exceed the budget.
+- Every HTTP request gets its own unique ledger row (no shared state between parallel calls) with provider-reported tokens, model, latency, attempt, billing certainty and an *estimated* cost. A schema-repair retry is its own billable request.
+- **Atomic reservations.** Before each request the server, inside one database transaction, reserves a conservative worst case (input ≤ bytes sent + 300 tokens, output ≤ `max_tokens`, +10%) against `budget − spent − held`; parallel requests cannot spend the same budget. The reservation is replaced by provider-reported usage when the response arrives (also for empty, truncated, refused or invalid replies, which are still billed). Tokens are *not* counted with a provider endpoint; the bytes-based bound is documented in `src/ai/pricing.ts`.
+- **Certainty is explicit.** Provider error statuses and connection-refused are confirmed zero cost; a **timeout or dropped connection is unknown billing** and stays held at its worst case for 24 h; a response without usage is *estimated* and held at the reservation. A process that dies mid-request leaves a reservation that is recovered on the next start as unknown billing. A late response reconciles to its real cost.
+- A rolling-24h **estimated-dollar budget** (`AI_DAILY_BUDGET_USD`, default $1.00; editable in Settings; 0 = off) and a request cap. This is a **guardrail built on list-price estimates, not a guaranteed dollar ceiling**; your provider's billing is authoritative.
 - Output is capped per task; a response cut off at the cap is reported clearly and **not retried** (a retry would bill again).
 - Fewer calls: math practice makes none; only relevant source passages and a few memory notes are sent; existing unseen questions are reused before generating more; an already-extracted source isn't re-extracted unless forced.
 - Costs are **estimates** from list prices and provider token counts. **Your provider's billing is authoritative.**
 
 **Optional Groq** (`AI_PROVIDER=groq` + `GROQ_API_KEY` + `GROQ_MODEL`): off unless explicitly selected, no default model, **not verified against the live API**. One provider is active per server process; there is no automatic fallback and no switching mid-attempt. When on, student material goes to Groq instead of Anthropic. See `docs/EVAL.md`.
 
-**Prompt-injection hygiene:** uploaded text and answers are quoted data; lines that read like instructions to an AI are stripped before any model sees them, concepts/quotes supported only by such lines are dropped, quotes are re-verified against the source, and the model can't change app behaviour (output is schema-validated).
+**Prompt-injection hygiene:** uploaded text and answers are quoted data; the original text is kept immutable and never edited by a filter. Wording that looks like an order to an AI/grader is *detected* (a heuristic, not proof — no regex makes prompt injection impossible): **strong** matches are left out of the model-facing view by default, **weak** ones ("you are now", "system message", quoted dialogue, assignments about AI prompts) are only flagged. Every flag is listed in the material's **AI view** with its page/location, and the student can include or exclude it. Concepts supported only by excluded passages, or whose own text reads like an injected command, are dropped and counted. The real boundaries are that the model has no tools, its output is schema-validated, quotes are re-verified against the original, and the student confirms every concept.
 
 ## What works
 
 Core loop (subject → pasted source → verified concept proposals → confirm → diagnostic → practice with hints/feedback/new questions → saved attempts → resume → due reviews), evidence-based scheduling (hinted ≠ independent, delayed unaided counts most, uncertain grades change nothing until confirmed), deterministic math checking with independently verified generators, inspectable/editable memory with provenance, previewable import/export, progress with uncertainty (no grade predictions), exam mode, a sample workspace in a separate database, and read-only Google Calendar planning (calendar choice, confirmation screen showing the original event beside each proposal with unknowns marked, updates/cancellations/recurring exceptions/duplicates/all-day/time zones/DST, expired authorization, disconnect + deletion, a schedule fitted around busy time, buffers, bedtime, protected time and daily limits, with school class time *not* counted as a "heavy day").
 
+## Study from a PDF (step by step)
+
+1. `npm install && npm run build && npm start`, open http://localhost:8787 (add `ANTHROPIC_API_KEY` to `.env` for AI; without it the app runs in Offline mode).
+2. **Subjects → pick or add a subject → + Add material → Upload a PDF or screenshot** (try `samples/absolute-value-review.pdf`, `samples/dust-bowl-packet.pdf`, `samples/lantern-path-passage-and-rubric.pdf` — all fictional).
+3. **Review** each page: original on the left, extracted text on the right. Fix mistakes, check pages marked *check math* or *no text*, **Save page**. Nothing is built until you press **The text is right — find concepts**.
+4. Check the proposed concepts (each shows its page), reject junk, **Confirm**, then **Take a short check** (diagnostic), practise, pause and resume from Today; reviews come back on schedule.
+5. Replacing the file or editing a page later re-links quotes by exact match; anything that can't be found is marked out of date and questions built on it stop being served (past answers stay).
+
 ## What was actually tested
 
-**Run in this build** (`npm run check`: typecheck clean, **168 tests in 13 files pass**; `npm run build` OK):
+**Run in this build** (`npm run check`: typecheck clean, **204 tests in 16 files pass**; `npm run build` OK):
 
 - *Learning rules & core flow* (HTTP-level, in-memory/temp SQLite): scheduling and inclusive time boundaries, hint-assisted vs unaided evidence, uncertain/failed grades not changing mastery, no mastery from repetition, persistence/reopen/resume, duplicate submissions, misconception evidence and repair follow-ups, workspace separation, cross-origin rejection, import preview/commit.
 - *AI failure handling* with **fake transports**: malformed/invalid/truncated output, repair retry, 429/5xx/timeout mapping, request-cap and budget enforcement (including blocking the retry), usage accounting from provider-reported tokens, no key/secret in any API response or log, injection stripping.
@@ -74,12 +88,14 @@ Core loop (subject → pasted source → verified concept proposals → confirm 
 - ❌ **No live Google OAuth** (no Google credentials). Behaviour is verified only against the fake. `docs/GOOGLE_SETUP.md` was written from Google's documented flow without access to Google's current docs; follow its "verify it yourself" checklist.
 - ❌ **Evaluation labels are drafts** written by the assistant, not human-reviewed (58 items). Agreement numbers are provisional until you approve them (`docs/EVAL.md`). Question *usefulness* needs human ratings (a review sheet is exported).
 - ❌ Groq transport untested live; Haiku routing unevaluated.
+- *Milestone 3 browser walkthrough* (Chromium, offline mode, fictional `samples/`): upload → review → correct `x^2`→`x²` → confirm → concepts with page references → reject junk → diagnostic → typed answer kept after an aborted request, after a reload, and sent as exactly one attempt → pause/resume from Today → clock advanced 72 h → Today; History and English PDFs through upload/review/concepts. **Not demonstrated:** the in-page PDF viewer (headless Chromium has no PDF plugin), a successful delayed review pass in this run (the diagnostic was answered mostly wrong), AI-written questions for the new samples (no key).
 - Not looked at in the browser this round: Subjects detail on mobile, Settings → Availability/Priorities/Data tabs (covered by API tests only).
 
 ## Limitations
 
 - Calendar can't see **Google Classroom** or school-portal assignments; the app says so and supports manual entry. "Add study sessions to Calendar" (write permission + preview) is **not built** (button labelled unavailable). Original events are never modified.
-- PDF/image upload and OCR are **not built** (labelled unavailable).
+- **Uploads:** *text PDFs* (≤15 MB, ≤60 pages) are read locally into per-page text; *scanned PDFs and PNG/JPEG/WebP screenshots* are stored but **cannot be read automatically — there is no OCR**; you type them beside the original. Word/Pages/other formats are rejected (export to PDF). The in-page PDF viewer needs a browser with a PDF plugin (headless Chromium has none; a link opens the original in a new tab). Reading order, line breaks and math are reconstructed from glyph positions: superscripts become `^`, flagged "check math", but fractions/roots in unusual fonts may be wrong — that is why you review each page first.
+- Offline concept extraction is rough on real packets (it proposed some headings as concepts and mis-tagged a few math skills); you reject the junk. An AI key gives better proposals, unmeasured here.
 - No accounts or authentication (see the security boundary above).
 - Offline mode: non-math questions are templates (a few per concept); open answers are keyword-checked and always need your confirmation.
 - Google apps left in *Testing* status get refresh tokens that expire after ~7 days → periodic "needs reconnecting" (handled; see `docs/GOOGLE_SETUP.md`).
@@ -104,6 +120,6 @@ Key decisions: concept state is a **replay of the attempt log** (correcting a gr
 1. **You:** add `ANTHROPIC_API_KEY`, run `npm run smoke:ai -- --confirm-spend`, then `npm run eval:live` on Sonnet; review/approve the eval labels; decide on Haiku for extraction.
 2. **You:** follow `docs/GOOGLE_SETUP.md` and the "verify it yourself" checklist with a real calendar.
 3. Tune effort/output ceilings from measured token use; add prompt caching for repeated source excerpts.
-4. PDF/image upload with OCR confidence; Classroom import with its own explicit read scopes.
+4. OCR only if a reliable option appears (it would be disclosed before any file left this computer); Classroom import with its own explicit read scopes.
 5. "Add study sessions to Calendar" with separate write consent and an exact-event preview.
 6. Authentication + per-user isolation before any hosting.

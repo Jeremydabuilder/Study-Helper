@@ -49,7 +49,7 @@ export function ReviewSource({ id, go }: { id: string; go: (p: string) => void }
     try { await post(`/sources/${id}/confirm`, { acknowledgeEmptyPages }); }
     catch (e) { if ((e as ApiError).code === 'empty_pages') { setAck({ pages: (e as ApiError).extra.emptyPages }); return; } throw e; }
     setAck(null);
-    try { await post(`/sources/${id}/extract`, {}); go(`/subjects/${d.subjectId}`); }
+    try { const r = await post(`/sources/${id}/extract`, {}); try { sessionStorage.setItem('sh.flash', `Read ${d.pages.length} page${d.pages.length === 1 ? '' : 's'} and found ${r.created} proposed concept${r.created === 1 ? '' : 's'}. Check them below — nothing is practised until you confirm.`); } catch { /* no flash */ } go(`/subjects/${d.subjectId}`); }
     catch (e) { await rv.reload(); setErr(e as ApiError); }
   });
   const replace = (f?: File) => f && run('Reading the new file…', async () => {
@@ -79,7 +79,8 @@ export function ReviewSource({ id, go }: { id: string; go: (p: string) => void }
       <div className="grid2" style={{ alignItems: 'start' }}>
         <section className="card" aria-label="Original">
           <h2 style={{ marginTop: 0 }}>Original</h2>
-          {isPdf ? <iframe title={`Original page ${n}`} src={`${d.file.url}#page=${n}&view=FitH`} style={{ width: '100%', height: '70vh', border: '1px solid var(--line, #ccc)', borderRadius: 6 }} />
+          {isPdf && !(navigator as any).pdfViewerEnabled ? <div className="notice info small">This browser can’t show PDFs inside the page. <a href={`${d.file.url}#page=${n}`} target="_blank" rel="noreferrer">Open the original (page {n}) in a new tab</a> and compare it with the text on the right.</div>
+            : isPdf ? <iframe title={`Original page ${n}`} src={`${d.file.url}#page=${n}&view=FitH`} style={{ width: '100%', height: '70vh', border: '1px solid var(--line, #ccc)', borderRadius: 6 }} />
             : <img alt={`Original upload ${d.file.name}`} src={d.file.url} style={{ maxWidth: '100%', borderRadius: 6 }} />}
           <p className="small muted">{d.file.name} · {(d.file.bytes / 1024).toFixed(0)} KB · kept unchanged. <a href={d.file.url} target="_blank" rel="noreferrer">Open in a new tab</a></p>
         </section>

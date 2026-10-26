@@ -130,7 +130,7 @@ async function advance(ctx: Ctx, session: any, opts: { useOffline?: boolean } = 
 /* --------------------------- views --------------------------- */
 
 const PURPOSE_LABEL: Record<Purpose, string> = {
-  diagnostic: 'Quick check', practice: 'Practice', review: 'Review', repair: 'Fixing a mistake pattern', transfer: 'New situation', exam: 'Test practice',
+  diagnostic: 'Quick check', practice: 'Practice', review: 'Review', repair: 'Fixing a mistake pattern', transfer: 'Fresh question', exam: 'Test practice',
 };
 
 function revealPayload(q: QuestionRow) {
@@ -246,7 +246,7 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
   try {
     const g = await ctx.ai.gradeAnswer({
       question: { prompt: q.prompt, kind: q.kind, rubric: rubric.keyPoints ?? [], sampleAnswer: rubric.sample ?? undefined },
-      answer: clip(answer, MAX_ANSWER), reasoning: clip(reasoning, MAX_ANSWER), excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })),
+      answer: clip(answer, MAX_ANSWER), reasoning: clip(reasoning, MAX_ANSWER), excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })), gradeLevel: getProfile(ctx.db).grade,
     });
     const sure = g.confidence !== 'low';
     return {

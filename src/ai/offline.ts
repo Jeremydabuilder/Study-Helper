@@ -36,6 +36,7 @@ export class OfflineProvider implements AIProvider {
     const add = (name: string, summary: string, quote: string, tag?: string) => {
       const key = name.toLowerCase().trim();
       if (seen.has(key) || name.length < 2 || out.length >= i.maxConcepts) return;
+      if (/^(examples?|practice|notes?|answers?|page\s*\d*|unit\s*\d+\b.*|review|problems?)\b[:\s\d]*$/i.test(name.trim()) || /^page\s*\d+/i.test(name.trim())) return; // page furniture, not a concept
       seen.add(key);
       out.push({ name: name.slice(0, 90), summary: summary.slice(0, 480), quotes: [quote.slice(0, 380)], prerequisites: [], skill_tag: tag ?? null });
     };

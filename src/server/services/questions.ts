@@ -5,7 +5,7 @@ import { isMathSkill } from '../../core/mathgen';
 import { buildContext } from '../../core/retrieval';
 import { findQuote } from '../../core/sources';
 import { uid } from '../db';
-import { Ctx, HttpError, parse } from './common';
+import { Ctx, HttpError, getProfile, parse } from './common';
 import { modelChunks } from './sourceSafety';
 import { AIError } from '../../ai/provider';
 
@@ -79,7 +79,7 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: { focus:
   const batch = await provider.generateQuestions({
     subjectName: c.subject_name, concept: { name: c.name, summary: c.summary, skillTag: c.skill_tag }, excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })),
     otherConcepts: others, misconceptions: context.misconceptions, studentNotes: context.memories,
-    practice: o.focus === 'diagnostic' ? 2 : 3, heldout: 1, avoidPrompts: existing, seed: existing.length + 1, focus: o.focus,
+    practice: o.focus === 'diagnostic' ? 2 : 3, heldout: 1, avoidPrompts: existing, seed: existing.length + 1, focus: o.focus, gradeLevel: getProfile(ctx.db).grade,
   });
   const sourceText = c.source_id ? ctx.db.get<any>('SELECT text FROM sources WHERE id = ?', c.source_id)?.text ?? '' : '';
   const ordered = [...batch.questions];

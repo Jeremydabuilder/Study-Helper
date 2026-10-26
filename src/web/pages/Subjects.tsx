@@ -42,7 +42,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(() => { try { const f = sessionStorage.getItem('sh.flash'); if (f) sessionStorage.removeItem('sh.flash'); return f; } catch { return null; } });
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [viewSrc, setViewSrc] = useState<string | null>(null);
   const [newConcept, setNewConcept] = useState('');
