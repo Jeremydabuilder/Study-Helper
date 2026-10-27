@@ -722,7 +722,26 @@ export function selfGrade(ctx: Ctx, attemptId: string, b: { correctness: number;
     recomputeConcept(ctx, a.concept_id);
   });
   settleAttempt(ctx, attemptId);
+  refreshAfterSelfGrade(ctx, attemptId, b.correctness);
   return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));
+}
+
+/** The first feedback was written while the grade was uncertain; once the student has graded it, those sentences are out of date. */
+function refreshAfterSelfGrade(ctx: Ctx, attemptId: string, correctness: number) {
+  const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId);
+  const d = parse<FeedbackPayload | null>(a?.diagnosis, null);
+  if (!d) return;
+  d.message = d.message.replace(/\s*\(I am not sure about this grade[^)]*\)/, '').replace(/\s*\(This answer key could not be independently verified[^)]*\)/, '');
+  const wrong = correctness < 0.8;
+  const om = ctx.db.get<any>('SELECT kind, label, certainty FROM observed_mistakes WHERE attempt_id = ?', attemptId);
+  if (wrong && om) {
+    d.mistake = { kind: om.kind, label: om.label, certainty: om.certainty, why: 'You marked this as missed. The answer alone does not show why, so the app is not guessing.' };
+    d.next = { type: 'unknown_cause', reason: 'You marked this as missed, but the cause is unknown. Next is a different question on the same idea; tell the app why below if you know.' };
+  } else if (!wrong) {
+    d.mistake = null;
+    d.next = { type: 'practice', reason: 'You marked this as right, so it now counts as your own grade. Next is a different question.' };
+  }
+  ctx.db.run('UPDATE attempts SET diagnosis = ? WHERE id = ?', JSON.stringify(d), attemptId);
 }
 
 export async function regrade(ctx: Ctx, attemptId: string) {

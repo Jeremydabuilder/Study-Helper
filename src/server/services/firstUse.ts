@@ -62,6 +62,6 @@ export function firstUse(ctx: Ctx) {
     detail: later ? 'You answered at least one question without help on a later day than your first attempt. Only such answers count as evidence that something stuck.' : attempts.n ? `Not before ${new Date(dueAt!).toISOString().slice(0, 16).replace('T', ' ')} UTC (about ${getSchedulerParams(ctx.db).delayHours} hours after your first attempt). Answers sooner than that are encouraging but are not counted as lasting improvement.` : 'After your first session, come back the next day.', action: later || !attempts.n ? null : 'today',
   });
 
-  const done = steps.filter((s) => s.state === 'done' || s.state === 'skipped').length;
-  return { steps, done, total: steps.length, complete: steps.every((s) => s.state === 'done' || s.state === 'skipped'), liveVerified: ai.mode === 'output_verified', note: 'This list reflects what is recorded in this database. It does not test any outside service; use “Verify study output” in Setup for that.' };
+  const done = steps.filter((s) => s.state === 'done').length, skipped = steps.filter((s) => s.state === 'skipped').length;
+  return { steps, done, skipped, total: steps.length, complete: steps.every((s) => s.state === 'done' || s.state === 'skipped'), liveVerified: ai.mode === 'output_verified', note: 'This list reflects what is recorded in this database. It does not test any outside service; use “Verify study output” in Setup for that.' };
 }

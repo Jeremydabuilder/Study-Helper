@@ -139,7 +139,7 @@ function FirstUse() {
   if (!f.data) return null;
   return (
     <section className="card" aria-labelledby="fu-h"><h2 id="fu-h">First real session</h2>
-      <p className="small muted">{f.data.done} of {f.data.total} steps done. {f.data.note}</p>
+      <p className="small muted">{f.data.done} of {f.data.total} steps done{f.data.skipped ? `, ${f.data.skipped} not applicable offline` : ''}. {f.data.note}</p>
       <ol className="small" style={{ paddingLeft: 18 }}>
         {f.data.steps.map((s: any) => <li key={s.id} className="mb-s"><strong>{s.title}</strong> <Chip tone={STEP_CHIP[s.state].tone}>{STEP_CHIP[s.state].text}</Chip><br /><span className="muted">{s.detail}</span></li>)}
       </ol>

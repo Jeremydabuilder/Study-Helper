@@ -76,6 +76,23 @@ describe('math: a wrong answer without working is not explained away', () => {
   });
 });
 
+describe('a self-graded miss replaces the stale “uncertain” wording with an honest unknown cause', () => {
+  it('after “Missed it” the feedback no longer says it is uncounted and offers the cause question (simulated)', async () => {
+    s = await startServer();
+    const sub = (await s.call('POST', '/api/subjects', { name: 'History' })).body.id;
+    const c = (await s.call('POST', `/api/subjects/${sub}/concepts`, { name: 'First Continental Congress', summary: 'Met in 1774; boycott and repeal.' })).body.id;
+    await s.call('PATCH', `/api/concepts/${c}`, { status: 'confirmed' });
+    const sid = await sess(c);
+    const v = await cur(sid);
+    const r = await post(sid, v.question.id, 'xyzzy');
+    expect(r.feedback.gradeStatus).toBe('uncertain');
+    const after = (await s.call('POST', `/api/attempts/${r.attemptId}/self-grade`, { correctness: 0 })).body;
+    expect(after.feedback.message).not.toMatch(/not sure about this grade/);
+    expect(after.feedback.next.reason).not.toMatch(/not counted/);
+    expect(after.feedback.mistake).toMatchObject({ kind: 'unknown_cause', certainty: 'unknown' });
+  });
+});
+
 describe('English: an interpretive question with several defensible answers, and a corrected grade', () => {
   it('does not hold or mark a non-matching but reasonable answer as a confident error; a regrade reverses what depended on it (simulated)', async () => {
     s = await startServer();
@@ -90,6 +107,8 @@ describe('English: an interpretive question with several defensible answers, and
     expect(r.feedback.gradeStatus).toBe('uncertain'); // a different reading is not declared wrong
     expect(db().get<any>('SELECT COUNT(*) n FROM observed_mistakes').n).toBe(0);
     await s.call('POST', `/api/attempts/${r.attemptId}/self-grade`, { correctness: 1 });
+    const fb = JSON.parse(db().get<any>('SELECT diagnosis FROM attempts WHERE id=?', r.attemptId).diagnosis);
+    expect(JSON.stringify(fb)).not.toMatch(/grade is uncertain|not counted|I am not sure about this grade/);
     expect(db().get<any>('SELECT correctness FROM attempts WHERE id=?', r.attemptId).correctness).toBe(1);
     expect(db().get<any>('SELECT COUNT(*) n FROM observed_mistakes').n).toBe(0);
   });
