@@ -103,7 +103,7 @@ function QuestionCard({ sid, view, onAnswered }: { sid: string; view: any; onAns
   return (
     <form className="card" onSubmit={(e) => { e.preventDefault(); if (canSubmit) send(); }} aria-labelledby="qp">
       <p id="qp" className="q-prompt">{q.prompt}</p>
-      {q.sourceNote && <p className="small muted"><Chip tone={q.grounding === 'source' ? 'good' : q.grounding === 'weak' ? 'warn' : 'neutral'}>{q.grounding === 'source' ? 'Linked to your material' : q.grounding === 'weak' ? 'Source link unconfirmed' : 'General question'}</Chip> {q.sourceNote}</p>}
+      {(q.sourceNote || q.interpretive) && <p className="small muted"><Chip tone={q.supportState === 'plausible' || q.supportState === 'accepted' ? 'good' : q.supportState === 'located' ? 'info' : 'neutral'}>{({ plausible: 'Support checked (fallible)', accepted: 'You accepted this question', located: 'Quote located — support not assessed', none: 'General question' } as Record<string, string>)[q.supportState] ?? 'General question'}</Chip>{q.interpretive && <> <Chip>Interpretive</Chip></>} {q.sourceNote}</p>}
 
       {q.choices ? (
         <fieldset style={{ border: 'none', padding: 0, margin: 0 }} className="choices">
@@ -167,6 +167,7 @@ function QuestionCard({ sid, view, onAnswered }: { sid: string; view: any; onAns
 
 function FeedbackCard({ sid, view, onNext, reload, last, onFinish }: { sid: string; view: any; onNext: () => void; reload: () => void; last: boolean; onFinish: () => void }) {
   const f = view.feedback;
+  const attemptIdOf = view.attemptId;
   const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const nextRef = useRef<HTMLButtonElement>(null);
@@ -193,10 +194,15 @@ function FeedbackCard({ sid, view, onNext, reload, last, onFinish }: { sid: stri
       {f.altRepresentation && <p className="small muted">The first explanation didn’t land, so this is a different way to see it rather than the same words again.</p>}
       {f.mistake && f.mistake.kind !== 'unreliable' && (
         <div className="notice info small" role="note">
-          <strong>What I noticed in this answer:</strong> {f.mistake.label}. <span className="muted">{f.mistake.why}</span>
+          {f.mistake.certainty === 'unknown'
+            ? <><strong>I can’t tell why this missed.</strong> <span className="muted">{f.mistake.why}</span>{f.mistake.possible && <span className="muted"> (It could be a {f.mistake.possible === 'slip' ? 'slip' : 'different cause'}, but that is only a guess.)</span>}</>
+            : f.mistake.certainty === 'direct' ? <><strong>What happened:</strong> {f.mistake.label}. <span className="muted">{f.mistake.why}</span></>
+            : <><strong>A possible cause:</strong> {f.mistake.label}. <span className="muted">{f.mistake.why}</span></>}
+          {f.mistake.certainty === 'unknown' && !f.mistake.youSaid && <CausePicker attemptId={attemptIdOf} />}
           <div className="muted">{f.pattern ? <>This has now shown up on {f.pattern.count} different questions, so it is saved as a <strong>pattern</strong> to work on.</> : 'This is one observation, not a pattern. It is only called a pattern if it happens on a second, different question.'}</div>
         </div>)}
       {f.mistake?.kind === 'unreliable' && <div className="notice warn small">{f.mistake.why}</div>}
+      {f.memoryNote && <div className="notice good small" role="note">{f.memoryNote}</div>}
       {f.next && <p className="small"><strong>Next:</strong> {f.next.reason}</p>}
       <p className="small muted"><Chip tone={f.gradeStatus === 'graded' ? 'good' : 'warn'}>{f.gradeStatus === 'graded' ? 'Counted' : 'Not counted yet'}</Chip> {f.counts}</p>
 
@@ -210,7 +216,7 @@ function FeedbackCard({ sid, view, onNext, reload, last, onFinish }: { sid: stri
         </div>
       )}
       {err && <ErrorBox error={err} />}
-      <Clarify attemptId={view.attemptId} initial={view.clarifications ?? []} onUnclear={reload} />
+      <Clarify attemptId={view.attemptId} questionId={view.question.id} initial={view.clarifications ?? []} onUnclear={reload} />
       <div className="row mt">
         {!last ? <button ref={nextRef} className="btn primary" onClick={onNext}>Next question</button> : <button ref={nextRef} className="btn primary" onClick={onFinish}>Finish session</button>}
         {!last && <button className="btn ghost" onClick={onFinish}>End session here</button>}
@@ -219,7 +225,23 @@ function FeedbackCard({ sid, view, onNext, reload, last, onFinish }: { sid: stri
   );
 }
 
-function Clarify({ attemptId, initial, onUnclear }: { attemptId: string; initial: any[]; onUnclear: () => void }) {
+const CAUSES: [string, string][] = [['didnt_know', 'I didn’t know how to start'], ['slip', 'I knew it, but made a slip'], ['mixed_up', 'I mixed up two ideas'], ['misread', 'I misread the question'], ['unsure', 'I’m not sure']];
+/** Optional, one tap: the student says what happened. Recorded as their statement, never as a finding. */
+function CausePicker({ attemptId }: { attemptId: string }) {
+  const [done, setDone] = useState<string | null>(null);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const pick = async (c: string) => { try { await post(`/attempts/${attemptId}/cause`, { cause: c }); setDone(CAUSES.find((x) => x[0] === c)![1]); } catch (e) { setErr(e as ApiError); } };
+  if (done) return <div className="muted mt-s">You said: {done}. Saved as your own account.</div>;
+  return (
+    <div className="mt-s" role="group" aria-label="What happened? (optional)">
+      <div className="muted">What happened? (optional, one tap)</div>
+      <div className="row gap-s" style={{ flexWrap: 'wrap' }}>{CAUSES.map(([k, l]) => <button key={k} className="btn small" onClick={() => pick(k)}>{l}</button>)}</div>
+      {err && <span className="unknown">{err.message}</span>}
+    </div>
+  );
+}
+
+function Clarify({ attemptId, questionId, initial, onUnclear }: { attemptId: string; questionId: string; initial: any[]; onUnclear: () => void }) {
   const [list, setList] = useState<any[]>(initial);
   const [open, setOpen] = useState(initial.length > 0);
   const [text, setText] = useState('');
@@ -227,15 +249,16 @@ function Clarify({ attemptId, initial, onUnclear }: { attemptId: string; initial
   const [err, setErr] = useState<ApiError | null>(null);
   const ask = async () => { if (text.trim().length < 3 || busy) return; setBusy(true); setErr(null); try { const r = await post(`/attempts/${attemptId}/clarify`, { text }); setList(r.clarifications); setText(''); } catch (e) { setErr(e as ApiError); } finally { setBusy(false); } };
   const unclear = async () => { if (!confirm('Mark this question or its grading as unclear? It will not count and will not be used again.')) return; try { await post(`/attempts/${attemptId}/report-unclear`); onUnclear(); } catch (e) { setErr(e as ApiError); } };
+  const badLink = async () => { if (!confirm('Hold this question? Its source link or answer key looks wrong to you. Answers already given to it stop counting, and it is not used again unless you accept it later.')) return; try { await post(`/questions/${questionId}/report-support`); onUnclear(); } catch (e) { setErr(e as ApiError); } };
   return (
     <div className="mt-s">
-      {!open ? <div className="row gap-s"><button className="btn small ghost" onClick={() => setOpen(true)}>Ask about this feedback</button><button className="btn small ghost" onClick={unclear}>This question or grade seems unclear</button></div> : (
+      {!open ? <div className="row gap-s"><button className="btn small ghost" onClick={() => setOpen(true)}>Ask about this feedback</button><button className="btn small ghost" onClick={unclear}>This question or grade seems unclear</button><button className="btn small ghost" onClick={badLink}>The source link or key looks wrong</button></div> : (
         <div className="notice info small">
           <strong>Ask about this feedback</strong> <span className="muted">— about this question and your answer only.</span>
           {list.map((c) => <div key={c.id} className="mt-s"><div><em>You:</em> {c.ask}</div><div><em>{c.ai ? 'Answer' : 'Note'}:</em> {c.answer}</div></div>)}
           <div className="row gap-s mt-s"><input style={{ flex: 1, minWidth: 180 }} aria-label="Your question about this feedback" value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="e.g. Why isn’t my answer partly right?" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); ask(); } }} /><button className="btn small" disabled={busy || text.trim().length < 3} onClick={ask}>{busy ? 'Asking…' : 'Ask'}</button></div>
           {err && <p className="unknown">{err.message}</p>}
-          <button className="btn small ghost mt-s" onClick={unclear}>This question or grade seems unclear</button>
+          <div className="row gap-s mt-s"><button className="btn small ghost" onClick={unclear}>This question or grade seems unclear</button><button className="btn small ghost" onClick={badLink}>The source link or key looks wrong</button></div>
         </div>)}
     </div>
   );

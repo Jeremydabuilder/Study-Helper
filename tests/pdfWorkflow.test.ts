@@ -157,7 +157,7 @@ describe('corrections and re-upload do not leave stale evidence behind', () => {
     const { id } = await built();
     const qs = db().all<any>('SELECT id, prompt, source_note FROM questions ORDER BY rowid');
     expect(qs).toHaveLength(2);
-    expect(qs[0].source_note).toMatch(/From your material.*p\. 2/); expect(qs[1].source_note).toBe('Not tied to a passage in your material.');
+    expect(qs[0].source_note).toMatch(/Quote located.*p\. 2.*not assessed/); expect(qs[1].source_note).toBe('Not tied to a passage in your material.');
     expect(db().get<any>('SELECT label, stale FROM question_evidence WHERE source_id=?', id)).toMatchObject({ stale: 0, label: expect.stringMatching(/^p\. 2/) });
   });
   it('editing around a quote keeps it linked; editing the quote itself retires the question and marks the concept’s support stale', async () => {

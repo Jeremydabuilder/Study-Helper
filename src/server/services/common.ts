@@ -1,4 +1,4 @@
-import { AIProvider, CallOpts, ClarifyInput, ExtractInput, GenerateInput, GradeInput, ReadInput } from '../../ai/provider';
+import { AIProvider, CallOpts, ClarifyInput, ExtractInput, GenerateInput, GradeInput, ReadInput, AssessItem } from '../../ai/provider';
 import { DEFAULT_TASKS, type TaskConfig } from '../../ai/llm';
 import { PRICING_AS_OF } from '../../ai/pricing';
 import { OfflineProvider } from '../../ai/offline';
@@ -75,6 +75,7 @@ export function metered(ctx: { db: Db; now: () => number; cfg: AppConfig }, inne
     extractConcepts: (i: ExtractInput, opts?: CallOpts) => inner.extractConcepts(i, o(opts)),
     generateQuestions: (i: GenerateInput, opts?: CallOpts) => inner.generateQuestions(i, o(opts)),
     gradeAnswer: (i: GradeInput, opts?: CallOpts) => inner.gradeAnswer(i, o(opts)),
+    assessSupport: inner.assessSupport ? (items: AssessItem[], opts?: CallOpts) => inner.assessSupport!(items, o(opts)) : undefined,
     readPages: inner.readPages ? (i: ReadInput, opts?: CallOpts) => inner.readPages!(i, o(opts)) : undefined, ocrModel: inner.ocrModel?.bind(inner),
     clarify: inner.clarify ? (i: ClarifyInput, opts?: CallOpts) => inner.clarify!(i, o(opts)) : undefined,
   };

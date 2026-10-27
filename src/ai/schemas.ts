@@ -31,6 +31,8 @@ export const GeneratedQuestion = z.object({
   explanation: z.string().max(1200),
   difficulty: z.number().int().min(1).max(3).default(2),
   source_quote: z.string().max(400).optional(),
+  /** true when several answers could be defensible (reading, themes, motives): the app then does not treat the key as the only acceptable answer */
+  interpretive: z.boolean().optional(),
 }).superRefine((q, ctx) => {
   if (q.kind === 'multiple_choice' && (!q.choices || q.correct_choice === undefined || q.correct_choice >= q.choices.length))
     ctx.addIssue({ code: 'custom', message: 'multiple_choice needs choices and a valid correct_choice' });
@@ -71,3 +73,9 @@ export const PageReading = z.object({
   })).min(1).max(8),
 });
 export type PageReading = z.infer<typeof PageReading>;
+
+/** A fallible, structured second opinion on whether a source passage supports each question's key. It never decides alone: contradictions and gaps put a question on hold for the student. */
+export const SupportAssessment = z.object({
+  items: z.array(z.object({ index: z.number().int().min(0).max(100), verdict: z.enum(['supported', 'contradicted', 'insufficient']), note: z.string().max(300).default('') })).min(1).max(24),
+});
+export type SupportAssessment = z.infer<typeof SupportAssessment>;

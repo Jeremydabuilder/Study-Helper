@@ -85,7 +85,9 @@ function MemRow({ x, edit, setEdit, act }: any) {
 
 const CHECK_TEXT: Record<string, { tone: 'good' | 'warn' | 'info'; text: string }> = {
   unchecked: { tone: 'info', text: 'Not re-checked yet' },
-  improved: { tone: 'good', text: 'A later independent check suggests improvement' },
+  corrected_now: { tone: 'info', text: 'Corrected for now — the later check is still due' },
+  improved: { tone: 'good', text: 'A later, targeted, independent check suggests improvement' },
+  came_back: { tone: 'warn', text: 'It came back after an earlier good check' },
   not_improved: { tone: 'warn', text: 'It came back after an earlier good check' },
 };
 function AppMemoryDetail({ x, act }: { x: any; act: (fn: () => Promise<any>) => Promise<void> }) {
@@ -93,9 +95,10 @@ function AppMemoryDetail({ x, act }: { x: any; act: (fn: () => Promise<any>) => 
   return (
     <div className="small" style={{ margin: '.3rem 0' }}>
       {x.dismissed && <p className="unknown">Dismissed by you — this no longer affects your questions.</p>}
-      <div className="row gap-s">{c && <Chip tone={c.tone}>{c.text}{x.check.at ? ` · ${fmtDate(x.check.at)}` : ''}</Chip>}{x.check?.state === 'improved' && <span className="muted">That is one good answer, not proof it is learned; the later review still runs.</span>}</div>
+      {x.provenance?.invalidated && <p className="unknown">Withdrawn — the answers behind it were regraded or marked unclear, so it no longer applies. The history is kept below.</p>}
+      <div className="row gap-s">{c && <Chip tone={c.tone}>{c.text}{x.check.at ? ` · ${fmtDate(x.check.at)}` : ''}</Chip>}{x.check?.state === 'improved' && <span className="muted">That is one good answer on a question aimed at this mix-up, not proof it is learned; the regular review still runs.</span>}{x.check?.state === 'corrected_now' && <span className="muted">Right soon after the mistake: encouraging, but it does not close the later check.</span>}</div>
       {x.effect && <p className="muted" style={{ margin: '.2rem 0' }}>What this changes: {x.effect}</p>}
-      <details><summary>The answers behind this ({x.evidence.length})</summary>{x.evidence.map((e: any) => <div key={e.attemptId} className="quote small">{fmtDate(e.at)} — {e.prompt.slice(0, 120)}<br /><span className="muted">You answered: {e.answer || '(no answer)'}</span></div>)}</details>
+      <details><summary>History and the answers behind this ({x.evidence.length})</summary>{(x.provenance?.history ?? []).map((h: any, i: number) => <div key={i} className="small muted">{fmtDate(h.at)} · {({ mistake: 'mistake seen', corrected_now: 'corrected right away', improved: 'later check passed', came_back: 'came back', revoked: 'evidence withdrawn (regraded)', reopened: 'reopened', invalidated: 'withdrawn' } as Record<string, string>)[h.type] ?? h.type}{h.note ? ` — ${h.note}` : ''}</div>)}{x.evidence.map((e: any) => <div key={e.attemptId} className="quote small">{fmtDate(e.at)} — {e.prompt.slice(0, 120)}<br /><span className="muted">You answered: {e.answer || '(no answer)'}</span></div>)}</details>
       <div className="row gap-s mt-s">{x.dismissed ? <button className="btn small" onClick={() => act(() => post(`/memory/${x.id}/status`, { status: 'active' }))}>Undo dismiss</button> : <button className="btn small ghost" onClick={() => act(() => post(`/memory/${x.id}/status`, { status: 'dismissed' }))}>This isn’t right — dismiss</button>}</div>
     </div>
   );

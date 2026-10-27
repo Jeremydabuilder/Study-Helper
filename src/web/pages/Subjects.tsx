@@ -93,6 +93,8 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
         <p className="small muted mt-s">You can paste text, add a .txt/.md file, upload a <strong>PDF</strong> (text is read on this computer, page by page, and you check it first), or upload a <strong>PNG/JPEG/WebP screenshot</strong> or a scanned PDF to type out beside the original. There is no OCR: nothing is sent to an outside service to read your files.</p>
       </section>
 
+      {d.heldQuestions?.length > 0 && <HeldQuestions items={d.heldQuestions} reload={ov.reload} />}
+
       {proposed.length > 0 && (
         <section className="card" aria-labelledby="prop-h">
           <h2 id="prop-h">Check these concepts <Chip tone="warn">{proposed.length} to review</Chip></h2>
@@ -120,6 +122,24 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
       {adding && <AddMaterial subjectId={id} onClose={() => setAdding(false)} onAdded={async (sid, dup) => { setAdding(false); await ov.reload(); if (dup) setMsg('You already added that exact text.'); else await extract(sid); }} onUploaded={(sid, dup) => { setAdding(false); if (dup) { setMsg('That exact file is already in this subject.'); ov.reload(); } else go(`/review/${sid}`); }} />}
       {viewSrc && <SourceViewer id={viewSrc} onClose={() => setViewSrc(null)} />}
     </div>
+  );
+}
+
+function HeldQuestions({ items, reload }: { items: any[]; reload: () => void }) {
+  const [err, setErr] = useState<ApiError | null>(null);
+  const act = async (id: string, action: 'accept' | 'discard') => { setErr(null); try { await post(`/questions/${id}/resolve`, { action }); reload(); } catch (e) { setErr(e as ApiError); } };
+  return (
+    <section className="card" aria-labelledby="held-h">
+      <h2 id="held-h">Questions on hold <Chip tone="warn">{items.length}</Chip></h2>
+      <p className="small muted">These were held back because a check found their answer key may conflict with your material, or your material may not say enough to check them. They are not used for practice or counted as evidence until you decide. The checks are fallible: read the passage and decide.</p>
+      {err && <ErrorBox error={err} />}
+      {items.map((h) => <div key={h.id} className="upcoming" style={{ display: 'block' }}>
+        <strong>{h.prompt}</strong> <span className="small muted">({h.concept})</span>
+        <div className="small">{h.reason}</div>
+        {h.quote && <div className="quote small">“{h.quote}” <span className="muted">— {h.label}</span></div>}
+        <div className="row gap-s mt-s"><button className="btn small" onClick={() => act(h.id, 'accept')}>The question is fine — use it</button><button className="btn small ghost danger" onClick={() => act(h.id, 'discard')}>Discard it</button></div>
+      </div>)}
+    </section>
   );
 }
 

@@ -645,6 +645,22 @@ export async function clarify(ctx: Ctx, attemptId: string, text: string) {
   return { clarifications: clarifications(ctx, attemptId) };
 }
 
+/**
+ * The student says a question's source link or key looks wrong (the checks are fallible too). The question is held back, and answers already given to it stop counting,
+ * with everything that depended on them reversed.
+ */
+export function reportSupport(ctx: Ctx, questionId: string) {
+  const q = ctx.db.get<any>('SELECT id FROM questions WHERE id = ?', questionId);
+  if (!q) throw new HttpError(404, 'not_found', 'Question not found.');
+  const attempts = ctx.db.all<any>("SELECT id FROM attempts WHERE question_id = ? AND grade_status = 'graded'", questionId);
+  ctx.db.tx(() => {
+    ctx.db.run("UPDATE questions SET on_hold = 1, hold_reason = ?, support_method = 'student' WHERE id = ?", 'You reported that this question’s source link or answer key looks wrong. It is held until you accept or discard it.', questionId);
+    for (const a of attempts) ctx.db.run("UPDATE attempts SET grade_status = 'uncertain', mistake_kind = 'unreliable' WHERE id = ?", a.id);
+  });
+  for (const a of attempts) settleAttempt(ctx, a.id);
+  return { held: true, attemptsUncounted: attempts.length };
+}
+
 /** One optional tap: the student says what happened. It is recorded as THEIR statement and replaces a guess; it never creates a pattern by itself. */
 export function setSelfCause(ctx: Ctx, attemptId: string, cause: string) {
   if (!(SELF_CAUSES as readonly string[]).includes(cause)) throw new HttpError(400, 'invalid', 'Choose one of the options.');

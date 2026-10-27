@@ -14,6 +14,7 @@ import { setFlagDecision } from './services/sourceSafety';
 import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfile, getSetting, getWeights, setSetting, usageReport } from './services/common';
 import * as content from './services/content';
 import * as files from './services/files';
+import { resolveQuestion } from './services/questions';
 import * as ocr from './services/ocr';
 import * as practice from './services/practice';
 import * as plan from './services/plan';
@@ -119,6 +120,8 @@ export function createApp(rt: Runtime) {
   app.post('/api/plan/rebuild', h((ctx) => plan.rebuildOverdue(ctx)));
   app.get('/api/progress', h((ctx) => plan.getProgress(ctx)));
   app.post('/api/attempts/:id/clarify', h((ctx, req) => practice.clarify(ctx, req.params.id, z.object({ text: z.string() }).parse(req.body).text)));
+  app.post('/api/questions/:id/report-support', h((ctx, req) => practice.reportSupport(ctx, req.params.id)));
+  app.post('/api/questions/:id/resolve', h((ctx, req) => resolveQuestion(ctx, req.params.id, z.object({ action: z.enum(['accept', 'discard']) }).parse(req.body).action)));
   app.post('/api/attempts/:id/cause', h((ctx, req) => practice.setSelfCause(ctx, req.params.id, z.object({ cause: z.string() }).parse(req.body).cause)));
   app.post('/api/attempts/:id/report-unclear', h((ctx, req) => practice.reportUnclear(ctx, req.params.id)));
   app.get('/api/history', h((ctx) => practice.history(ctx)));

@@ -4,8 +4,9 @@ import { verifyMathSpec } from '../../core/mathCheck';
 import { isMathSkill } from '../../core/mathgen';
 import { buildContext } from '../../core/retrieval';
 import { findQuote } from '../../core/sources';
-import { assessSupport } from '../../core/grounding';
+import { SupportState, assessSupport, findContradiction, findUnmentioned, keyStatements, looksInterpretive } from '../../core/grounding';
 import { NextAction } from '../../core/nextAction';
+import { testsKeyFor } from './teachingMemory';
 import { uid } from '../db';
 import { Ctx, HttpError, getProfile, parse } from './common';
 import { modelChunks } from './sourceSafety';
@@ -24,7 +25,7 @@ export function publicQuestion(q: QuestionRow) {
   return {
     id: q.id, conceptId: q.concept_id, kind: q.kind, prompt: q.prompt, choices: choices?.map((c) => c.text) ?? null,
     answerType: spec.type as string, hintCount: parse<string[]>(q.hints, []).length, difficulty: q.difficulty,
-    origin: q.origin, keyVerified: q.verified === null ? null : !!q.verified, sourceNote: q.source_note, grounding: q.grounding,
+    origin: q.origin, keyVerified: q.verified === null ? null : !!q.verified, sourceNote: q.source_note, grounding: q.grounding, supportState: q.support_state ?? 'none', interpretive: !!q.interpretive,
   };
 }
 
@@ -37,7 +38,7 @@ export function getQuestion(ctx: Ctx, id: string): QuestionRow {
 export interface PickOpts { conceptId: string; purpose: 'diagnostic' | 'practice' | 'review' | 'repair' | 'transfer' | 'exam'; exclude: string[]; lastKind?: string | null; easier?: boolean; useOffline?: boolean; action?: NextAction }
 
 function unseen(ctx: Ctx, conceptId: string, exclude: string[], heldout: 0 | 1): QuestionRow[] {
-  const rows = ctx.db.all<QuestionRow>(`SELECT * FROM questions q WHERE concept_id = ? AND heldout = ? AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.question_id = q.id) ORDER BY created_at, rowid`, conceptId, heldout);
+  const rows = ctx.db.all<QuestionRow>(`SELECT * FROM questions q WHERE concept_id = ? AND heldout = ? AND retired_at IS NULL AND on_hold = 0 AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.question_id = q.id) ORDER BY created_at, rowid`, conceptId, heldout);
   return rows.filter((r) => !exclude.includes(r.id));
 }
 
@@ -84,7 +85,7 @@ export interface GenOpts { focus: GenFocus; useOffline?: boolean; contrastConcep
 /** Checks of the student's own material (diagnostic / fresh checks) must be grounded in it; practice questions may be labelled instead. */
 const REQUIRES_GROUNDING: GenFocus[] = ['diagnostic', 'transfer'];
 
-export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts): Promise<{ inserted: number; dropped: number; ungrounded: number }> {
+export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts): Promise<{ inserted: number; dropped: number; ungrounded: number; held: number }> {
   const c = ctx.db.get<any>('SELECT c.*, s.name AS subject_name FROM concepts c JOIN subjects s ON s.id = c.subject_id WHERE c.id = ?', conceptId);
   if (!c) throw new HttpError(404, 'not_found', 'Concept not found.');
   const math = isMathSkill(c.skill_tag);
@@ -105,40 +106,90 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts)
     contrast: contrast ? { name: contrast.name, summary: contrast.summary } : undefined, gapPoints: o.gapPoints, strict: o.strict,
   });
   const ordered = [...batch.questions];
-  let inserted = 0, dropped = 0, ungrounded = 0;
+  let dropped = 0, ungrounded = 0, held = 0, served = 0;
+  const cands: { q: GeneratedQuestion; row: NonNullable<ReturnType<typeof toRow>>; g: Ground; idx: number }[] = [];
+  ordered.forEach((q, i) => {
+    if (existing.includes(q.prompt)) { dropped++; return; }
+    const row = toRow(ctx, q, c, provider, i >= ordered.length - 1 && ordered.length > 1);
+    if (!row) { dropped++; return; }
+    cands.push({ q, row, g: groundQuestion(ctx, c, q, row, provider.live), idx: i });
+  });
+  // One batched, structured comparison of question + key + source context (not one paid call per question). It is a fallible second opinion: if it is
+  // unavailable (no provider, budget, an error) the deterministic result stands and nothing is claimed beyond it.
+  let assessed = false;
+  if (provider.live && provider.assessSupport) {
+    const items = cands.filter((x) => x.g.ev && x.row.kind !== 'math' && x.g.state !== 'contradicted').map((x) => ({ index: x.idx, question: x.q.prompt, kind: x.row.kind, key: keyTexts(x.row), passage: x.g.ev!.context, label: `${x.g.ev!.sourceTitle}, ${x.g.ev!.label}`, interpretive: x.g.interpretive }));
+    if (items.length) {
+      try {
+        const r = await provider.assessSupport(items);
+        assessed = true;
+        for (const v of r.items) {
+          const x = cands.find((k) => k.idx === v.index); if (!x || !x.g.ev) continue;
+          const where = `${x.g.ev.sourceTitle}, ${x.g.ev.label}`;
+          if (v.verdict === 'supported' && x.g.state !== 'contradicted') x.g = { ...x.g, state: 'plausible', method: 'semantic', note: `Support checked by a second model reading: plausibly supported by your material (${where}). That reading is fallible: report the question if it looks wrong.` };
+          else if (v.verdict === 'contradicted') x.g = { ...x.g, state: 'contradicted', method: 'semantic', note: `A second model reading found the answer key may conflict with your material (${where}): ${v.note || 'no detail'}.` };
+          else if (v.verdict === 'insufficient' && x.g.state !== 'contradicted' && !x.g.interpretive) x.g = { ...x.g, state: 'insufficient', method: 'semantic', note: `Your material (${where}) may not say enough to check this answer: ${v.note || 'no detail'}.` };
+        }
+      } catch (e) { if (!(e instanceof AIError)) throw e; }
+    }
+  }
   const mustGround = REQUIRES_GROUNDING.includes(o.focus) && c.support === 'source' && provider.live;
   ctx.db.tx(() => {
-    ordered.forEach((q, i) => {
-      if (existing.includes(q.prompt)) { dropped++; return; }
-      const row = toRow(ctx, q, c, provider, i >= ordered.length - 1 && ordered.length > 1);
-      if (!row) { dropped++; return; }
-      const g = groundQuestion(ctx, c, q, row);
-      if (mustGround && row.kind !== 'math' && g.grounding !== 'source') { dropped++; ungrounded++; return; } // a check of THEIR material must be tied to it
+    for (const { q, row, g } of cands) {
+      const hold = g.state === 'contradicted' || (g.state === 'insufficient' && !g.interpretive);
+      const okForCheck = g.state === 'plausible' || g.state === 'accepted' || (g.state === 'located' && g.lexical === 'supported' && !assessed && !g.interpretive);
+      if (mustGround && row.kind !== 'math' && !hold && !okForCheck) { dropped++; ungrounded++; continue; } // a check of THEIR material must be tied to it
       const qid = uid();
-      ctx.db.run(`INSERT INTO questions (id,concept_id,subject_id,kind,prompt,choices,answer_spec,rubric,hints,worked_example,explanation,difficulty,family,heldout,origin,verified,verify_note,source_note,grounding,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, qid, c.id, c.subject_id, row.kind, q.prompt, row.choices, row.answer_spec, row.rubric, JSON.stringify(q.hints), q.worked_example, q.explanation,
-        q.difficulty ?? 2, row.family, row.heldout, row.origin, row.verified, row.verify_note, g.note, g.grounding, ctx.now());
-      if (['discriminate', 'gap', 'simpler'].includes(o.focus)) ctx.db.run('UPDATE questions SET focus = ?, contrast_id = ?, heldout = 0 WHERE id = ?', o.focus, o.contrastConceptId ?? null, qid); // follow-ups are for now, not reserved for later checks
-      if (g.ev) ctx.db.run('INSERT OR IGNORE INTO question_evidence (question_id,source_id,quote,char_start,char_end,label,support) VALUES (?,?,?,?,?,?,?)', qid, g.ev.sourceId, g.ev.quote, g.ev.start, g.ev.end, g.ev.label, g.support);
-      inserted++;
-    });
+      ctx.db.run(`INSERT INTO questions (id,concept_id,subject_id,kind,prompt,choices,answer_spec,rubric,hints,worked_example,explanation,difficulty,family,heldout,origin,verified,verify_note,source_note,grounding,created_at,support_state,support_method,support_note,on_hold,hold_reason,interpretive)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, qid, c.id, c.subject_id, row.kind, q.prompt, row.choices, row.answer_spec, row.rubric, JSON.stringify(q.hints), q.worked_example, q.explanation,
+        q.difficulty ?? 2, row.family, row.heldout, row.origin, row.verified, row.verify_note, g.note, g.state === 'plausible' ? 'source' : g.state === 'none' ? 'none' : 'weak', ctx.now(), g.state, g.method, g.note, Number(hold), hold ? g.note : null, Number(g.interpretive));
+      if (['discriminate', 'gap', 'simpler'].includes(o.focus)) ctx.db.run('UPDATE questions SET focus = ?, contrast_id = ?, tests_key = ?, heldout = 0 WHERE id = ?', o.focus, o.contrastConceptId ?? null, o.focus === 'discriminate' ? testsKeyFor(c.id, { contrastConceptId: o.contrastConceptId }) : null, qid); // follow-ups are for now, not reserved for later checks
+      if (g.ev) ctx.db.run('INSERT OR IGNORE INTO question_evidence (question_id,source_id,quote,char_start,char_end,label,support) VALUES (?,?,?,?,?,?,?)', qid, g.ev.sourceId, g.ev.quote, g.ev.start, g.ev.end, g.ev.label, g.state);
+      if (hold) held++; else served++;
+    }
   });
-  if (!inserted && ungrounded && !o.strict) return generateQuestions(ctx, conceptId, { ...o, strict: true }); // one regeneration, told to quote only what the excerpts say
-  if (!inserted) throw new AIError('malformed', ungrounded ? 'The generated questions could not be tied to your material, so I did not use them. Try again, or practise from Subjects.' : 'None of the generated questions passed validation. Please try again.');
-  return { inserted, dropped, ungrounded };
+  if (!served && (ungrounded || held) && !o.strict) return generateQuestions(ctx, conceptId, { ...o, strict: true }); // one regeneration, told to quote only what the excerpts say
+  if (!served) throw new AIError('malformed', held ? 'The generated questions conflict with, or are not supported by, your material, so they were held for your review (Subjects → Questions on hold) and not used.' : ungrounded ? 'The generated questions could not be tied to your material, so I did not use them. Try again, or practise from Subjects.' : 'None of the generated questions passed validation. Please try again.');
+  return { inserted: served, dropped, ungrounded, held };
 }
 
-/** Decide how a question relates to the student's material, and say exactly that. */
-function groundQuestion(ctx: Ctx, c: any, q: GeneratedQuestion, row: { kind: string; choices: string | null; answer_spec: string; rubric: string | null }) {
-  const none = { grounding: 'none' as const, note: row.kind === 'math' ? '' : 'Not tied to a passage in your material.', ev: null as ReturnType<typeof findEvidence>, support: 'unchecked' };
-  if (row.kind === 'math' || !q.source_quote) return none;
-  const ev = findEvidence(ctx, c.subject_id, c.source_id, q.source_quote);
-  if (!ev) return none; // the quote is not in the material at all
+const keyTexts = (row: { kind: string; choices: string | null; answer_spec: string; rubric: string | null }) => {
+  const spec = parse<any>(row.answer_spec, {}), choices = parse<{ text: string }[] | null>(row.choices, null), rub = parse<any>(row.rubric, null);
+  return keyStatements({ kind: row.kind, correctChoice: spec.type === 'choice' ? choices?.[spec.correct]?.text : undefined, keyPoints: rub?.keyPoints, sample: rub?.sample ?? undefined });
+};
+
+interface Ground { state: SupportState; method: 'template' | 'keyword' | 'rule' | 'semantic' | null; note: string; ev: ReturnType<typeof findEvidence>; lexical: 'supported' | 'quote_only' | null; interpretive: boolean }
+
+/**
+ * How a question relates to the student's material, said exactly. Keyword overlap can only ever say "located" (never "plausible"); a specific conflict found by a
+ * rule holds the question; "plausible" comes only from a structured semantic reading (or, offline, from the question being built directly from the material).
+ */
+function groundQuestion(ctx: Ctx, c: any, q: GeneratedQuestion, row: { kind: string; choices: string | null; answer_spec: string; rubric: string | null }, live: boolean): Ground {
+  const subjectName = ctx.db.get<any>('SELECT name FROM subjects WHERE id = ?', c.subject_id)?.name ?? '';
+  const interpretive = row.kind !== 'math' && (q.interpretive ?? looksInterpretive(subjectName, q.prompt, row.kind));
+  if (row.kind === 'math') return { state: 'none', method: null, note: '', ev: null, lexical: null, interpretive: false };
+  if (!live) { // offline templates are built from the material's own wording (definitions, summaries, blanks)
+    return c.support === 'source'
+      ? { state: 'plausible', method: 'template', note: 'Built directly from the wording of your own material (no AI involved).', ev: null, lexical: null, interpretive }
+      : { state: 'none', method: null, note: 'Not tied to a passage in your material.', ev: null, lexical: null, interpretive };
+  }
+  const ev = q.source_quote ? findEvidence(ctx, c.subject_id, c.source_id, q.source_quote) : null;
+  if (!ev) return { state: 'none', method: null, note: interpretive ? 'Interpretive question: several answers can be defensible, judged on evidence from the text. Not tied to one passage.' : 'Not tied to a passage in your material.', ev: null, lexical: null, interpretive };
+  const where = `${ev.sourceTitle}, ${ev.label}`;
+  if (interpretive) return { state: 'located', method: null, note: `Interpretive question: several answers can be defensible, judged on evidence from the text. A passage was cited (${where}); support was not assessed as a single key.`, ev, lexical: null, interpretive };
+  const stmts = keyTexts(row);
+  for (const k of stmts) {
+    const bad = findContradiction(k, ev.context);
+    if (bad) return { state: 'contradicted', method: 'rule', note: `The answer key may conflict with your material (${where}). ${bad}`, ev, lexical: null, interpretive };
+  }
+  for (const k of stmts) {
+    const missing = findUnmentioned(k, ev.context);
+    if (missing) return { state: 'insufficient', method: 'rule', note: `Your material (${where}) may not say enough to check this. ${missing}`, ev, lexical: null, interpretive };
+  }
   const spec = parse<any>(row.answer_spec, {}), choices = parse<{ text: string }[] | null>(row.choices, null), rub = parse<any>(row.rubric, null);
   const r = assessSupport(ev.passage, { kind: row.kind, correctChoice: spec.type === 'choice' ? choices?.[spec.correct]?.text : undefined, keyPoints: rub?.keyPoints, sample: rub?.sample ?? undefined });
-  const where = `${ev.sourceTitle}, ${ev.label}`;
-  if (r.support === 'supported') return { grounding: 'source' as const, support: 'supported', ev, note: `From your material (${where}). Checked by keyword match: the passage contains the answer’s key terms. That does not guarantee the question is correct.` };
-  return { grounding: 'weak' as const, support: 'quote_only', ev, note: `A quote from your material (${where}) was attached, but it does not clearly contain what the answer needs. Treat the source link as unconfirmed.` };
+  return { state: 'located', method: 'keyword', lexical: r.support === 'supported' ? 'supported' : 'quote_only', ev, interpretive,
+    note: `Quote located in your material (${where}); whether it supports the answer was not assessed.${r.support === 'supported' ? ' The answer’s key terms do appear in it, but keyword overlap is only a heuristic.' : ' Few of the answer’s key words appear in it, which can also happen with an accurate paraphrase.'}` };
 }
 
 /** Locate a model-supplied quote in the student's confirmed materials; only a verbatim hit counts as evidence of existence. */
@@ -146,8 +197,9 @@ function findEvidence(ctx: Ctx, subjectId: string, preferred: string | null, quo
   const srcs = ctx.db.all<any>("SELECT id, title, text FROM sources WHERE subject_id = ? AND status = 'confirmed' ORDER BY (id = ?) DESC, created_at", subjectId, preferred ?? '');
   for (const src of srcs) {
     const hit = findQuote(src.text, quote); if (!hit) continue;
-    const ch = ctx.db.get<any>('SELECT label, text FROM source_chunks WHERE source_id = ? AND char_start <= ? AND char_end > ? ORDER BY idx LIMIT 1', src.id, hit.start, hit.start);
-    return { sourceId: src.id as string, sourceTitle: src.title as string, quote: (src.text as string).slice(hit.start, hit.end), start: hit.start, end: hit.end, label: (ch?.label as string) ?? 'location unknown', passage: (ch?.text as string) ?? (src.text as string).slice(hit.start, hit.end) };
+    const ch = ctx.db.get<any>('SELECT idx, label, text FROM source_chunks WHERE source_id = ? AND char_start <= ? AND char_end > ? ORDER BY idx LIMIT 1', src.id, hit.start, hit.start);
+    const near = ch ? ctx.db.all<any>('SELECT text FROM source_chunks WHERE source_id = ? AND idx BETWEEN ? AND ? ORDER BY idx', src.id, ch.idx - 1, ch.idx + 1).map((r) => r.text as string).join('\n') : '';
+    return { context: (near || (src.text as string).slice(Math.max(0, hit.start - 400), hit.end + 400)).slice(0, 2400), sourceId: src.id as string, sourceTitle: src.title as string, quote: (src.text as string).slice(hit.start, hit.end), start: hit.start, end: hit.end, label: (ch?.label as string) ?? 'location unknown', passage: (ch?.text as string) ?? (src.text as string).slice(hit.start, hit.end) };
   }
   return null;
 }
@@ -177,4 +229,19 @@ function toRow(ctx: Ctx, q: GeneratedQuestion, c: any, provider: { live: boolean
     kind, choices, answer_spec: JSON.stringify(answer_spec), rubric, family: (q as any).family ?? null, heldout: Number(heldout), verified, verify_note, source_note,
     origin: isMathSkill(c.skill_tag) ? 'generator' : provider.live ? 'ai' : 'template',
   };
+}
+
+/** Questions the checks held back (a conflict with the material, or not enough support). The student decides: accept it, or throw it away. */
+export function heldQuestions(ctx: Ctx, subjectId: string) {
+  return ctx.db.all<any>(`SELECT q.id, q.prompt, q.kind, q.support_state, q.support_method, q.hold_reason, c.name AS concept,
+    (SELECT quote FROM question_evidence e WHERE e.question_id = q.id LIMIT 1) AS quote, (SELECT label FROM question_evidence e WHERE e.question_id = q.id LIMIT 1) AS label
+    FROM questions q JOIN concepts c ON c.id = q.concept_id WHERE q.subject_id = ? AND q.on_hold = 1 AND q.retired_at IS NULL ORDER BY q.created_at DESC`, subjectId)
+    .map((r) => ({ id: r.id, prompt: r.prompt, kind: r.kind, concept: r.concept, state: r.support_state, method: r.support_method, reason: r.hold_reason, quote: r.quote, label: r.label }));
+}
+export function resolveQuestion(ctx: Ctx, id: string, action: 'accept' | 'discard') {
+  const q = ctx.db.get<any>('SELECT id FROM questions WHERE id = ?', id);
+  if (!q) throw new HttpError(404, 'not_found', 'Question not found.');
+  if (action === 'accept') ctx.db.run("UPDATE questions SET on_hold = 0, hold_reason = NULL, support_state = 'accepted', support_note = 'You reviewed this question and accepted it.', source_note = 'You reviewed this question and accepted it; the checks had flagged it.' WHERE id = ?", id);
+  else ctx.db.run("UPDATE questions SET retired_at = ?, retired_reason = 'You discarded this question after review.' WHERE id = ?", ctx.now(), id);
+  return { ok: true };
 }

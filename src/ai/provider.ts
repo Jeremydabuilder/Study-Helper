@@ -52,6 +52,10 @@ export interface Attachment { kind: 'image' | 'pdf'; mediaType: string; data: st
 export interface ReadInput { attachment: Attachment; pageCount: number; label: string }
 export interface ReadResult { pages: { page: number; blocks: { kind: 'text' | 'math' | 'table' | 'diagram' | 'handwriting' | 'other'; text: string; readable: boolean; note?: string }[] }[] }
 
+/** Questions whose key should be checked against the source passage they cite. */
+export interface AssessItem { index: number; question: string; kind: string; key: string[]; passage: string; label: string; interpretive: boolean }
+export interface AssessResult { items: { index: number; verdict: 'supported' | 'contradicted' | 'insufficient'; note: string }[] }
+
 export type AITask = 'extract' | 'generate' | 'grade';
 
 /** How a request's cost is known. 'estimated' and 'unknown' are held at the conservative reservation, never at zero. */
@@ -99,6 +103,8 @@ export interface AIProvider {
   /** Optional: answer a short question about one piece of feedback. */
   clarify?(i: ClarifyInput, opts?: CallOpts): Promise<{ answer: string }>;
   /** Optional vision reading of page images / PDF pages. Only used when the operator has explicitly enabled it and the student has approved exactly what is sent. */
+  /** Optional: a structured semantic check of question + key against the cited passage (one request for a whole batch). */
+  assessSupport?(items: AssessItem[], opts?: CallOpts): Promise<AssessResult>;
   readPages?(i: ReadInput, opts?: CallOpts): Promise<ReadResult>;
   ocrModel?(): string;
   verify?(opts?: CallOpts, model?: string): Promise<{ model: string; latencyMs: number }>;

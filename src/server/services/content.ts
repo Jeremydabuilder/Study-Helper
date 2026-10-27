@@ -6,6 +6,7 @@ import { assessSupport, contentWords, keyGroups } from '../../core/grounding';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, parse } from './common';
 import { sweepOrphanFiles } from './files';
+import { heldQuestions } from './questions';
 import { exclusionsFor, ensureFlags, modelChunks, sourceFlags } from './sourceSafety';
 
 export function listSubjects(ctx: Ctx) {
@@ -202,7 +203,7 @@ export function subjectOverview(ctx: Ctx, id: string) {
       activeMisconceptions: ctx.db.get<any>("SELECT COUNT(*) n FROM misconceptions WHERE concept_id = ? AND status = 'active'", c.id).n,
     };
   });
-  return { subject: { id: s.id, name: s.name, description: s.description, aliases: parse<string[]>(s.aliases, []) }, sources, concepts };
+  return { subject: { id: s.id, name: s.name, description: s.description, aliases: parse<string[]>(s.aliases, []) }, sources, concepts, heldQuestions: heldQuestions(ctx, id) };
 }
 
 export function getSource(ctx: Ctx, id: string) {
