@@ -48,5 +48,12 @@ export const GradeResult = z.object({
   points: z.array(z.object({ point: z.string().max(300), met: z.boolean(), evidence_quote: z.string().max(300).optional() })).max(10).default([]),
   misconception: z.object({ label: z.string().max(80), description: z.string().max(300) }).nullable().optional(),
   next_step: z.string().max(300).optional(),
+  /** What kind of mistake, if any. The app only trusts this as one input; it never turns a single answer into a 'pattern'. */
+  mistake_kind: z.enum(['missing_knowledge', 'concept_confusion', 'reasoning_error', 'slip', 'partial_explanation', 'none']).nullable().optional(),
+  /** Name of the related concept the answer was really about, when mistake_kind is concept_confusion. */
+  confused_with: z.string().max(90).nullable().optional(),
 });
 export type GradeResult = z.infer<typeof GradeResult>;
+
+export const Clarification = z.object({ answer: z.string().trim().min(3).max(1500) });
+export type Clarification = z.infer<typeof Clarification>;

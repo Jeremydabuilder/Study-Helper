@@ -85,7 +85,7 @@ export class OfflineProvider implements AIProvider {
     const avoid = new Set(i.avoidPrompts);
     if (isMathSkill(i.concept.skillTag)) {
       for (let k = 0; qs.length < total && k < 60; k++) {
-        const p = generateMathProblem(i.concept.skillTag, i.seed * 131 + k * 17 + 1, (i.focus === 'diagnostic' ? 1 + (k % 2) : 2 + (k % 2)) as 1 | 2 | 3);
+        const p = generateMathProblem(i.concept.skillTag, i.seed * 131 + k * 17 + 1, (i.focus === 'diagnostic' || i.focus === 'simpler' ? 1 + (k % 2) : 2 + (k % 2)) as 1 | 2 | 3);
         if (avoid.has(p.prompt) || qs.some((q) => q.prompt === p.prompt)) continue;
         qs.push({
           kind: 'math', prompt: p.prompt, answer: p.spec.answer, math_type: 'set', relation: p.spec.relation, hints: [...p.hints],
@@ -101,6 +101,24 @@ export class OfflineProvider implements AIProvider {
     if (!keyPoints.length) keyPoints.push({ point: summary, keywords: top(summary, 4) });
     const hints = [`Look back at ${label}. What does it say about “${name}”?`, `Key idea to include: ${summary.split(/\s+/).slice(0, 10).join(' ')}…`];
     const common = { hints, worked_example: `Here is how your material puts it (${label}): ${summary}`, explanation: `${summary} (from ${label}; this is the material's wording, not new facts).`, difficulty: 2 };
+    // adaptive follow-ups
+    if (i.focus === 'discriminate' && i.contrast) {
+      const A = { name, summary }, B = i.contrast;
+      const mc = (x: typeof A, y: typeof A, seedOff: number): GeneratedQuestion => {
+        const r = rng(i.seed + seedOff); const cs = [{ text: x.summary.slice(0, 240) }, { text: y.summary.slice(0, 240), misconception: `Mixed up with “${y.name}”` }]; const order = r() < 0.5 ? [0, 1] : [1, 0];
+        return { kind: 'multiple_choice', prompt: `Which statement describes “${x.name}” rather than “${y.name}”?`, choices: order.map((k) => cs[k]), correct_choice: order.indexOf(0),
+          hints: [`Think about what makes “${x.name}” different from “${y.name}”.`, `Key idea for “${x.name}”: ${x.summary.split(/\s+/).slice(0, 8).join(' ')}…`],
+          worked_example: `“${A.name}”: ${A.summary} “${B.name}”: ${B.summary}`, explanation: `“${x.name}” means: ${x.summary} It is not “${y.name}”, which means: ${y.summary}`, difficulty: 2 };
+      };
+      const diff: GeneratedQuestion = { kind: 'compare', prompt: `How is “${A.name}” different from “${B.name}”? Name one clear difference.`, rubric: { key_points: [{ point: `“${A.name}”: ${A.summary}`, keywords: top(A.summary, 4) }, { point: `“${B.name}”: ${B.summary}`, keywords: top(B.summary, 4) }], sample_answer: `${A.name}: ${A.summary} ${B.name}: ${B.summary}` },
+        hints: [`Describe each one briefly, then say what changes.`, `“${A.name}” — ${A.summary.split(/\s+/).slice(0, 8).join(' ')}…`], worked_example: `“${A.name}”: ${A.summary} “${B.name}”: ${B.summary}`, explanation: `“${A.name}”: ${A.summary} “${B.name}”: ${B.summary}`, difficulty: 2 };
+      return { questions: [mc(A, B, 3), diff, mc(B, A, 5)].filter((q) => !avoid.has(q.prompt)).slice(0, total) };
+    }
+    if (i.focus === 'gap' && i.gapPoints?.length) {
+      const common2 = { hints: [`Look back at ${label}.`, `Key words to use: ${top(i.gapPoints[0], 3).join(', ')}.`], worked_example: `Here is how your material puts it (${label}): ${summary}`, explanation: `${summary} (from ${label}).`, difficulty: 2 };
+      const gq = i.gapPoints.slice(0, 3).map((pt): GeneratedQuestion => ({ kind: 'short_answer', prompt: `Let’s fill one gap in “${name}”. In a sentence or two, explain the part that involves: ${top(pt, 3).join(', ')}.`, rubric: { key_points: [{ point: pt, keywords: top(pt, 4) }], sample_answer: pt }, ...common2 }));
+      return { questions: gq.filter((q) => !avoid.has(q.prompt)).slice(0, total) };
+    }
     const templates: (() => GeneratedQuestion | null)[] = [
       () => ({ kind: 'explain', prompt: `In your own words, explain “${name}”. What does it mean, and why does it matter?`, rubric: { key_points: keyPoints, sample_answer: summary }, ...common }),
       () => {
@@ -119,7 +137,7 @@ export class OfflineProvider implements AIProvider {
       },
       () => ({ kind: 'explain', prompt: `Give a specific example or situation that shows “${name}” in action, and explain why it fits.`, rubric: { key_points: [{ point: `Example connects clearly to: ${keyPoints[0].point}`, keywords: keyPoints[0].keywords }] }, ...common, difficulty: 3 }),
     ];
-    const start = i.seed % templates.length;
+    const start = i.focus === 'simpler' ? 1 : i.seed % templates.length; // easiest forms first when the student is struggling
     for (let k = 0; k < templates.length && qs.length < total; k++) {
       const q = templates[(start + k) % templates.length]();
       if (q && !avoid.has(q.prompt)) qs.push(q);

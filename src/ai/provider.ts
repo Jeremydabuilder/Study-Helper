@@ -37,6 +37,14 @@ export interface GradeInput {
   question: { prompt: string; kind: string; rubric: { point: string; keywords: string[] }[]; sampleAnswer?: string };
   answer: string; reasoning: string; excerpts: { label: string; text: string }[];
   gradeLevel?: string;
+  /** Earlier observations on this concept (from saved memory), so the grader can check whether the same issue recurs. */
+  knownIssues?: string[];
+}
+
+/** A question about ONE piece of feedback. Only the current question, the student's answer, its feedback and the concept's source passages are provided. */
+export interface ClarifyInput {
+  question: { prompt: string; kind: string }; answer: string; feedback: string; explanation: string | null; keyPoints: string[];
+  excerpts: { label: string; text: string }[]; conceptName: string; ask: string; gradeLevel?: string;
 }
 
 export type AITask = 'extract' | 'generate' | 'grade';
@@ -83,6 +91,8 @@ export interface AIProvider {
   /** Model that will serve a task (for display and for recording which model graded an attempt). */
   modelFor?(task: AITask): string;
   /** Tiny real request proving the credentials work. Offline providers omit it. */
+  /** Optional: answer a short question about one piece of feedback. */
+  clarify?(i: ClarifyInput, opts?: CallOpts): Promise<{ answer: string }>;
   verify?(opts?: CallOpts, model?: string): Promise<{ model: string; latencyMs: number }>;
   readonly name: string;
   /** true if a real model is behind it (answers may be fallible); false for offline/template mode */

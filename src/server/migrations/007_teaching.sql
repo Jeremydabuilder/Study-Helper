@@ -25,3 +25,7 @@ CREATE TABLE attempt_clarifications (
 );
 -- Explanations already shown for a concept in a session, so a failed explanation is not simply repeated.
 ALTER TABLE sessions ADD COLUMN notes TEXT;
+
+-- Why a question was written (so a discrimination or gap-filling question is reused as such), and what it contrasts with.
+ALTER TABLE questions ADD COLUMN focus TEXT;
+ALTER TABLE questions ADD COLUMN contrast_id TEXT;

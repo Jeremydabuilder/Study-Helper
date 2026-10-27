@@ -5,6 +5,7 @@ import { isMathSkill } from '../../core/mathgen';
 import { buildContext } from '../../core/retrieval';
 import { findQuote } from '../../core/sources';
 import { assessSupport } from '../../core/grounding';
+import { NextAction } from '../../core/nextAction';
 import { uid } from '../db';
 import { Ctx, HttpError, getProfile, parse } from './common';
 import { modelChunks } from './sourceSafety';
@@ -13,7 +14,7 @@ import { AIError } from '../../ai/provider';
 export interface QuestionRow {
   id: string; concept_id: string; subject_id: string; kind: string; prompt: string; choices: string | null; answer_spec: string; rubric: string | null;
   hints: string; worked_example: string; explanation: string; difficulty: number; family: string | null; heldout: number; origin: string;
-  verified: number | null; verify_note: string; source_note: string; grounding: 'source' | 'weak' | 'none'; retired_at?: number | null; reported_unclear?: number;
+  verified: number | null; verify_note: string; source_note: string; grounding: 'source' | 'weak' | 'none'; retired_at?: number | null; reported_unclear?: number; focus?: string | null; contrast_id?: string | null;
 }
 
 /** What the browser may see *before* answering: never the key, rubric, or explanation. */
@@ -33,16 +34,17 @@ export function getQuestion(ctx: Ctx, id: string): QuestionRow {
   return q;
 }
 
-export interface PickOpts { conceptId: string; purpose: 'diagnostic' | 'practice' | 'review' | 'repair' | 'transfer' | 'exam'; exclude: string[]; lastKind?: string | null; easier?: boolean; useOffline?: boolean }
+export interface PickOpts { conceptId: string; purpose: 'diagnostic' | 'practice' | 'review' | 'repair' | 'transfer' | 'exam'; exclude: string[]; lastKind?: string | null; easier?: boolean; useOffline?: boolean; action?: NextAction }
 
 function unseen(ctx: Ctx, conceptId: string, exclude: string[], heldout: 0 | 1): QuestionRow[] {
   const rows = ctx.db.all<QuestionRow>(`SELECT * FROM questions q WHERE concept_id = ? AND heldout = ? AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.question_id = q.id) ORDER BY created_at, rowid`, conceptId, heldout);
   return rows.filter((r) => !exclude.includes(r.id));
 }
 
-/** Choose a question the student has never attempted; generate more only when the bank is empty. */
+/** Choose a question the student has never attempted; generate more only when the bank is empty. A follow-up action can ask for a specific kind of question. */
 export async function pickQuestion(ctx: Ctx, o: PickOpts): Promise<QuestionRow> {
   const wantHeld = o.purpose === 'review' || o.purpose === 'transfer' || o.purpose === 'exam';
+  const act = o.action;
   const choose = (): QuestionRow | null => {
     const order: (0 | 1)[] = wantHeld ? [1, 0] : [0];
     for (const h of order) {
@@ -51,10 +53,22 @@ export async function pickQuestion(ctx: Ctx, o: PickOpts): Promise<QuestionRow> 
       const varied = o.purpose === 'diagnostic' && o.lastKind ? cands.find((c) => c.kind !== o.lastKind) : undefined;
       if (varied) return varied;
       if (o.easier) { const e = [...cands].sort((a, b) => a.difficulty - b.difficulty)[0]; return e; }
-      return cands[0];
+      const other = act?.avoidKind ? cands.find((c) => c.kind !== act.avoidKind) : undefined; // a different form of the same idea
+      return other ?? cands[0];
     }
     return null;
   };
+  // an adaptive follow-up (discriminate / fill the gap / simpler): reuse a matching unseen question, else write one
+  const special = act?.focus && act.focus !== 'practice' ? act : null;
+  if (special) {
+    const pool = unseen(ctx, o.conceptId, o.exclude, 0).filter((c) => c.focus === special.focus && (special.focus !== 'discriminate' || !special.contrast || c.contrast_id === special.contrast.id) && special.focus !== 'gap');
+    if (pool[0]) return pool[0];
+    try {
+      await generateQuestions(ctx, o.conceptId, { focus: special.focus as GenFocus, useOffline: o.useOffline, contrastConceptId: special.contrast?.id, gapPoints: special.gapPoints });
+      const fresh = unseen(ctx, o.conceptId, o.exclude, 0).find((c) => c.focus === special.focus);
+      if (fresh) return fresh;
+    } catch (e) { if (!(e instanceof AIError) && !(e instanceof HttpError)) throw e; /* fall back to an ordinary question below */ }
+  }
   let q = choose();
   if (!q) {
     await generateQuestions(ctx, o.conceptId, { focus: o.purpose === 'repair' ? 'repair' : o.purpose === 'diagnostic' ? 'diagnostic' : wantHeld ? 'transfer' : 'practice', useOffline: o.useOffline });
@@ -104,6 +118,7 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts)
       ctx.db.run(`INSERT INTO questions (id,concept_id,subject_id,kind,prompt,choices,answer_spec,rubric,hints,worked_example,explanation,difficulty,family,heldout,origin,verified,verify_note,source_note,grounding,created_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, qid, c.id, c.subject_id, row.kind, q.prompt, row.choices, row.answer_spec, row.rubric, JSON.stringify(q.hints), q.worked_example, q.explanation,
         q.difficulty ?? 2, row.family, row.heldout, row.origin, row.verified, row.verify_note, g.note, g.grounding, ctx.now());
+      if (['discriminate', 'gap', 'simpler'].includes(o.focus)) ctx.db.run('UPDATE questions SET focus = ?, contrast_id = ?, heldout = 0 WHERE id = ?', o.focus, o.contrastConceptId ?? null, qid); // follow-ups are for now, not reserved for later checks
       if (g.ev) ctx.db.run('INSERT OR IGNORE INTO question_evidence (question_id,source_id,quote,char_start,char_end,label,support) VALUES (?,?,?,?,?,?,?)', qid, g.ev.sourceId, g.ev.quote, g.ev.start, g.ev.end, g.ev.label, g.support);
       inserted++;
     });

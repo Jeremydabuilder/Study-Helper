@@ -3,6 +3,8 @@
  * Everything that affects scheduling is derived from the attempt log by core/learning.ts.
  */
 import { AIError } from '../../ai/provider';
+import { MISTAKE_BLURB, MISTAKE_LABEL, MistakeKind, diagnose, Diagnosis } from '../../core/diagnosis';
+import { NextAction, nextAction } from '../../core/nextAction';
 import { checkMath, MathSpec } from '../../core/mathCheck';
 import { AttemptRecord, replay, TraceEntry, isDue, LEVEL_LABEL, GradeSource, GradeStatus } from '../../core/learning';
 import { planToday } from '../../core/priority';
@@ -16,8 +18,11 @@ import { PickOpts, QuestionRow, getQuestion, pickQuestion, publicQuestion } from
 import { buildPlanInputs } from './plan';
 
 type Purpose = PickOpts['purpose'];
-interface Slot { conceptId: string; purpose: Purpose; n: number; done: number; extra: number; streak: number }
-interface Current { questionId: string; conceptId: string; purpose: Purpose; servedAt: number; hintsShown: number; revealed: boolean; attemptId: string | null; fallbackOffline?: boolean }
+interface Slot { conceptId: string; purpose: Purpose; n: number; done: number; extra: number; streak: number; priority?: boolean }
+/** Per-session teaching state: what to do next, and how the last few answers on each concept went. */
+interface Notes { next?: NextAction | null; fails?: Record<string, number>; explained?: Record<string, number> }
+const notesOf = (s: any): Notes => parse<Notes>(s.notes, {});
+interface Current { questionId: string; conceptId: string; purpose: Purpose; servedAt: number; hintsShown: number; revealed: boolean; attemptId: string | null; fallbackOffline?: boolean; why?: string | null }
 
 const TEXT_MIN_CHARS = 1;
 const MAX_ANSWER = 4000;
@@ -103,9 +108,13 @@ export function startSession(ctx: Ctx, o: StartOpts) {
 
 /* --------------------------- picking the next question --------------------------- */
 
-function chooseSlot(slots: Slot[], mode: string, lastConcept: string | null): number {
+function chooseSlot(slots: Slot[], mode: string, lastConcept: string | null, force: string | null): number {
   const open = slots.map((s, i) => ({ s, i })).filter((x) => x.s.done < x.s.n);
   if (!open.length) return -1;
+  const pri = open.find((x) => x.s.priority); // a follow-up the last answer called for (a prerequisite check, a fresh application)
+  if (pri) return pri.i;
+  const forced = force ? open.find((x) => x.s.conceptId === force) : null;
+  if (forced) return forced.i;
   if (mode === 'practice') return open[0].i; // deep practice on one concept at a time
   const other = open.filter((x) => x.s.conceptId !== lastConcept);
   const pool = other.length ? other : open;
@@ -114,16 +123,20 @@ function chooseSlot(slots: Slot[], mode: string, lastConcept: string | null): nu
 
 async function advance(ctx: Ctx, session: any, opts: { useOffline?: boolean } = {}): Promise<Current | null> {
   const slots = parse<Slot[]>(session.slots, []);
+  const notes = notesOf(session);
+  const act = notes.next ?? null;
   const last = ctx.db.get<any>('SELECT concept_id, question_id FROM attempts WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', session.id);
-  const idx = chooseSlot(slots, session.mode, last?.concept_id ?? null);
+  const followUp = act && !['move_on', 'confirm_grade'].includes(act.type) ? last?.concept_id ?? null : null;
+  const idx = chooseSlot(slots, session.mode, last?.concept_id ?? null, followUp);
   if (idx < 0) return null;
   const slot = slots[idx];
   const asked = ctx.db.all<any>('SELECT question_id FROM attempts WHERE session_id = ?', session.id).map((r) => r.question_id);
   const lastKind = last ? ctx.db.get<any>('SELECT kind FROM questions WHERE id=?', last.question_id)?.kind : null;
   const lastWrong = last ? ctx.db.get<any>('SELECT correctness, idk FROM attempts WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1', session.id) : null;
-  const q = await pickQuestion(ctx, { conceptId: slot.conceptId, purpose: slot.done > 0 && slot.purpose === 'practice' ? 'practice' : slot.purpose, exclude: asked, lastKind, easier: !!(lastWrong && (lastWrong.idk || (lastWrong.correctness ?? 1) < 0.4)), useOffline: opts.useOffline });
-  const cur: Current = { questionId: q.id, conceptId: q.concept_id, purpose: slot.purpose, servedAt: ctx.now(), hintsShown: 0, revealed: false, attemptId: null };
-  ctx.db.run('UPDATE sessions SET current = ? WHERE id = ?', JSON.stringify(cur), session.id);
+  const sameConcept = !!act && (slot.conceptId === last?.concept_id || !!act.prerequisite);
+  const q = await pickQuestion(ctx, { conceptId: slot.conceptId, purpose: slot.done > 0 && slot.purpose === 'practice' ? 'practice' : slot.purpose, exclude: asked, lastKind, easier: !!(lastWrong && (lastWrong.idk || (lastWrong.correctness ?? 1) < 0.4)), useOffline: opts.useOffline, action: sameConcept && act!.focus ? act : undefined });
+  const cur: Current = { questionId: q.id, conceptId: q.concept_id, purpose: slot.purpose, servedAt: ctx.now(), hintsShown: 0, revealed: false, attemptId: null, why: act?.reason ?? null };
+  ctx.db.run('UPDATE sessions SET current = ?, notes = ? WHERE id = ?', JSON.stringify(cur), JSON.stringify({ ...notes, next: null } satisfies Notes), session.id);
   return cur;
 }
 
@@ -162,9 +175,9 @@ export async function sessionView(ctx: Ctx, id: string, opts: { useOffline?: boo
   const hints = parse<string[]>(q.hints, []).slice(0, cur.hintsShown);
   if (cur.attemptId) {
     const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id = ?', cur.attemptId);
-    return { ...base, phase: 'feedback' as const, purpose: PURPOSE_LABEL[cur.purpose], concept, question: publicQuestion(q), hints, attemptId: a.id, answer: a.answer_text, feedback: s.hold_feedback ? null : parse(a.diagnosis, null), progress };
+    return { ...base, phase: 'feedback' as const, purpose: PURPOSE_LABEL[cur.purpose], concept, question: publicQuestion(q), hints, attemptId: a.id, answer: a.answer_text, feedback: s.hold_feedback ? null : parse(a.diagnosis, null), clarifications: s.hold_feedback ? [] : clarifications(ctx, a.id), progress };
   }
-  return { ...base, phase: 'question' as const, purpose: PURPOSE_LABEL[cur.purpose], concept, question: publicQuestion(q), hints, revealed: cur.revealed ? revealPayload(q) : null, servedAt: cur.servedAt };
+  return { ...base, phase: 'question' as const, purpose: PURPOSE_LABEL[cur.purpose], concept, question: publicQuestion(q), hints, revealed: cur.revealed ? revealPayload(q) : null, servedAt: cur.servedAt, why: cur.why ?? null };
 }
 
 /* --------------------------- hints / reveal --------------------------- */
@@ -201,6 +214,7 @@ export interface Outcome {
   status: GradeStatus; correctness: number | null; source: GradeSource; confidence: 'high' | 'medium' | 'low' | null; feedback: string;
   tags: string[]; slip?: boolean; misconception?: { label: string; description: string; origin: 'observed' | 'ai_inferred' }; rubricPoints?: { point: string; met: boolean }[];
   unparseable?: string; nextStep?: string; model?: string | null;
+  chosenMisconception?: string | null; chosenText?: string | null; graderKind?: MistakeKind | null; confusedName?: string | null;
 }
 
 const MATH_TAG_INFO: Record<string, { label: string; description: string; slip: boolean }> = {
@@ -220,7 +234,7 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
     if (!Number.isInteger(idx) || !choices || idx < 0 || idx >= choices.length) throw new HttpError(400, 'invalid', 'Pick one of the choices.');
     const ok = idx === spec.correct;
     return {
-      status: 'graded', correctness: ok ? 1 : 0, source: 'deterministic', confidence: 'high', tags: [],
+      status: 'graded', correctness: ok ? 1 : 0, source: 'deterministic', confidence: 'high', tags: [], chosenMisconception: !ok ? choices[idx].misconception ?? null : null, chosenText: !ok ? choices[idx].text : null,
       feedback: ok ? 'Correct.' : `Not quite.${choices[idx].misconception ? ` That choice is easy to mix up: ${choices[idx].misconception.toLowerCase()}.` : ''}`,
       misconception: !ok && choices[idx].misconception ? { label: choices[idx].misconception!, description: `Chose “${choices[idx].text.slice(0, 120)}” for a question about this concept.`, origin: 'observed' } : undefined,
     };
@@ -246,7 +260,7 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
   try {
     const g = await ctx.ai.gradeAnswer({
       question: { prompt: q.prompt, kind: q.kind, rubric: rubric.keyPoints ?? [], sampleAnswer: rubric.sample ?? undefined },
-      answer: clip(answer, MAX_ANSWER), reasoning: clip(reasoning, MAX_ANSWER), excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })), gradeLevel: getProfile(ctx.db).grade,
+      answer: clip(answer, MAX_ANSWER), reasoning: clip(reasoning, MAX_ANSWER), excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })), gradeLevel: getProfile(ctx.db).grade, knownIssues: knownIssuesFor(ctx, q.concept_id),
     });
     const sure = g.confidence !== 'low';
     return {
@@ -254,6 +268,7 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
       status: sure ? 'graded' : 'uncertain', correctness: g.correctness, source: ctx.ai.live ? 'ai' : g.confidence === 'high' ? 'deterministic' : 'heuristic', confidence: g.confidence, tags: [],
       feedback: g.feedback + (sure ? '' : ' (I am not sure about this grade — please confirm how you did.)'), rubricPoints: g.points.map((p) => ({ point: p.point, met: p.met })), nextStep: g.next_step,
       misconception: g.misconception && g.correctness < 0.8 ? { label: g.misconception.label, description: g.misconception.description, origin: 'ai_inferred' } : undefined,
+      graderKind: g.mistake_kind && g.mistake_kind !== 'none' ? g.mistake_kind : null, confusedName: g.confused_with ?? null,
     };
   } catch (e) {
     if (e instanceof AIError) return { status: 'failed', correctness: null, source: 'ai', confidence: null, tags: [], feedback: `Grading is unavailable right now (${e.message}) Your answer is saved — you can retry grading or grade yourself.` };
@@ -268,6 +283,59 @@ export interface AnswerInput { questionId: string; answer: string; reasoning?: s
 function displayAnswer(q: QuestionRow, a: string) {
   if (q.kind === 'multiple_choice') { const c = parse<{ text: string }[]>(q.choices, []); return c[Number(a)]?.text ?? a; }
   return a;
+}
+
+/* ---- diagnosing one answer ---- */
+
+const siblingsOf = (ctx: Ctx, conceptId: string) => ctx.db.all<{ id: string; name: string }>("SELECT id, name FROM concepts WHERE status='confirmed' AND subject_id=(SELECT subject_id FROM concepts WHERE id=?) AND id != ?", conceptId, conceptId);
+function findConfused(sibs: { id: string; name: string }[], texts: (string | null | undefined)[]) {
+  const hay = texts.filter(Boolean).join(' \n ').toLowerCase();
+  return sibs.find((x) => x.name.length >= 4 && hay.includes(x.name.toLowerCase())) ?? null;
+}
+
+export function diagnoseOutcome(ctx: Ctx, q: QuestionRow, o: Outcome, a: { answer: string; skipped: boolean }): Diagnosis | null {
+  const sibs = siblingsOf(ctx, q.concept_id);
+  const wrong = o.status === 'graded' && (o.correctness ?? 1) < 0.8;
+  const confusedWith = findConfused(sibs, [o.chosenMisconception, o.confusedName, wrong && q.kind !== 'multiple_choice' ? a.answer : null, o.graderKind === 'concept_confusion' ? a.answer : null]);
+  const rp = o.rubricPoints ?? [];
+  return diagnose({
+    questionKind: q.kind, correctness: o.correctness, gradeStatus: o.status, reportedUnclear: !!q.reported_unclear, idk: a.skipped, blank: !a.answer.trim() && !a.skipped,
+    mathTags: o.tags, slipTag: o.slip, chosenMisconception: o.chosenMisconception ?? null, confusedWith, rubricMet: rp.filter((p) => p.met).length, rubricTotal: rp.length, graderKind: o.graderKind ?? null,
+  });
+}
+
+/** The observed mistake as it will be remembered: a specific label when the app knows one, otherwise the kind. */
+function describeMistake(d: Diagnosis, o: Outcome) {
+  if (o.misconception) return { label: o.misconception.label, description: o.misconception.description, origin: o.misconception.origin };
+  if (d.confusedWith) return { label: `Mixed up with “${d.confusedWith.name}”`, description: d.why, origin: 'observed' as const };
+  return { label: MISTAKE_LABEL[d.kind], description: d.why, origin: (o.source === 'ai' ? 'ai_inferred' : 'observed') as 'observed' | 'ai_inferred' };
+}
+
+const PATTERN_DAYS = 30;
+/** A "pattern" means the same observed mistake on at least two DIFFERENT questions within a month. One answer never makes one. */
+function patternSupport(ctx: Ctx, conceptId: string, label: string, now: number, thisQuestionId: string, thisAttemptId?: string) {
+  const rows = ctx.db.all<any>(`SELECT m.attempt_id, a.question_id FROM observed_mistakes m JOIN attempts a ON a.id = m.attempt_id WHERE m.concept_id = ? AND lower(m.label) = ? AND m.created_at > ? ${thisAttemptId ? 'AND m.attempt_id != ?' : ''}`,
+    conceptId, label.toLowerCase().trim(), now - PATTERN_DAYS * DAY, ...(thisAttemptId ? [thisAttemptId] : []));
+  const qs = new Set<string>(rows.map((r) => r.question_id)); qs.add(thisQuestionId);
+  return { questions: qs.size, attemptIds: rows.map((r) => r.attempt_id as string) };
+}
+const NO_PATTERN: MistakeKind[] = ['missing_knowledge', 'unreliable'];
+
+/* ---- what to do next ---- */
+
+function weakestPrerequisite(ctx: Ctx, conceptId: string) {
+  const rows = ctx.db.all<any>(`SELECT c.id, c.name, COALESCE(cs.level,'not_assessed') level FROM concept_prereqs p JOIN concepts c ON c.id = p.prereq_id AND c.status='confirmed' LEFT JOIN concept_state cs ON cs.concept_id = c.id WHERE p.concept_id = ?`, conceptId);
+  const order: Record<string, number> = { not_assessed: 0, learning: 1, shaky: 2, solid: 9 };
+  return rows.filter((r) => r.level !== 'solid').sort((x, y) => order[x.level] - order[y.level])[0] ?? null;
+}
+
+/** Another way to see the idea, used when the first explanation did not work: the student's own source wording and the plain-language summary. */
+function alternativeExplanation(ctx: Ctx, q: QuestionRow) {
+  const ref = ctx.db.get<any>('SELECT quote, label FROM concept_refs WHERE concept_id = ? AND stale = 0 ORDER BY rowid LIMIT 1', q.concept_id);
+  const c = ctx.db.get<any>('SELECT name, summary FROM concepts WHERE id = ?', q.concept_id);
+  const parts = [`Let’s look at it a different way. In short: ${c.summary || c.name}`];
+  if (ref) parts.push(`Your material says (${ref.label}): “${ref.quote}”`);
+  return parts.join(' ');
 }
 
 export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput) {
@@ -294,25 +362,49 @@ export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput
   const hold = !!s.hold_feedback;
   const attemptId = uid();
   const revealUsed = cur.revealed || idk || skippedAfterReveal;
-  const payload = buildFeedback(ctx, q, outcome, { hintsUsed: cur.hintsShown, revealed: revealUsed, idk, answer });
+  const independent = !revealUsed && cur.hintsShown === 0;
+  const diag = diagnoseOutcome(ctx, q, outcome, { answer, skipped: idk || skippedAfterReveal });
+  const mrec = diag && diag.kind !== 'unreliable' ? describeMistake(diag, outcome) : null;
+  const now = ctx.now();
+  const support = mrec && diag && !NO_PATTERN.includes(diag.kind) ? patternSupport(ctx, q.concept_id, mrec.label, now, q.id) : null;
+
+  // teaching state for this session: consecutive misses, and what the next question should do
+  const notes = notesOf(s); const fails = { ...(notes.fails ?? {}) }; const explained = { ...(notes.explained ?? {}) };
+  const counted = outcome.status === 'graded';
+  const wrong = counted && ((outcome.correctness ?? 0) < 0.8 || idk || revealUsed);
+  if (counted) fails[q.concept_id] = wrong ? (fails[q.concept_id] ?? 0) + 1 : 0;
+  if (wrong) explained[q.concept_id] = (explained[q.concept_id] ?? 0) + 1;
+  const slotsBefore = parse<Slot[]>(s.slots, []);
+  const slotNow = slotsBefore.find((x) => x.conceptId === cur.conceptId && x.done < x.n) ?? slotsBefore.find((x) => x.conceptId === cur.conceptId);
+  const success = counted && (outcome.correctness ?? 0) >= 0.8 && independent;
+  const concept = ctx.db.get<any>('SELECT name FROM concepts WHERE id=?', q.concept_id);
+  const na = hold ? null : nextAction({
+    mistake: diag?.kind ?? null, correctness: counted ? outcome.correctness : null, independent, confidence: confidence as 1 | 2 | 3 | null, confusedWith: diag?.confusedWith ?? null,
+    missedPoints: (outcome.rubricPoints ?? []).filter((p) => !p.met).map((p) => p.point), streakIndependent: success ? (slotNow?.streak ?? 0) + 1 : 0, failuresOnConcept: fails[q.concept_id] ?? 0,
+    prerequisite: wrong ? weakestPrerequisite(ctx, q.concept_id) : null, questionKind: q.kind, conceptName: concept.name,
+  });
+  const payload = buildFeedback(ctx, q, outcome, { hintsUsed: cur.hintsShown, revealed: revealUsed, idk, answer }, {
+    diag, mistake: mrec, pattern: support && support.questions >= 2 ? { label: mrec!.label, count: support.questions } : null, na,
+  });
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO attempts (id,session_id,question_id,concept_id,answer_text,reasoning_text,confidence,hints_used,saw_answer,idk,response_ms,correctness,grade_status,grade_source,grade_confidence,feedback,diagnosis,feedback_shown,client_token,created_at,grade_model)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attemptId, sessionId, q.id, q.concept_id, answer, reasoning, confidence, cur.hintsShown, Number(revealUsed), Number(idk), responseMs,
-      outcome.correctness, outcome.status, outcome.source, outcome.confidence, outcome.feedback, JSON.stringify(payload), Number(!hold), inp.clientToken, ctx.now(), outcome.model ?? null);
+    ctx.db.run(`INSERT INTO attempts (id,session_id,question_id,concept_id,answer_text,reasoning_text,confidence,hints_used,saw_answer,idk,response_ms,correctness,grade_status,grade_source,grade_confidence,feedback,diagnosis,feedback_shown,client_token,created_at,grade_model,mistake_kind)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, attemptId, sessionId, q.id, q.concept_id, answer, reasoning, confidence, cur.hintsShown, Number(revealUsed), Number(idk), responseMs,
+      outcome.correctness, outcome.status, outcome.source, outcome.confidence, outcome.feedback, JSON.stringify(payload), Number(!hold), inp.clientToken, ctx.now(), outcome.model ?? null, diag?.kind ?? null);
     cur.attemptId = attemptId;
     // advance slot bookkeeping: failures add one more application (max +2); two independent successes in a row end a practice slot early
-    const slots = parse<Slot[]>(s.slots, []);
+    const slots = slotsBefore;
     const slot = slots.find((x) => x.conceptId === cur.conceptId && x.done < x.n) ?? slots.find((x) => x.conceptId === cur.conceptId);
     if (slot) {
       slot.done++;
-      const success = outcome.status === 'graded' && (outcome.correctness ?? 0) >= 0.8 && !revealUsed && cur.hintsShown === 0;
       const failed = idk || (outcome.status === 'graded' && (outcome.correctness ?? 1) < 0.8) || revealUsed;
       slot.streak = success ? slot.streak + 1 : 0;
       if (!hold && (slot.purpose === 'practice' || slot.purpose === 'repair') && failed && slot.extra < 2 && slot.done >= slot.n) { slot.n++; slot.extra++; }
       if (!hold && slot.purpose === 'practice' && slot.streak >= 2 && slot.done < slot.n) slot.n = slot.done; // enough independent evidence today: stop drilling
     }
-    ctx.db.run('UPDATE sessions SET slots=?, current=?, active_ms=active_ms+? WHERE id=?', JSON.stringify(slots), JSON.stringify(cur), Math.min(responseMs, 10 * 60_000), sessionId);
-    afterAttempt(ctx, attemptId, q, outcome, cur.purpose);
+    if (!hold && wrong && slot && slot.purpose === 'diagnostic' && !na?.prerequisite && (fails[q.concept_id] ?? 0) <= 1 && !slots.some((x) => x.conceptId === q.concept_id && x.priority && x.done < x.n)) slots.push({ conceptId: q.concept_id, purpose: 'practice', n: 1, done: 0, extra: 0, streak: 0, priority: true }); // a miss in a quick check gets one fresh follow-up now
+    if (na?.prerequisite && !slots.some((x) => x.conceptId === na.prerequisite!.id && x.priority && x.done < x.n)) slots.push({ conceptId: na.prerequisite.id, purpose: 'diagnostic', n: 1, done: 0, extra: 0, streak: 0, priority: true });
+    ctx.db.run('UPDATE sessions SET slots=?, current=?, active_ms=active_ms+?, notes=? WHERE id=?', JSON.stringify(slots), JSON.stringify(cur), Math.min(responseMs, 10 * 60_000), JSON.stringify({ next: na, fails, explained } satisfies Notes), sessionId);
+    afterAttempt(ctx, attemptId, q, outcome, cur.purpose, diag);
   });
   const row = ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId);
   if (hold) return { duplicate: false, held: true, attemptId, progress: await progressOf(ctx, sessionId) };
@@ -330,9 +422,17 @@ export interface FeedbackPayload {
   verdict: 'correct' | 'partial' | 'incorrect' | 'unsure' | 'ungraded' | 'skipped'; headline: string; message: string;
   explanation: string | null; workedExample: string | null; correctAnswer: string | null; tags: string[]; rubricPoints: { point: string; met: boolean }[];
   gradeStatus: GradeStatus; canSelfGrade: boolean; canRetryGrading: boolean; counts: string; misconception: string | null; nextStep: string | null; yourAnswer: string;
+  /** One observed mistake in THIS answer (not a claim about the student). */
+  mistake: { kind: MistakeKind; label: string; why: string } | null;
+  /** Set only when the same mistake was seen on at least two different questions. */
+  pattern: { label: string; count: number } | null;
+  /** What happens next and why, in plain words. */
+  next: { type: string; reason: string } | null;
+  altRepresentation: boolean;
 }
 
-function buildFeedback(ctx: Ctx, q: QuestionRow, o: Outcome, u: { hintsUsed: number; revealed: boolean; idk: boolean; answer: string }): FeedbackPayload {
+function buildFeedback(ctx: Ctx, q: QuestionRow, o: Outcome, u: { hintsUsed: number; revealed: boolean; idk: boolean; answer: string },
+  x: { diag?: Diagnosis | null; mistake?: { label: string; description: string } | null; pattern?: { label: string; count: number } | null; na?: NextAction | null } = {}): FeedbackPayload {
   const rev = revealPayload(q);
   const c = o.correctness ?? 0;
   const verdict: FeedbackPayload['verdict'] = u.idk || (u.revealed && !u.answer) ? 'skipped' : o.status === 'failed' ? 'ungraded' : o.status === 'uncertain' ? 'unsure' : c >= 0.8 ? 'correct' : c >= 0.4 ? 'partial' : 'incorrect';
@@ -343,31 +443,33 @@ function buildFeedback(ctx: Ctx, q: QuestionRow, o: Outcome, u: { hintsUsed: num
   else if (u.hintsUsed > 0) counts = 'Counted as hint-assisted: partial credit as evidence, not independent mastery.';
   else counts = c >= 0.8 ? 'Counted as independent evidence.' : 'Counted — and a later fresh question will check whether the fix stuck.';
   const showExplain = verdict !== 'correct';
+  const alt = !!x.na?.alternativeRepresentation;
   return {
     verdict, headline: verdict === 'correct' ? 'Correct' : verdict === 'partial' ? 'Partly right' : verdict === 'incorrect' ? 'Not yet' : verdict === 'skipped' ? 'Let’s look at it together' : verdict === 'unsure' ? 'I’m not sure about this one' : 'Saved, but not graded',
-    message: o.feedback, explanation: showExplain || o.status !== 'graded' ? rev.explanation : null, workedExample: u.idk || u.revealed || verdict === 'incorrect' ? rev.workedExample : null,
+    message: o.feedback, explanation: alt ? alternativeExplanation(ctx, q) : showExplain || o.status !== 'graded' ? rev.explanation : null, workedExample: !alt && (u.idk || u.revealed || verdict === 'incorrect') ? rev.workedExample : null,
     correctAnswer: o.status === 'graded' && verdict === 'correct' ? null : rev.correctAnswer || null, tags: o.tags, rubricPoints: o.rubricPoints ?? [],
     gradeStatus: o.status, canSelfGrade: o.status === 'uncertain' || o.status === 'failed', canRetryGrading: o.status === 'failed', counts,
-    misconception: o.misconception?.label ?? null, nextStep: o.nextStep ?? null, yourAnswer: displayAnswer(q, u.answer),
+    misconception: x.pattern?.label ?? null, nextStep: o.nextStep ?? null, yourAnswer: displayAnswer(q, u.answer),
+    mistake: x.diag && x.mistake ? { kind: x.diag.kind, label: x.mistake.label, why: x.diag.why } : x.diag?.kind === 'unreliable' ? { kind: 'unreliable', label: MISTAKE_LABEL.unreliable, why: x.diag.why } : null,
+    pattern: x.pattern ?? null, next: x.na ? { type: x.na.type, reason: x.na.reason } : null, altRepresentation: alt,
   };
 }
 
 /* --------------------------- mistakes, repairs, state --------------------------- */
 
-function afterAttempt(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, purpose: Purpose) {
+function afterAttempt(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, purpose: Purpose, diag: Diagnosis | null) {
   const now = ctx.now();
-  const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId);
-  if (o.status === 'graded' && o.misconception) {
-    let record = true;
-    if (o.slip) {
-      // a one-off sign/arithmetic slip is not a misconception; a repeat within two weeks is a pattern
-      const tag = o.tags[0];
-      const prev = ctx.db.get<any>("SELECT COUNT(*) n FROM attempts WHERE concept_id=? AND id != ? AND created_at > ? AND diagnosis LIKE ?", q.concept_id, attemptId, now - 14 * DAY, `%"${tag}"%`);
-      record = prev.n > 0;
+  ctx.db.run('DELETE FROM observed_mistakes WHERE attempt_id = ?', attemptId);
+  if (diag && diag.kind !== 'unreliable') {
+    const m = describeMistake(diag, o);
+    ctx.db.run('INSERT INTO observed_mistakes (id,attempt_id,concept_id,kind,label,description,created_at) VALUES (?,?,?,?,?,?,?)', uid(), attemptId, q.concept_id, diag.kind, clip(m.label, 80), clip(m.description, 300), now);
+    if (!NO_PATTERN.includes(diag.kind)) {
+      const sup = patternSupport(ctx, q.concept_id, m.label, now, q.id, attemptId);
+      if (sup.questions >= 2) {
+        recordMisconception(ctx, q.concept_id, attemptId, { label: m.label, description: m.description, origin: m.origin }, now);
+        for (const id of sup.attemptIds) ctx.db.run('INSERT OR IGNORE INTO misconception_evidence (misconception_id, attempt_id) SELECT id, ? FROM misconceptions WHERE concept_id=? AND lower(label)=lower(?) AND status != \'dismissed\'', id, q.concept_id, m.label);
+      }
     }
-    if (record) recordMisconception(ctx, q.concept_id, attemptId, o.misconception, now);
-  } else if (o.status === 'graded' && (o.correctness ?? 1) < 0.4 && a.confidence === 3 && !a.idk) {
-    recordMisconception(ctx, q.concept_id, attemptId, { label: 'Confident but incorrect', description: 'Answered with high confidence but incorrectly — worth checking for a hidden misconception.', origin: 'observed' }, now);
   }
   const trace: TraceEntry[] = [];
   recomputeConcept(ctx, q.concept_id, trace);
@@ -387,10 +489,74 @@ function recordMisconception(ctx: Ctx, conceptId: string, attemptId: string, m: 
   const ex = ctx.db.get<any>("SELECT id FROM misconceptions WHERE concept_id=? AND lower(label)=? AND status != 'dismissed'", conceptId, key);
   let id: string;
   if (ex) { id = ex.id; ctx.db.run("UPDATE misconceptions SET count=count+1, last_seen_at=?, status='active', repaired_at=NULL WHERE id=?", now, id); }
-  else { id = uid(); ctx.db.run('INSERT INTO misconceptions (id,concept_id,label,description,status,origin,count,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,?,?,?,?)', id, conceptId, clip(m.label, 80), clip(m.description, 300), 'active', m.origin, 1, now, now); }
+  else { id = uid(); ctx.db.run('INSERT INTO misconceptions (id,concept_id,label,description,status,origin,count,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,?,?,?,?)', id, conceptId, clip(m.label, 80), clip(m.description, 300), 'active', m.origin, 2, now, now); }
   ctx.db.run('INSERT OR IGNORE INTO misconception_evidence (misconception_id, attempt_id) VALUES (?,?)', id, attemptId);
   if (!ctx.db.get("SELECT 1 FROM followups WHERE misconception_id=? AND kind='repair' AND status='open'", id)) ctx.db.run("INSERT INTO followups (id,concept_id,misconception_id,kind,earliest_at,created_at) VALUES (?,?,?,?,?,?)", uid(), conceptId, id, 'repair', now, now);
   if (!ctx.db.get("SELECT 1 FROM followups WHERE misconception_id=? AND kind='repair_check' AND status='open'", id)) ctx.db.run("INSERT INTO followups (id,concept_id,misconception_id,kind,earliest_at,created_at) VALUES (?,?,?,?,?,?)", uid(), conceptId, id, 'repair_check', now + DAY, now);
+}
+
+/** Saved notes about this student on this concept, passed to the grader and generator so memory changes teaching. */
+export function knownIssuesFor(ctx: Ctx, conceptId: string): string[] {
+  return ctx.db.all<any>("SELECT text FROM memories WHERE deleted_at IS NULL AND concept_id = ? ORDER BY updated_at DESC LIMIT 4", conceptId).map((r) => String(r.text).slice(0, 240));
+}
+
+/* --------------------------- clarification and unclear questions --------------------------- */
+
+const MAX_CLARIFICATIONS = 4;
+export function clarifications(ctx: Ctx, attemptId: string) {
+  return ctx.db.all<any>('SELECT id, question, answer, ai, created_at FROM attempt_clarifications WHERE attempt_id = ? ORDER BY created_at, rowid', attemptId).map((r) => ({ id: r.id, ask: r.question, answer: r.answer, ai: !!r.ai, at: r.created_at }));
+}
+
+/**
+ * Ask about ONE piece of feedback without leaving the question. The only context is this question, this answer, this feedback and the
+ * concept's own source passages — never another question — so it cannot expose held-back questions. Not available while test-mode feedback is held.
+ */
+export async function clarify(ctx: Ctx, attemptId: string, text: string) {
+  const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id = ?', attemptId);
+  if (!a) throw new HttpError(404, 'not_found', 'Attempt not found.');
+  const sess = a.session_id ? ctx.db.get<any>('SELECT status, hold_feedback FROM sessions WHERE id = ?', a.session_id) : null;
+  if (sess?.hold_feedback && sess.status === 'active') throw new HttpError(409, 'exam_mode', 'Questions about feedback open after the test, when feedback is shown.');
+  const ask = clip(text, 500).trim();
+  if (ask.length < 3) throw new HttpError(400, 'invalid', 'Type your question about this feedback.');
+  if (ctx.db.get<any>('SELECT COUNT(*) n FROM attempt_clarifications WHERE attempt_id = ?', attemptId).n >= MAX_CLARIFICATIONS) throw new HttpError(409, 'limit', `You can ask up to ${MAX_CLARIFICATIONS} questions about one answer. Continue with the next question, or add a note in Memory.`);
+  const q = getQuestion(ctx, a.question_id);
+  const d = parse<FeedbackPayload | null>(a.diagnosis, null);
+  const rev = revealPayload(q);
+  const concept = ctx.db.get<any>('SELECT id, name, summary, subject_id FROM concepts WHERE id = ?', a.concept_id);
+  let answer: string, ai = false;
+  if (ctx.ai.live && ctx.ai.clarify) {
+    const chunks = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id=ch.source_id WHERE s.subject_id=? AND s.status=\'confirmed\'', concept.subject_id);
+    const refIds = ctx.db.all<any>('SELECT chunk_id FROM concept_refs WHERE concept_id=? AND chunk_id IS NOT NULL AND stale=0', concept.id).map((r) => r.chunk_id);
+    const context = buildContext({ concept: { ...concept, subjectId: concept.subject_id }, chunks: modelChunks(ctx, chunks), refChunkIds: refIds, memories: [], misconceptions: [], maxChars: 2000 });
+    const r = await ctx.ai.clarify({ question: { prompt: q.prompt, kind: q.kind }, answer: displayAnswer(q, a.answer_text), feedback: d?.message ?? a.feedback, explanation: d?.explanation ?? null, keyPoints: rev.keyPoints, excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })), conceptName: concept.name, ask, gradeLevel: getProfile(ctx.db).grade });
+    answer = r.answer; ai = true;
+  } else {
+    // no AI configured: say so, and give back what is already known instead of pretending to answer
+    const ref = ctx.db.get<any>('SELECT quote, label FROM concept_refs WHERE concept_id = ? AND stale = 0 ORDER BY rowid LIMIT 1', concept.id);
+    answer = `I can’t answer free-form questions without an AI provider set up. What I have for this question: ${rev.explanation || concept.summary}${ref ? ` Your material says (${ref.label}): “${ref.quote}”` : ''}`;
+  }
+  const id = uid();
+  ctx.db.run('INSERT INTO attempt_clarifications (id,attempt_id,question,answer,ai,created_at) VALUES (?,?,?,?,?,?)', id, attemptId, ask, answer, Number(ai), ctx.now());
+  return { clarifications: clarifications(ctx, attemptId) };
+}
+
+/** The student says the question or grade is unclear. It stops counting as evidence and the question is never served again. */
+export function reportUnclear(ctx: Ctx, attemptId: string) {
+  const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id = ?', attemptId);
+  if (!a) throw new HttpError(404, 'not_found', 'Attempt not found.');
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE questions SET reported_unclear = 1, retired_at = COALESCE(retired_at, ?), retired_reason = COALESCE(retired_reason, ?) WHERE id = ?', ctx.now(), 'You reported this question or its grading as unclear.', a.question_id);
+    const d = parse<FeedbackPayload | null>(a.diagnosis, null);
+    if (d) {
+      d.gradeStatus = 'uncertain'; d.verdict = 'unsure'; d.headline = 'Marked as unclear'; d.counts = 'Not counted — you reported this question or its grading as unclear. It will not be used again.';
+      d.mistake = { kind: 'unreliable', label: MISTAKE_LABEL.unreliable, why: MISTAKE_BLURB.unreliable }; d.pattern = null; d.misconception = null; d.canSelfGrade = false;
+      ctx.db.run('UPDATE attempts SET diagnosis = ? WHERE id = ?', JSON.stringify(d), attemptId);
+    }
+    ctx.db.run("UPDATE attempts SET grade_status = 'uncertain', mistake_kind = 'unreliable' WHERE id = ?", attemptId);
+    ctx.db.run('DELETE FROM observed_mistakes WHERE attempt_id = ?', attemptId);
+    recomputeConcept(ctx, a.concept_id);
+  });
+  return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));
 }
 
 /* --------------------------- corrections & retries --------------------------- */
@@ -421,10 +587,11 @@ export async function regrade(ctx: Ctx, attemptId: string) {
   const q = getQuestion(ctx, a.question_id);
   const o = await gradeQuestion(ctx, q, a.answer_text, a.reasoning_text);
   if (o.unparseable) throw new HttpError(422, 'unparseable', o.unparseable);
-  const payload = buildFeedback(ctx, q, o, { hintsUsed: a.hints_used, revealed: !!a.saw_answer, idk: !!a.idk, answer: a.answer_text });
+  const diag = diagnoseOutcome(ctx, q, o, { answer: a.answer_text, skipped: !!a.idk });
+  const payload = buildFeedback(ctx, q, o, { hintsUsed: a.hints_used, revealed: !!a.saw_answer, idk: !!a.idk, answer: a.answer_text }, { diag, mistake: diag && diag.kind !== 'unreliable' ? describeMistake(diag, o) : null });
   ctx.db.tx(() => {
-    ctx.db.run('UPDATE attempts SET correctness=?, grade_status=?, grade_source=?, grade_confidence=?, feedback=?, diagnosis=?, grade_model=? WHERE id=?', o.correctness, o.status, o.source, o.confidence, o.feedback, JSON.stringify(payload), o.model ?? null, attemptId);
-    afterAttempt(ctx, attemptId, q, o, 'practice');
+    ctx.db.run('UPDATE attempts SET correctness=?, grade_status=?, grade_source=?, grade_confidence=?, feedback=?, diagnosis=?, grade_model=?, mistake_kind=? WHERE id=?', o.correctness, o.status, o.source, o.confidence, o.feedback, JSON.stringify(payload), o.model ?? null, diag?.kind ?? null, attemptId);
+    afterAttempt(ctx, attemptId, q, o, 'practice', diag);
   });
   return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));
 }
