@@ -267,7 +267,7 @@ export async function gradeQuestion(ctx: Ctx, q: QuestionRow, answer: string, re
     const ok = idx === spec.correct;
     return {
       status: 'graded', correctness: ok ? 1 : 0, source: 'deterministic', confidence: 'high', tags: [], chosenMisconception: !ok ? choices[idx].misconception ?? null : null, chosenText: !ok ? choices[idx].text : null,
-      feedback: ok ? 'Correct.' : `Not quite.${choices[idx].misconception ? ` That choice is easy to mix up: ${choices[idx].misconception.toLowerCase()}.` : ''}`,
+      feedback: ok ? 'Correct.' : `Not quite.${choices[idx].misconception ? ` That choice is easy to mix up. ${choices[idx].misconception!.replace(/^./, (c) => c.toUpperCase()).replace(/[.]$/, '')}.` : ''}`,
       misconception: !ok && choices[idx].misconception ? { label: choices[idx].misconception!, description: `Chose “${choices[idx].text.slice(0, 120)}” for a question about this concept.`, origin: 'observed' } : undefined,
     };
   }
