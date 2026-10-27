@@ -5,8 +5,9 @@ An evidence-driven study coach. It aims to help you learn more **per minute** th
 Open the app and the Today screen answers: **what should I study next, why, and for how long?**
 
 ```
-Add material → find concepts → confirm → short diagnostic → practice (hint → feedback → new question)
-            → remember mistakes → spaced review      ·      calendar/tests → a realistic, fitted schedule
+Upload or pick material → choose goal + time → check only what needs a look → study ~20 min
+   ask → attempt → diagnose → explain or hint → fresh follow-up → later review with a question you haven't seen
+   ends with: what you showed on your own · what still needs work · what is uncertain · one next action · what is checked later
 ```
 
 AI generates and explains. **Application code** owns scheduling, persistence, math checking, evidence counting, budgets and progress.
@@ -64,17 +65,38 @@ Anthropic is the default and only provider unless you opt in to another. Models 
 
 Core loop (subject → pasted source → verified concept proposals → confirm → diagnostic → practice with hints/feedback/new questions → saved attempts → resume → due reviews), evidence-based scheduling (hinted ≠ independent, delayed unaided counts most, uncertain grades change nothing until confirmed), deterministic math checking with independently verified generators, inspectable/editable memory with provenance, previewable import/export, progress with uncertainty (no grade predictions), exam mode, a sample workspace in a separate database, and read-only Google Calendar planning (calendar choice, confirmation screen showing the original event beside each proposal with unknowns marked, updates/cancellations/recurring exceptions/duplicates/all-day/time zones/DST, expired authorization, disconnect + deletion, a schedule fitted around busy time, buffers, bedtime, protected time and daily limits, with school class time *not* counted as a "heavy day").
 
-## Study from a PDF (step by step)
+## Your first 20-minute session
 
-1. `npm install && npm run build && npm start`, open http://localhost:8787 (add `ANTHROPIC_API_KEY` to `.env` for AI; without it the app runs in Offline mode).
-2. **Subjects → pick or add a subject → + Add material → Upload a PDF or screenshot** (try `samples/absolute-value-review.pdf`, `samples/dust-bowl-packet.pdf`, `samples/lantern-path-passage-and-rubric.pdf` — all fictional).
-3. **Review** each page: original on the left, extracted text on the right. Fix mistakes, check pages marked *check math* or *no text*, **Save page**. Nothing is built until you press **The text is right — find concepts**.
-4. Check the proposed concepts (each shows its page), reject junk, **Confirm**, then **Take a short check** (diagnostic), practise, pause and resume from Today; reviews come back on schedule.
-5. Replacing the file or editing a page later re-links quotes by exact match; anything that can't be found is marked out of date and questions built on it stop being served (past answers stay).
+1. `npm install && npm run build && npm start`, open http://localhost:8787. (AI is optional: add `ANTHROPIC_API_KEY` to `.env` for better concept proposals, grading and questions; without it the app runs in Offline mode.)
+2. On **Today** press **Upload or paste material** (or **Start studying**). Pick a goal — **Prepare for a test**, **Understand this material**, or **Review what I keep getting wrong** — and a time (20 min), choose or name a subject, and add your packet: a PDF, a screenshot, pasted text, or `samples/*.pdf` (fictional) to try it.
+3. **Check what was read.** The original is beside the extracted text. Only pages that need a look are shown first (no text, odd characters, math the reader had to guess). Fix anything wrong, then continue. Nothing is built until you do.
+4. **Check the concepts** found in this material (all ticked; untick junk) and press **Confirm and start**.
+5. **Study.** Each question says *why* it was chosen. After each answer you see what was noticed, what happens next and why. You can **ask about the feedback** (about that question only), mark a question **unclear**, pause (Today → Resume) and reload without losing a typed answer.
+6. **Finish** (or let the plan finish): the time budget never interrupts an answer; when it is reached you choose to wrap up or keep going. The summary lists what you showed on your own, what needs work, what is uncertain, one next action and what is checked again later.
+7. Tomorrow, Today recommends one action with its reason and duration: a test that is coming up, recent mistakes, reviews that are due, or unchecked concepts. **Change** lets you pick another goal, time or subject.
+
+## How the teaching loop works
+
+- **Diagnosis, one answer at a time.** Each wrong answer is classified from evidence the app can see: missing basics, confusion between related concepts, a reasoning error, a careless slip, a partly right explanation, or *unreliable* (uncertain grade / question reported unclear → not counted). When the cause can't be told (e.g. a wrong math answer with no steps) the app says so rather than guessing.
+- **Observed vs pattern.** One answer is one *observed mistake*. A *pattern* is saved only when the same specific mistake shows up on at least two different questions within 30 days. Generic labels ("wrong answer") never become patterns, and "I don't know" is a gap in the concept's level, never a "misconception".
+- **Next question follows the evidence** (`src/core/nextAction.ts`): missing basics → short explanation + worked example, then a fresh question on your own; confusion → a question that makes you tell the two ideas apart; slip → a fresh problem of the same kind; partly right → a question on the missing idea; right but unsure or with a hint → another application unaided; two independent successes → move on and schedule a later check. A second miss shows the explanation a different way (source wording + summary) or checks a prerequisite; three misses stop drilling that idea for the day.
+- **Memory changes teaching.** A content-specific mistake becomes a note with what happened, the answers behind it, dates, *observed once* vs *inferred from several answers*, and whether a later independent check suggests improvement. Notes choose the next question (a remembered confusion gets a discrimination question), reach the grader and generator prompts, and schedule a later check. You can dismiss or correct any note; dismissed notes stop affecting anything. The app never saves traits or learning styles.
+- **Ending.** A correct answer right after an explanation is a good sign, not independent evidence. Nothing says "mastered" or predicts a grade; the later check on an unseen question is what shows whether it stuck.
+
+## Reading scans and screenshots (optional, off by default)
+
+Text PDFs are read locally. For scanned PDFs and PNG/JPEG/WebP screenshots you can **type** each page beside the original (always available) or turn on automatic reading with Anthropic's vision input:
+
+1. Put `ANTHROPIC_API_KEY` in `.env` and add `AI_OCR=anthropic` (an explicit opt-in), restart.
+2. In the review screen press **Read page N automatically…**. A dialog shows the provider and model, exactly which file/pages are sent (a PDF extract or the image), what is *not* sent, and a worst-case cost; nothing is sent until you approve that exact content (a consent token binds the approval to provider + model + file + pages).
+3. The reader only transcribes. It reports for each block whether it could read it; **it gives no accuracy percentage**. Math, diagrams, tables, handwriting and unreadable parts are flagged and shown beside the original; the text can't be confirmed until each flagged page is checked or edited. Diagrams are never interpreted: they appear as `[diagram: … — not interpreted]`; unreadable parts as `[unreadable: …]`.
+4. Usage is reserved and settled in the same ledger as every other AI call (purpose `ocr`) and counts toward the daily budget. Keys stay on the server. Reading is allowed only while a file is under review, so confirmed text is never rewritten.
+
+**Unverified:** the request shapes (a base64 `document` block for PDFs, `image` blocks for screenshots, PDFs before text) match Anthropic's PDF-support documentation (checked 2026-10-27), but **no live reading has been run**. Tests use fixtures and a local mock.
 
 ## What was actually tested
 
-**Run in this build** (`npm run check`: typecheck clean, **204 tests in 16 files pass**; `npm run build` OK):
+**Run in this build** (`npm run check`: typecheck clean, **all tests pass** — see the count printed by `npm test`; `npm run build` OK):
 
 - *Learning rules & core flow* (HTTP-level, in-memory/temp SQLite): scheduling and inclusive time boundaries, hint-assisted vs unaided evidence, uncertain/failed grades not changing mastery, no mastery from repetition, persistence/reopen/resume, duplicate submissions, misconception evidence and repair follow-ups, workspace separation, cross-origin rejection, import preview/commit.
 - *AI failure handling* with **fake transports**: malformed/invalid/truncated output, repair retry, 429/5xx/timeout mapping, request-cap and budget enforcement (including blocking the retry), usage accounting from provider-reported tokens, no key/secret in any API response or log, injection stripping.
@@ -86,30 +108,37 @@ Core loop (subject → pasted source → verified concept proposals → confirm 
 **Not done — requires credentials or a human:**
 - ❌ **No live Anthropic call has been made** (no key was available). The live smoke test and live evaluation are implemented and *opt-in*: `npm run smoke:ai -- --confirm-spend`, `npm run eval:live -- --confirm-spend`. They exit with code 2 and say so when credentials or consent are missing; they never fabricate results. Model quality, Haiku-vs-Sonnet, real latency/cost, and thinking-token behaviour are therefore **unmeasured**.
 - ❌ **No live Google OAuth** (no Google credentials). Behaviour is verified only against the fake. `docs/GOOGLE_SETUP.md` was written from Google's documented flow without access to Google's current docs; follow its "verify it yourself" checklist.
-- ❌ **Evaluation labels are drafts** written by the assistant, not human-reviewed (58 items). Agreement numbers are provisional until you approve them (`docs/EVAL.md`). Question *usefulness* needs human ratings (a review sheet is exported).
+- ❌ **Live vision reading** (scans/screenshots) is implemented but never run against Anthropic; only fixtures and a local mock. **Live clarification, mistake-kind grading and adaptive question writing** likewise run only against fakes/mocks.
+- ❌ **No evidence yet that this improves learning** (no study was run); the app measures per-concept evidence and later checks, it does not claim improvement.
+- ❌ **Evaluation labels are drafts** written by the assistant, not human-reviewed (64 items, 6 added for diagnosis). Agreement numbers are provisional until you approve them (`docs/EVAL.md`). Question *usefulness* needs human ratings (a review sheet is exported).
 - ❌ Groq transport untested live; Haiku routing unevaluated.
+- *Milestone 4 tests:* worker-thread PDF timeout that really terminates; replacing a confirmed file waits for review while the old text and questions stay in use; question grounding (a quote that exists ≠ support; unsupported checks rejected, regenerated once, else refused); diagnosis kinds, observed-vs-pattern, next-action policy, three-miss stop; clarification that never sends another question, closed during test-mode hold, capped; unclear reports; memory evidence, later-check status, dismiss/undo, effect on question choice and prompts; goal-based session phases, soft time budget, honest reflection; Today's recommendation order; vision reading with fixtures (consent gate, attachment shape, cost ledger, flags, review gating, budget stop, key never in output); experience scenarios with scripted AI (all labelled as app-behaviour tests, not model quality).
+- *Milestone 4 browser walkthroughs* (Chromium via Playwright, screenshots viewed): (a) offline: Today → start flow → upload `samples/absolute-value-review.pdf` → only the page needing a look shown → concepts with page references → session with "why this question", observed-vs-pattern wording, discrimination follow-up, alternative explanation after a second miss → summary → Memory with evidence → next-day Today; (b) AI path through the real `AnthropicTransport` over HTTP **against a local mock of the Anthropic API** (not Anthropic): scanned fixture → disclosure dialog → vision reading (a PDF document block was received) → flagged math/diagram → confirm blocked until checked → grounded/unconfirmed/general question labels → clarification. The mock demonstrates the plumbing, not model quality.
 - *Milestone 3 browser walkthrough* (Chromium, offline mode, fictional `samples/`): upload → review → correct `x^2`→`x²` → confirm → concepts with page references → reject junk → diagnostic → typed answer kept after an aborted request, after a reload, and sent as exactly one attempt → pause/resume from Today → clock advanced 72 h → Today; History and English PDFs through upload/review/concepts. **Not demonstrated:** the in-page PDF viewer (headless Chromium has no PDF plugin), a successful delayed review pass in this run (the diagnostic was answered mostly wrong), AI-written questions for the new samples (no key).
 - Not looked at in the browser this round: Subjects detail on mobile, Settings → Availability/Priorities/Data tabs (covered by API tests only).
 
 ## Limitations
 
 - Calendar can't see **Google Classroom** or school-portal assignments; the app says so and supports manual entry. "Add study sessions to Calendar" (write permission + preview) is **not built** (button labelled unavailable). Original events are never modified.
-- **Uploads:** *text PDFs* (≤15 MB, ≤60 pages) are read locally into per-page text; *scanned PDFs and PNG/JPEG/WebP screenshots* are stored but **cannot be read automatically — there is no OCR**; you type them beside the original. Word/Pages/other formats are rejected (export to PDF). The in-page PDF viewer needs a browser with a PDF plugin (headless Chromium has none; a link opens the original in a new tab). Reading order, line breaks and math are reconstructed from glyph positions: superscripts become `^`, flagged "check math", but fractions/roots in unusual fonts may be wrong — that is why you review each page first.
+- **Uploads:** *text PDFs* (≤15 MB, ≤60 pages) are read locally into per-page text in a worker thread that is terminated on timeout; *scanned PDFs and PNG/JPEG/WebP screenshots* can be read automatically **only if you enable the optional Anthropic vision reading** (unverified live); otherwise you type them beside the original. Word/Pages/other formats are rejected (export to PDF). The in-page PDF viewer needs a browser with a PDF plugin (headless Chromium has none; a link opens the original in a new tab). Reading order, line breaks and math are reconstructed from glyph positions: superscripts become `^`, flagged "check math", but fractions/roots in unusual fonts may be wrong — that is why you review each page first.
 - Offline concept extraction is rough on real packets (it proposed some headings as concepts and mis-tagged a few math skills); you reject the junk. An AI key gives better proposals, unmeasured here.
 - No accounts or authentication (see the security boundary above).
-- Offline mode: non-math questions are templates (a few per concept); open answers are keyword-checked and always need your confirmation.
+- Offline mode: non-math questions are templates (a few per concept); open answers are keyword-checked and always need your confirmation. Offline discrimination and gap questions are templates built from your concept summaries; clarification without AI only returns what is already known.
+- **Cross-device use is a separate future milestone.** It needs authentication, per-user isolation and hosting; the app stays local-only until then.
+- The time budget assumes about two minutes per question (answering plus reading feedback); that is a planning estimate, not a measurement of you.
+- Question grounding is a keyword check of the cited passage against the answer's key terms: it catches obvious mismatches, it does not prove a question is well grounded.
 - Google apps left in *Testing* status get refresh tokens that expire after ~7 days → periodic "needs reconnecting" (handled; see `docs/GOOGLE_SETUP.md`).
 - The numeric math verifier covers one-variable relations on [-100, 100] and is sampling-based, not a proof. Calendar sync re-reads a [-2 d, +60 d] window.
 
 ## Architecture (short)
 
 ```
-src/core/      pure, provider-independent: learning.ts (evidence + scheduler), priority.ts (Today plan), math*, sources.ts,
+src/core/      pure, provider-independent: learning.ts (evidence + scheduler), diagnosis.ts + nextAction.ts (teaching loop), grounding.ts (quote vs support), priority.ts (Today plan), math*, sources.ts,
                retrieval.ts, calendar.ts (normalise/classify/diff), schedule.ts (availability + study blocks), time.ts, stats.ts
 src/ai/        provider.ts (interface + per-request records) · llm.ts (prompts, zod validation, repair retry, Anthropic transport)
                groq.ts (opt-in) · factory.ts (one provider per process) · pricing.ts · offline.ts
 src/eval/      dataset, scoring, runner, report, CLI, smoke test      eval/dataset/*.json   (58 draft-labelled items)
-src/server/    db.ts (node:sqlite, numbered SQL migrations 001–003, real/demo files) · services/* · app.ts · doctor.ts · demoSeed.ts
+src/server/    db.ts (node:sqlite, numbered SQL migrations 001–007, real/demo files) · pdf.ts + pdfWorker.mjs (worker-thread extraction) · services/* · app.ts · doctor.ts · demoSeed.ts
 src/web/       React + Vite client
 ```
 
@@ -120,6 +149,6 @@ Key decisions: concept state is a **replay of the attempt log** (correcting a gr
 1. **You:** add `ANTHROPIC_API_KEY`, run `npm run smoke:ai -- --confirm-spend`, then `npm run eval:live` on Sonnet; review/approve the eval labels; decide on Haiku for extraction.
 2. **You:** follow `docs/GOOGLE_SETUP.md` and the "verify it yourself" checklist with a real calendar.
 3. Tune effort/output ceilings from measured token use; add prompt caching for repeated source excerpts.
-4. OCR only if a reliable option appears (it would be disclosed before any file left this computer); Classroom import with its own explicit read scopes.
+4. **You:** if you want automatic reading of scans, enable `AI_OCR=anthropic` and try one page; check the result against the original before trusting it. Classroom import with its own explicit read scopes.
 5. "Add study sessions to Calendar" with separate write consent and an exact-event preview.
 6. Authentication + per-user isolation before any hosting.

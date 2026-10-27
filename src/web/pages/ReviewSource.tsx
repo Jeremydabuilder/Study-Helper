@@ -90,7 +90,7 @@ export function ReviewSource({ id, go }: { id: string; go: (p: string) => void }
       {d.pending && <div className="notice warn small" role="status"><strong>This is a replacement file, not yet in use.</strong> Your earlier confirmed text, its concepts and its questions are unchanged until you review this reading and confirm it.
         <div className="row gap-s mt-s"><button className="btn small" onClick={discard}>Discard the replacement</button></div></div>}
       {!live && !d.pending && <div className="notice info small" role="status"><strong>{attention.length ? `${attention.length} of ${d.pages.length} page${d.pages.length === 1 ? '' : 's'} need${attention.length === 1 ? 's' : ''} a look.` : `All ${d.pages.length} page${d.pages.length === 1 ? ' was' : 's were'} read cleanly.`}</strong> {d.method === 'pdf_text' || d.pages.some((p: any) => p.source === 'vision')
-        ? 'Text was read from the file; reading order, line breaks and math can still be wrong, so skim anything that matters. Nothing is sent anywhere unless you approve it below.'
+        ? `${d.pages.some((p: any) => p.source === 'vision') ? 'Some pages were read by Anthropic after you approved it; the rest was read on this computer. ' : 'Text was read from the file on this computer. '}Reading order, line breaks and math can still be wrong, so skim anything that matters. Nothing is sent anywhere unless you approve it.`
         : <>No text could be read from this {isPdf ? 'PDF — it looks like a scan or photo' : 'image'}. Read it automatically (optional, you choose and see what is sent first) or type each page beside the original.</>}
         {' '}Only confirmed <em>text</em> (never the file or picture) is used for concepts and questions.</div>}
       {err && <ErrorBox error={err} />}
@@ -127,7 +127,7 @@ export function ReviewSource({ id, go }: { id: string; go: (p: string) => void }
           {!live && d.ocr && (
             <div className="mt-s small">
               {d.ocr.available
-                ? <button className="btn small" disabled={!!busy} onClick={() => preview(page.noText ? [cur] : undefined)}>{page.noText ? `Read page ${cur} automatically…` : 'Read blank pages automatically…'}</button>
+                ? (d.pages.some((p: any) => p.noText && !p.source) && <button className="btn small" disabled={!!busy} onClick={() => preview(page.noText ? [cur] : undefined)}>{page.noText ? `Read page ${cur} automatically…` : 'Read blank pages automatically…'}</button>)
                 : <details><summary className="muted">Automatic reading is off</summary><p className="muted">{d.ocr.reason}</p>{d.ocr.steps.length > 0 && <ol>{d.ocr.steps.map((x: string, i: number) => <li key={i}>{x}</li>)}</ol>}<p>Until then, type the text beside the original — that always works.</p></details>}
             </div>)}
         </section>
