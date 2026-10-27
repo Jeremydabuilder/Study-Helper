@@ -45,7 +45,7 @@ describe('spelling is not graded by the offline keyword check', () => {
     expect(fuzzyHas('chlorophyl absorbs light', 'chlorophyll')).toBe(true);
     expect(fuzzyHas('photosynthesys makes glucose', 'photosynthesis')).toBe(true);
     expect(fuzzyHas('cat sat', 'car')).toBe(false);
-    expect(fuzzyHas('stoma', 'stomata')).toBe(true);
+    expect(fuzzyHas('stomta open', 'stomata')).toBe(true);
     expect(fuzzyHas('mitochondria', 'chloroplast')).toBe(false);
   });
 });
