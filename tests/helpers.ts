@@ -9,7 +9,7 @@ import { AIProvider } from '../src/ai/provider';
 import { CalendarGateway } from '../src/server/services/calendarGoogle';
 
 export const baseCfg = (over: Partial<AppConfig> = {}): AppConfig => ({
-  anthropicKey: null, anthropicBaseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5-5', aiProvider: 'anthropic', groqKey: null, groqModel: null, aiTasks: {}, aiTimeoutMs: 1000, aiDailyLimit: 100, aiDailyBudgetUsd: 5, aiPriceOverride: {},
+  anthropicKey: null, anthropicBaseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5-5', aiProvider: 'anthropic', groqKey: null, groqModel: null, aiTasks: {}, ocr: { enabled: false, model: null }, aiTimeoutMs: 1000, aiDailyLimit: 100, aiDailyBudgetUsd: 5, aiPriceOverride: {},
   google: null, googleRedirectUri: 'http://localhost:8787/api/calendar/oauth/callback', googlePartial: false, appSecret: 'x'.repeat(32), dataDir: ':memory:', production: false, ...over,
 });
 

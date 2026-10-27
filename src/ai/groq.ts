@@ -11,6 +11,7 @@ export class GroqTransport implements LLMTransport {
   readonly credentialFingerprint: string;
   constructor(private apiKey: string, public readonly defaultModel: string, private fetchImpl: typeof fetch = fetch) { this.credentialFingerprint = credentialFingerprint('groq', apiKey, 'https://api.groq.com'); }
   async complete(req: LLMRequest): Promise<LLMResponse> {
+    if (req.attachments?.length) throw new AIError('rejected', 'Groq is not configured to read images or PDFs here. Nothing was sent.', undefined, 'not_sent');
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), req.timeoutMs);
     const model = req.model || this.defaultModel;

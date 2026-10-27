@@ -47,6 +47,11 @@ export interface ClarifyInput {
   excerpts: { label: string; text: string }[]; conceptName: string; ask: string; gradeLevel?: string;
 }
 
+/** Page content sent to a vision-capable provider: raw bytes, base64. `pages` is the page count of a PDF attachment. */
+export interface Attachment { kind: 'image' | 'pdf'; mediaType: string; data: string; pages?: number }
+export interface ReadInput { attachment: Attachment; pageCount: number; label: string }
+export interface ReadResult { pages: { page: number; blocks: { kind: 'text' | 'math' | 'table' | 'diagram' | 'handwriting' | 'other'; text: string; readable: boolean; note?: string }[] }[] }
+
 export type AITask = 'extract' | 'generate' | 'grade';
 
 /** How a request's cost is known. 'estimated' and 'unknown' are held at the conservative reservation, never at zero. */
@@ -93,6 +98,9 @@ export interface AIProvider {
   /** Tiny real request proving the credentials work. Offline providers omit it. */
   /** Optional: answer a short question about one piece of feedback. */
   clarify?(i: ClarifyInput, opts?: CallOpts): Promise<{ answer: string }>;
+  /** Optional vision reading of page images / PDF pages. Only used when the operator has explicitly enabled it and the student has approved exactly what is sent. */
+  readPages?(i: ReadInput, opts?: CallOpts): Promise<ReadResult>;
+  ocrModel?(): string;
   verify?(opts?: CallOpts, model?: string): Promise<{ model: string; latencyMs: number }>;
   readonly name: string;
   /** true if a real model is behind it (answers may be fallible); false for offline/template mode */

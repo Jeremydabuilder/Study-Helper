@@ -29,7 +29,7 @@ async function readUpload(data: Buffer): Promise<Extracted> {
   }
 }
 
-const joinPages = (pages: { text: string }[]) => pages.map((p) => p.text).join('\f');
+export const joinPages = (pages: { text: string }[]) => pages.map((p) => p.text).join('\f');
 const extractionMeta = (x: Extracted) => JSON.stringify({ method: x.method, kind: x.kind, pages: x.pages.map((p) => ({ n: p.n, warning: p.warning })) });
 
 function writeChunks(ctx: Ctx, sourceId: string, text: string) {
@@ -80,7 +80,7 @@ function reconcile(ctx: Ctx, sourceId: string, text: string, chunks: ReturnType<
   return res;
 }
 
-function applyText(ctx: Ctx, src: any, text: string, kind: 'corrected' | 'transcribed' | 'replaced', note: string, extra: { fileId?: string; pageCount?: number; extraction?: string } = {}) {
+export function applyText(ctx: Ctx, src: any, text: string, kind: 'corrected' | 'transcribed' | 'replaced', note: string, extra: { fileId?: string; pageCount?: number; extraction?: string } = {}) {
   const rev = src.rev + 1;
   ctx.db.run('UPDATE sources SET text=?, rev=?, flags_version=0, file_id=COALESCE(?, file_id), page_count=COALESCE(?, page_count), extraction=COALESCE(?, extraction), content_hash=? WHERE id=?',
     text, rev, extra.fileId ?? null, extra.pageCount ?? null, extra.extraction ?? null, createHash('sha256').update(extra.fileId ? (ctx.db.get<any>('SELECT sha256 FROM source_files WHERE id=?', extra.fileId).sha256 as string) : `${src.content_hash}:${rev}`).digest('hex'), src.id);
@@ -108,7 +108,7 @@ export async function uploadFile(ctx: Ctx, subjectId: string, o: { data: Buffer;
 }
 
 /** The text under review: the pending replacement when there is one, otherwise the source's working text. */
-function working(ctx: Ctx, src: any) {
+export function working(ctx: Ctx, src: any) {
   const pend = ctx.db.get<any>('SELECT * FROM source_pending WHERE source_id = ?', src.id);
   return pend
     ? { pending: true as const, text: pend.text as string, rev: pend.rev as number, fileId: pend.file_id as string, pageCount: pend.page_count as number, extraction: pend.extraction as string | null }

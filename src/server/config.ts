@@ -34,6 +34,8 @@ export function configFromEnv(env = process.env): AppConfig {
     model: g('AI_MODEL') ?? g('ANTHROPIC_MODEL') ?? 'claude-sonnet-5-5',
     aiProvider: provider, groqKey: g('GROQ_API_KEY'), groqModel: g('GROQ_MODEL'),
     aiTasks: { extract: strip(task('EXTRACT')) as never, generate: strip(task('GENERATE')) as never, grade: strip(task('GRADE')) as never },
+    // Reading screenshots / scanned pages with a vision model is OFF unless the operator opts in explicitly (and uses Anthropic).
+    ocr: { enabled: g('AI_OCR') === 'anthropic', model: g('AI_MODEL_OCR'), maxOutputTokens: num('AI_MAX_OUTPUT_OCR') ?? undefined },
     aiTimeoutMs: Number(env.AI_TIMEOUT_MS) || 45_000, aiDailyLimit: Number(env.AI_DAILY_CALL_LIMIT) || 150,
     aiDailyBudgetUsd: num('AI_DAILY_BUDGET_USD') ?? 1, aiPriceOverride: { inPerM: num('AI_PRICE_IN_PER_MTOK') ?? undefined, outPerM: num('AI_PRICE_OUT_PER_MTOK') ?? undefined },
     google: g('GOOGLE_CLIENT_ID') && g('GOOGLE_CLIENT_SECRET') && g('APP_SECRET')

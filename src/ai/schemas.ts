@@ -57,3 +57,17 @@ export type GradeResult = z.infer<typeof GradeResult>;
 
 export const Clarification = z.object({ answer: z.string().trim().min(3).max(1500) });
 export type Clarification = z.infer<typeof Clarification>;
+
+/** A vision reading of up to a few pages. There is deliberately NO numeric confidence: the model says only what it could and could not read. */
+export const PageReading = z.object({
+  pages: z.array(z.object({
+    page: z.number().int().min(1).max(200),
+    blocks: z.array(z.object({
+      kind: z.enum(['text', 'math', 'table', 'diagram', 'handwriting', 'other']),
+      text: z.string().max(8000),
+      readable: z.boolean(),
+      note: z.string().max(300).optional(),
+    })).max(80),
+  })).min(1).max(8),
+});
+export type PageReading = z.infer<typeof PageReading>;

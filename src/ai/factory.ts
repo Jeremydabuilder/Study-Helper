@@ -14,5 +14,5 @@ export function buildProvider(cfg: AppConfig): LLMProvider | null {
     return new LLMProvider(new GroqTransport(cfg.groqKey, cfg.groqModel), { timeoutMs: cfg.aiTimeoutMs, tasks });
   }
   if (!cfg.anthropicKey) return null;
-  return new LLMProvider(new AnthropicTransport(cfg.anthropicKey, cfg.model, fetch, cfg.anthropicBaseUrl), { timeoutMs: cfg.aiTimeoutMs, tasks });
+  return new LLMProvider(new AnthropicTransport(cfg.anthropicKey, cfg.model, fetch, cfg.anthropicBaseUrl), { timeoutMs: cfg.aiTimeoutMs, tasks, ocr: cfg.ocr.enabled ? { model: cfg.ocr.model ?? undefined, maxOutputTokens: cfg.ocr.maxOutputTokens } : undefined });
 }

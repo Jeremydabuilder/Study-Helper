@@ -14,6 +14,7 @@ import { setFlagDecision } from './services/sourceSafety';
 import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfile, getSetting, getWeights, setSetting, usageReport } from './services/common';
 import * as content from './services/content';
 import * as files from './services/files';
+import * as ocr from './services/ocr';
 import * as practice from './services/practice';
 import * as plan from './services/plan';
 import * as mem from './services/memory';
@@ -96,7 +97,9 @@ export function createApp(rt: Runtime) {
   app.get('/api/files/:id', h((ctx, req, res) => { const f = files.getFile(ctx, req.params.id); res.setHeader('Content-Type', f.mime); res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`); res.setHeader('Cache-Control', 'private, max-age=3600'); res.send(f.data); }));
   app.post('/api/sources/:id/pages/reviewed', h((ctx, req) => files.markReviewed(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(200) }).parse(req.body).pages)));
   app.post('/api/sources/:id/discard-replacement', h((ctx, req) => files.discardPending(ctx, req.params.id)));
-  app.get('/api/sources/:id/review', h((ctx, req) => files.reviewPages(ctx, req.params.id)));
+  app.post('/api/sources/:id/ocr/preview', h((ctx, req) => ocr.ocrDisclosure(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(60).optional() }).parse(req.body ?? {}).pages)));
+  app.post('/api/sources/:id/ocr', h((ctx, req) => { const b = z.object({ pages: z.array(z.number().int()).max(60).optional(), consentToken: z.string(), overwrite: z.boolean().optional() }).parse(req.body); return ocr.runOcr(ctx, req.params.id, b); }));
+  app.get('/api/sources/:id/review', h((ctx, req) => { const r = files.reviewPages(ctx, req.params.id); return r ? { ...r, ocr: ocr.ocrAvailability(ctx) } : r; }));
   app.put('/api/sources/:id/pages/:n', h((ctx, req) => { const b = z.object({ text: z.string(), baseRev: z.number().int() }).parse(req.body); return files.savePage(ctx, req.params.id, Number(req.params.n), b.text, b.baseRev); }));
   app.post('/api/sources/:id/confirm', h((ctx, req) => files.confirmSource(ctx, req.params.id, { acknowledgeEmptyPages: bool(req.body?.acknowledgeEmptyPages) })));
   app.get('/api/sources/:id', h((ctx, req) => content.getSource(ctx, req.params.id)));
