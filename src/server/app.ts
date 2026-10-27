@@ -15,6 +15,7 @@ import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfi
 import * as content from './services/content';
 import * as files from './services/files';
 import { resolveQuestion } from './services/questions';
+import { firstUse } from './services/firstUse';
 import * as ocr from './services/ocr';
 import * as practice from './services/practice';
 import * as plan from './services/plan';
@@ -212,6 +213,7 @@ export function createApp(rt: Runtime) {
       boundary: 'Local single-user app with no login. Do not expose this server to a network until authentication and per-user data isolation exist.',
     };
   }));
+  app.get('/api/first-use', h((ctx) => firstUse(ctx)));
   app.get('/api/ai/usage', h((ctx) => usageReport(ctx)));
   app.post('/api/ai/verify', h(async (ctx, req) => {
     if (ctx.workspace === 'demo') throw new HttpError(409, 'demo_workspace', 'The sample workspace never calls a paid AI model.');

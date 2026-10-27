@@ -38,3 +38,14 @@ describe('deterministic contradiction checks (heuristics: a hit means "check thi
     expect(looksInterpretive('English', 'Which words are in the first sentence?', 'multiple_choice')).toBe(false);
   });
 });
+
+describe('spelling is not graded by the offline keyword check', () => {
+  it('a one-letter slip in a longer word still matches; short words and different words do not', async () => {
+    const { fuzzyHas } = await import('../src/ai/offline');
+    expect(fuzzyHas('chlorophyl absorbs light', 'chlorophyll')).toBe(true);
+    expect(fuzzyHas('photosynthesys makes glucose', 'photosynthesis')).toBe(true);
+    expect(fuzzyHas('cat sat', 'car')).toBe(false);
+    expect(fuzzyHas('stoma', 'stomata')).toBe(true);
+    expect(fuzzyHas('mitochondria', 'chloroplast')).toBe(false);
+  });
+});

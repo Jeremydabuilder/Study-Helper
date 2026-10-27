@@ -131,6 +131,22 @@ const CAL_STATE: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; tex
 };
 const usd = (x: number) => `$${x < 0.01 && x > 0 ? x.toFixed(4) : x.toFixed(2)}`;
 
+const STEP_CHIP: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; text: string }> = {
+  done: { tone: 'good', text: 'Done' }, todo: { tone: 'neutral', text: 'To do' }, waiting: { tone: 'warn', text: 'Waiting' }, problem: { tone: 'bad', text: 'Problem' }, skipped: { tone: 'neutral', text: 'Skipped' },
+};
+function FirstUse() {
+  const f = useApi<any>('/first-use');
+  if (!f.data) return null;
+  return (
+    <section className="card" aria-labelledby="fu-h"><h2 id="fu-h">First real session</h2>
+      <p className="small muted">{f.data.done} of {f.data.total} steps done. {f.data.note}</p>
+      <ol className="small" style={{ paddingLeft: 18 }}>
+        {f.data.steps.map((s: any) => <li key={s.id} className="mb-s"><strong>{s.title}</strong> <Chip tone={STEP_CHIP[s.state].tone}>{STEP_CHIP[s.state].text}</Chip><br /><span className="muted">{s.detail}</span></li>)}
+      </ol>
+    </section>
+  );
+}
+
 function SetupTab() {
   const st = useApi<any>('/status');
   const us = useApi<any>('/ai/usage');
@@ -147,6 +163,7 @@ function SetupTab() {
   const verify = async (level: 'connection' | 'output') => { setVerifying(true); setVres(null); try { setVres(await post('/ai/verify', { level })); } catch (e) { setVres({ error: (e as ApiError).message }); } finally { setVerifying(false); st.reload(); us.reload(); } };
   const pctSpent = Math.min(100, (u.spentUsd / Math.max(u.budgetUsd, 0.0001)) * 100);
   return (<>
+    <FirstUse key={ai.mode} />
     <section className="card" aria-labelledby="ai-h"><h2 id="ai-h">AI</h2>
       <p><Chip tone={m.tone}>{m.text}</Chip> <span className="muted small">{ai.label}</span></p>
       <p className="small muted">{ai.detail}</p>
