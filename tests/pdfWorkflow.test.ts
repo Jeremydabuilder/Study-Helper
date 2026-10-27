@@ -198,3 +198,16 @@ describe('corrections and re-upload do not leave stale evidence behind', () => {
   });
 });
 const sub = (c: { id: string }) => db().get<any>('SELECT subject_id s FROM concepts WHERE id=?', c.id).s as string;
+
+describe('offline concept proposals from a real packet', () => {
+  it('tags the absolute-value inequality skill and does not invent unrelated math skills from incidental mentions', async () => {
+    const { OfflineProvider } = await import('../src/ai/offline');
+    const { extractPdf } = await import('../src/server/pdf');
+    const { chunkText } = await import('../src/core/sources');
+    const r = await extractPdf(ALGEBRA);
+    const o = await new OfflineProvider().extractConcepts({ subjectName: 'Math', maxConcepts: 12, chunks: chunkText(r.pages.map((p) => p.text).join('\f'), { paged: true }).map((c) => ({ id: String(c.idx), label: c.label, text: c.text })) });
+    const tags = o.concepts.map((c) => c.skill_tag).filter(Boolean);
+    expect(tags).toContain('math.abs_inequality');
+    expect(tags).not.toContain('math.linear_inequality'); expect(tags).not.toContain('math.sets');
+  });
+});

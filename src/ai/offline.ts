@@ -18,7 +18,7 @@ const top = (s: string, n = 3) => {
 
 const MATH_RULES: [RegExp, MathSkill][] = [
   [/compound inequalit/i, 'math.compound_inequality'],
-  [/absolute value[^.\n]*inequalit|inequalit[^.\n]*absolute value/i, 'math.abs_inequality'],
+  [/absolute value[^.\n]*(inequalit|less than|greater than|farther|closer)|inequalit[^.\n]*absolute value/i, 'math.abs_inequality'],
   [/absolute value/i, 'math.abs_equation'],
   [/inequalit/i, 'math.linear_inequality'],
   [/(linear|one-step|two-step|multi-step|solving)[^.\n]{0,20}equation/i, 'math.linear_equation'],
@@ -44,12 +44,16 @@ export class OfflineProvider implements AIProvider {
     // math skills first so they get generators. Prefer a "Term: definition" line over any other mention (headings mention everything).
     const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
     const defLine = /^[-*•]?\s*\**([A-Za-z][^:]{2,60}):\s+(.{15,})$/;
+    const usedLines = new Set<string>();
     for (const [re, tag] of MATH_RULES) {
       if (out.some((c) => c.skill_tag === tag)) continue;
-      const cands = lines.filter((l) => re.test(l.replace(/^[^:]{2,60}:/, (m) => m)));
-      const def = cands.find((l) => { const m = l.match(defLine); return !!m && re.test(m[1]); }) ?? cands.find((l) => defLine.test(l));
+      // a line already used for a more specific skill is not reused (e.g. an absolute-value line is not also 'linear inequalities')
+      const cands = lines.filter((l) => !usedLines.has(l) && re.test(l));
+      const def = cands.find((l) => { const m = l.match(defLine); return !!m && re.test(m[1]); });
       const best = def ?? cands[0];
       if (!best) continue;
+      if (!def && !(cands.length >= 2 && !lines.some((l) => defLine.test(l)))) continue; // incidental mentions only count in notes with no definition lines at all
+      usedLines.add(best);
       const m = best.match(defLine);
       add(MATH_SKILLS[tag], (m ? m[2] : best).trim(), best, tag);
     }
