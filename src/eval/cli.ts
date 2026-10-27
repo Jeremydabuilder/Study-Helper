@@ -28,7 +28,7 @@ async function main() {
     reports.push(await runEval({ provider: new OfflineProvider(), label: 'offline (no AI)', only, limit }));
   } else {
     const probe = buildProvider(cfg);
-    if (!probe) { console.error('Live evaluation NOT run: no AI provider is configured (set ANTHROPIC_API_KEY, or AI_PROVIDER=groq with GROQ_API_KEY and GROQ_MODEL). No results were produced.'); process.exit(2); }
+    if (!probe) { console.error('Live evaluation NOT run: no AI provider is configured (set ANTHROPIC_API_KEY, or AI_PROVIDER=groq with GROQ_API_KEY). No results were produced.'); process.exit(2); }
     if (!flag('confirm-spend')) { console.error(`Live evaluation NOT run: this makes paid requests to ${cfg.aiProvider}. Re-run with --confirm-spend (and optionally --budget-usd, default 0.50).`); process.exit(2); }
     const budget = val('budget-usd') ? Number(val('budget-usd')) : 0.5;
     const models = (val('models') ?? probe.modelFor('grade')).split(',').map((m) => m.trim()).filter(Boolean);

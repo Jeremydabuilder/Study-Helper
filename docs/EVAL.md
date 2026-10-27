@@ -53,7 +53,7 @@ Run the same set on Sonnet 5.5 and Haiku 5.5 (and Groq if you opted in), then:
 
 ## Groq (optional)
 
-`AI_PROVIDER=groq`, `GROQ_API_KEY`, `GROQ_MODEL` enable a transport for Groq's OpenAI-compatible API. It is **opt-in, has no default model, and has not been run against the live API**: Groq's official model list could not be reached when this was written and third-party sources disagreed, so no model ID is asserted. Pick one from Groq's current docs, add `AI_PRICE_IN_PER_MTOK`/`AI_PRICE_OUT_PER_MTOK` so cost estimates are meaningful, and run the evaluation first. When Groq is active, **student material is sent to Groq instead of Anthropic**; there is one active provider per server process, no automatic fallback, and no switching during a session (the Setup screen and every usage row show the provider and model).
+`AI_PROVIDER=groq` and `GROQ_API_KEY` enable a transport for Groq's OpenAI-compatible API with one fixed built-in model (`openai/gpt-oss-120b`, no model choice). It is **opt-in and has not been run against the live API**: Groq's official model list could not be reached and secondary sources disagreed, so treat the ID as a best guess. Add `AI_PRICE_IN_PER_MTOK`/`AI_PRICE_OUT_PER_MTOK` so cost estimates are meaningful, and run the evaluation first. When Groq is active, **student material is sent to Groq instead of Anthropic**; there is one active provider per server process, no automatic fallback, and no switching during a session (the Setup screen and every usage row show the provider and model).
 
 ## What has actually been measured so far
 

@@ -118,7 +118,7 @@ export function aiInfo(ctx: Ctx) {
   const w = usageWindow(ctx);
   const live = ctx.ai.live;
   const tasks = TASKS.map((t) => ({ task: t, model: ctx.ai.modelFor?.(t) ?? null, maxOutputTokens: ctx.cfg.aiTasks[t]?.maxOutputTokens ?? DEFAULT_TASKS[t].maxOutputTokens, effort: ctx.cfg.aiTasks[t]?.effort ?? DEFAULT_TASKS[t].effort ?? null }));
-  let mode: AiMode = 'offline', detail = ctx.cfg.aiProvider === 'groq' ? 'AI_PROVIDER=groq is set but GROQ_API_KEY and GROQ_MODEL are both required.' : 'No ANTHROPIC_API_KEY is set. Math works fully offline; other subjects use basic templates.';
+  let mode: AiMode = 'offline', detail = ctx.cfg.aiProvider === 'groq' ? 'AI_PROVIDER=groq is set but GROQ_API_KEY is missing.' : 'No ANTHROPIC_API_KEY is set. Math works fully offline; other subjects use basic templates.';
   let verification: ReturnType<typeof deriveVerification> = [];
   if (live) {
     verification = deriveVerification(ctx.db, ctx.ai);

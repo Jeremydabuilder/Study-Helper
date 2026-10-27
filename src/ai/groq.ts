@@ -1,8 +1,10 @@
 /**
  * Optional, opt-in Groq transport (OpenAI-compatible chat completions). Only constructed when the operator sets
- * AI_PROVIDER=groq with GROQ_API_KEY and GROQ_MODEL. There is no default model: the official Groq model list was
- * not reachable when this was written, so no model ID is asserted here. NOT verified against the live API.
+ * AI_PROVIDER=groq with GROQ_API_KEY. The model is fixed (GROQ_DEFAULT_MODEL): there is no model choice. The ID comes from a
+ * secondary source because Groq's own model page was not reachable from the build environment, so it is NOT verified against
+ * the live API. If Groq retires it, change this one constant.
  */
+export const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-120b';
 import { AIError } from './provider';
 import { LLMRequest, LLMResponse, LLMTransport, classifyFetchFailure, credentialFingerprint } from './llm';
 

@@ -142,7 +142,7 @@ describe('per-task model, output limits and effort', () => {
     expect(t.reqs[0]).toMatchObject({ model: 'claude-haiku-5-5', maxTokens: 1234, effort: 'low' });
   });
   it('configFromEnv reads models, limits, effort, budget; invalid effort is ignored; groq is never the default', () => {
-    const c = configFromEnv({ ANTHROPIC_API_KEY: 'k', GROQ_API_KEY: 'g', GROQ_MODEL: 'm', AI_MODEL_EXTRACT: 'claude-haiku-5-5', AI_MAX_OUTPUT_GRADE: '800', AI_EFFORT_GRADE: 'bogus', AI_EFFORT_EXTRACT: 'low', AI_DAILY_BUDGET_USD: '0.25' } as never);
+    const c = configFromEnv({ ANTHROPIC_API_KEY: 'k', GROQ_API_KEY: 'g', GROQ_MODEL: 'ignored', AI_MODEL_EXTRACT: 'claude-haiku-5-5', AI_MAX_OUTPUT_GRADE: '800', AI_EFFORT_GRADE: 'bogus', AI_EFFORT_EXTRACT: 'low', AI_DAILY_BUDGET_USD: '0.25' } as never);
     expect(c.aiProvider).toBe('anthropic'); expect(c.model).toBe('claude-sonnet-5-5');
     expect(c.aiTasks.extract).toMatchObject({ model: 'claude-haiku-5-5', effort: 'low' }); expect(c.aiTasks.grade).toMatchObject({ maxOutputTokens: 800 }); expect(c.aiTasks.grade!.effort).toBeUndefined();
     expect(c.aiDailyBudgetUsd).toBe(0.25);
@@ -173,10 +173,12 @@ describe('optional Groq transport (opt-in, unverified against the live API)', ()
     const p = new LLMProvider(mk(200, { choices: [{ message: { content: '{"concepts":[' }, finish_reason: 'length' }], usage: { prompt_tokens: 5, completion_tokens: 50 } }));
     await expect(p.extractConcepts({ subjectName: 'S', chunks: [], maxConcepts: 3 })).rejects.toMatchObject({ code: 'malformed' });
   });
-  it('is never selected implicitly: needs AI_PROVIDER=groq plus key AND model; no silent fallback', () => {
+  it('is never selected implicitly: needs AI_PROVIDER=groq plus a key; one fixed built-in model; no silent fallback', () => {
     expect(buildProvider(baseCfg({ groqKey: 'g', groqModel: 'm' }))).toBeNull(); // provider defaults to anthropic, which has no key
-    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: 'g', groqModel: null, anthropicKey: 'a' }))).toBeNull(); // no model => off, NOT anthropic
-    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: 'g', groqModel: 'm' }))!.name).toBe('groq:m');
+    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: null, anthropicKey: 'a' }))).toBeNull(); // groq selected but no key => off, NOT anthropic
+    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: 'g', groqModel: null }))!.name).toBe('groq:openai/gpt-oss-120b');
+    const c = configFromEnv({ AI_PROVIDER: 'groq', GROQ_API_KEY: 'g', GROQ_MODEL: 'user-choice' } as any);
+    expect(c.groqModel).toBe('openai/gpt-oss-120b'); // GROQ_MODEL is ignored: there is no model choice
   });
 });
 

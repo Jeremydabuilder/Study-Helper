@@ -1,3 +1,4 @@
+import { GROQ_DEFAULT_MODEL } from '../ai/groq';
 import { readFileSync, existsSync } from 'node:fs';
 import type { AppConfig } from './services/common';
 import type { Effort } from '../ai/llm';
@@ -32,7 +33,7 @@ export function configFromEnv(env = process.env): AppConfig {
   return {
     anthropicKey: g('ANTHROPIC_API_KEY'), anthropicBaseUrl: safeBase(g('ANTHROPIC_BASE_URL')),
     model: g('AI_MODEL') ?? g('ANTHROPIC_MODEL') ?? 'claude-sonnet-5-5',
-    aiProvider: provider, groqKey: g('GROQ_API_KEY'), groqModel: g('GROQ_MODEL'),
+    aiProvider: provider, groqKey: g('GROQ_API_KEY'), groqModel: g('GROQ_API_KEY') ? GROQ_DEFAULT_MODEL : null, // one fixed model: no choice to make
     aiTasks: { extract: strip(task('EXTRACT')) as never, generate: strip(task('GENERATE')) as never, grade: strip(task('GRADE')) as never },
     // Reading screenshots / scanned pages with a vision model is OFF unless the operator opts in explicitly (and uses Anthropic).
     ocr: { enabled: g('AI_OCR') === 'anthropic', model: g('AI_MODEL_OCR'), maxOutputTokens: num('AI_MAX_OUTPUT_OCR') ?? undefined },

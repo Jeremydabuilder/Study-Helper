@@ -14,8 +14,8 @@ export function diagnose(env: NodeJS.ProcessEnv = process.env): Finding[] {
 
   // AI
   if (cfg.aiProvider === 'groq') {
-    if (cfg.groqKey && cfg.groqModel) add('warn', `AI_PROVIDER=groq with model "${cfg.groqModel}": opt-in, NOT verified by this project against the live API. Check the model is currently supported in Groq's docs. Student material will be sent to Groq (not Anthropic).`);
-    else add('error', 'AI_PROVIDER=groq needs both GROQ_API_KEY and GROQ_MODEL (there is deliberately no default model). Until then the app runs in offline mode.');
+    if (cfg.groqKey) add('warn', `AI_PROVIDER=groq with the built-in model "${cfg.groqModel}" (fixed; there is no model choice). Opt-in and NOT verified against the live API. Student material will be sent to Groq (not Anthropic), and reading scans/screenshots is unavailable with Groq.`);
+    else add('error', 'AI_PROVIDER=groq needs GROQ_API_KEY. Until then the app runs in offline mode.');
   } else if (cfg.anthropicKey) {
     add('ok', 'ANTHROPIC_API_KEY is set (value not shown).');
     if (!/^sk-ant-/.test(cfg.anthropicKey)) add('warn', 'ANTHROPIC_API_KEY does not start with "sk-ant-"; double-check you pasted the whole key.');
