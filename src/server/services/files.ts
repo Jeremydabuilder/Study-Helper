@@ -13,7 +13,7 @@ const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 interface Extracted { kind: FileKind; pages: PdfPage[]; method: 'pdf_text' | 'none' }
 
 /** Validate the bytes and read whatever text layer exists. Never invents text. */
-async function readUpload(data: Buffer): Promise<Extracted> {
+async function readUpload(data: Buffer, signal?: AbortSignal): Promise<Extracted> {
   if (!data.length) throw new HttpError(400, 'empty_file', 'That file is empty.');
   const kind = sniff(data);
   if (!kind) throw new HttpError(415, 'unsupported_type', 'I can read PDF files, and PNG, JPEG or WebP screenshots. This file is none of those (the type is checked from the file’s contents, not its name). For other documents, export to PDF or paste the text.');
@@ -21,7 +21,7 @@ async function readUpload(data: Buffer): Promise<Extracted> {
   if (data.length > limit) throw new HttpError(413, 'file_too_large', `That ${kind === 'pdf' ? 'PDF' : 'image'} is ${(data.length / 1048576).toFixed(1)} MB; the limit is ${limit / 1048576} MB.`);
   if (kind !== 'pdf') return { kind, pages: [{ n: 1, text: '', warning: 'no_text' }], method: 'none' };
   try {
-    const r = await extractPdf(data);
+    const r = await extractPdf(data, { signal });
     return { kind, pages: r.pages, method: r.pages.some((p) => p.warning !== 'no_text') ? 'pdf_text' : 'none' };
   } catch (e) {
     if (e instanceof PdfError) throw new HttpError(e.code === 'too_many_pages' || e.code === 'too_long' ? 413 : e.code === 'timeout' ? 504 : 422, `pdf_${e.code}`, e.message);
@@ -89,9 +89,9 @@ export function applyText(ctx: Ctx, src: any, text: string, kind: 'corrected' | 
   return { rev, reconcile: src.status === 'confirmed' ? reconcile(ctx, src.id, text, chunks) : null };
 }
 
-export async function uploadFile(ctx: Ctx, subjectId: string, o: { data: Buffer; filename: string; title?: string; kind?: string }) {
+export async function uploadFile(ctx: Ctx, subjectId: string, o: { data: Buffer; filename: string; title?: string; kind?: string; signal?: AbortSignal }) {
   if (!ctx.db.get('SELECT 1 FROM subjects WHERE id = ?', subjectId)) throw new HttpError(404, 'not_found', 'Subject not found.');
-  const x = await readUpload(o.data);
+  const x = await readUpload(o.data, o.signal);
   const hash = sha(o.data);
   const dup = ctx.db.get<{ id: string }>('SELECT s.id FROM sources s JOIN source_files f ON f.id = s.file_id WHERE s.subject_id = ? AND f.sha256 = ?', subjectId, hash);
   if (dup) return { id: dup.id, duplicate: true };
@@ -226,11 +226,11 @@ export function discardPending(ctx: Ctx, sourceId: string) {
  * Replace the uploaded file with a newer copy. A confirmed material keeps using its current text until the student has reviewed and
  * confirmed the new extraction; a draft (never used) is replaced directly. Old text, files and edits stay in the revision history.
  */
-export async function replaceFile(ctx: Ctx, sourceId: string, o: { data: Buffer; filename: string }) {
+export async function replaceFile(ctx: Ctx, sourceId: string, o: { data: Buffer; filename: string; signal?: AbortSignal }) {
   const src = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', sourceId);
   if (!src) throw new HttpError(404, 'not_found', 'Material not found.');
   if (!src.file_id) throw new HttpError(409, 'not_file_based', 'Only materials uploaded from a file can be replaced by a file. Paste new text as a new material instead.');
-  const x = await readUpload(o.data);
+  const x = await readUpload(o.data, o.signal);
   const hash = sha(o.data);
   const w = working(ctx, src);
   if (ctx.db.get('SELECT 1 FROM source_files WHERE id = ? AND sha256 = ?', w.fileId, hash)) throw new HttpError(409, 'same_file', 'That is the same file that is already attached.');

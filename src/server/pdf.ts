@@ -87,15 +87,17 @@ const live = new Set<Worker>();
 export const pdfWorkerCount = () => live.size;
 
 interface RawPage { n: number; items: Item[] }
-function readRaw(data: Uint8Array, o: { timeoutMs: number; testDelayMs?: number }): Promise<{ pageCount: number; pages: RawPage[] }> {
+function readRaw(data: Uint8Array, o: { timeoutMs: number; testDelayMs?: number; signal?: AbortSignal }): Promise<{ pageCount: number; pages: RawPage[] }> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./pdfWorker.mjs', import.meta.url), {
       workerData: { data: new Uint8Array(data), maxPages: LIMITS.maxPages, maxChars: LIMITS.maxChars, testDelayMs: o.testDelayMs ?? 0 },
       resourceLimits: { maxOldGenerationSizeMb: 768 },
     });
     live.add(worker);
+    const onAbort = () => finish(() => reject(new PdfError('failed', 'Reading was cancelled.')));
     const pages: RawPage[] = []; let pageCount = 0, settled = false;
-    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); void worker.terminate().finally(() => { live.delete(worker); fn(); }); };
+    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); o.signal?.removeEventListener('abort', onAbort); void worker.terminate().finally(() => { live.delete(worker); fn(); }); };
+    if (o.signal?.aborted) queueMicrotask(onAbort); else o.signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => finish(() => reject(new PdfError('timeout', `Reading this PDF took longer than ${Math.round(o.timeoutMs / 1000)} seconds, so I stopped. Try a smaller file or split it into parts.`))), o.timeoutMs);
     worker.on('message', (m: any) => {
       if (m.type === 'pages') pageCount = m.pageCount;
@@ -108,8 +110,8 @@ function readRaw(data: Uint8Array, o: { timeoutMs: number; testDelayMs?: number 
   });
 }
 
-export async function extractPdf(data: Uint8Array, o: { timeoutMs?: number; testDelayMs?: number } = {}): Promise<{ pageCount: number; pages: PdfPage[] }> {
-  const raw = await readRaw(data, { timeoutMs: o.timeoutMs ?? LIMITS.timeoutMs, testDelayMs: o.testDelayMs });
+export async function extractPdf(data: Uint8Array, o: { timeoutMs?: number; testDelayMs?: number; signal?: AbortSignal } = {}): Promise<{ pageCount: number; pages: PdfPage[] }> {
+  const raw = await readRaw(data, { timeoutMs: o.timeoutMs ?? LIMITS.timeoutMs, testDelayMs: o.testDelayMs, signal: o.signal });
   const pages: PdfPage[] = [];
   let chars = 0;
   for (const rp of raw.pages) {

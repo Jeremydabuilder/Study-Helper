@@ -90,3 +90,21 @@ describe('memory changes teaching', () => {
     for (const ok of ['Mixed up with “Second Continental Congress”', 'Forgets to flip the inequality']) expect(looksLikeTrait(ok)).toBe(false);
   });
 });
+
+describe('memory shapes later reviews', () => {
+  it('a remembered confusion is checked again, with a question that tells the ideas apart, when the review comes due', async () => {
+    const { A, mcq } = await setup(); mcq('q1', 'Q1 First Congress?'); mcq('q2', 'Q2 First Congress again?');
+    const s1 = (await s.call('POST', '/api/sessions', { mode: 'practice', minutes: 10, conceptIds: [A] })).body.id;
+    await play(s1, wrongIdx); await s.call('POST', `/api/sessions/${s1}/finish`, {});
+    s.clock.now += 3 * 24 * HOURS;
+    const r = await s.call('POST', '/api/sessions', { goal: 'review', minutes: 10 });
+    expect(r.status).toBe(200);
+    const v = (await s.call('GET', `/api/sessions/${r.body.id}`)).body;
+    expect(v.concept.name).toBe('First Continental Congress');
+    expect(v.why).toMatch(/before \(saved in Memory\)/); expect(v.question.prompt).toMatch(/rather than/);
+    const ok = await play(r.body.id, rightIdx);
+    expect(ok.r.feedback.verdict).toBe('correct');
+    expect((await s.call('GET', '/api/memory')).body.memories.find((x: any) => x.appMade).check.state).toBe('improved');
+  });
+});
+const HOURS = 3600_000;

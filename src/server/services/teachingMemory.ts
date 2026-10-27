@@ -91,3 +91,13 @@ export function memoryStatus(ctx: Ctx, id: string, status: 'active' | 'dismissed
   ctx.db.run('UPDATE memories SET provenance = ?, updated_at = ? WHERE id = ?', JSON.stringify({ ...p, dismissed: status === 'dismissed', dismissedAt: status === 'dismissed' ? ctx.now() : null }), ctx.now(), id);
   return true;
 }
+
+/** Concepts with a remembered, not-yet-improved confusion or mistake: they go first in later sessions. */
+export function conceptsWithOpenNotes(ctx: Ctx): Set<string> {
+  const out = new Set<string>();
+  for (const m of ctx.db.all<any>('SELECT concept_id, provenance FROM memories WHERE deleted_at IS NULL AND concept_id IS NOT NULL')) {
+    const p = parse<MemoryProvenance | null>(m.provenance, null);
+    if (p?.origin === 'app' && !p.dismissed && p.check.state !== 'improved') out.add(m.concept_id);
+  }
+  return out;
+}

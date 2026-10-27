@@ -37,6 +37,8 @@ const WeightsSchema = z.object(Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).m
 
 const UPLOAD_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'application/octet-stream'];
 const isUploadRoute = (req: Request) => req.method === 'POST' && (/^\/api\/subjects\/[^/]+\/files$/.test(req.path) || /^\/api\/sources\/[^/]+\/replace$/.test(req.path));
+/** Aborts when the client goes away before the response finished, so abandoned uploads stop consuming a worker. */
+const cancelOnClose = (res: Response) => { const ac = new AbortController(); res.on('close', () => { if (!res.writableEnded) ac.abort(); }); return ac.signal; };
 const rawUpload = express.raw({ type: UPLOAD_TYPES, limit: '16mb' });
 
 export function createApp(rt: Runtime) {
@@ -92,8 +94,8 @@ export function createApp(rt: Runtime) {
   app.patch('/api/subjects/:id', h((ctx, req) => content.updateSubject(ctx, req.params.id, z.object({ name: z.string().optional(), description: z.string().optional(), aliases: z.array(z.string()).optional(), archived: z.boolean().optional() }).parse(req.body))));
   app.delete('/api/subjects/:id', h((ctx, req) => content.deleteSubject(ctx, req.params.id)));
   app.post('/api/subjects/:id/sources', h((ctx, req) => content.addSource(ctx, req.params.id, z.object({ title: z.string().optional(), kind: z.string().optional(), text: z.string(), origin: z.string().optional() }).parse(req.body))));
-  app.post('/api/subjects/:id/files', rawUpload, h((ctx, req) => content.noDemoUpload(ctx) ?? files.uploadFile(ctx, req.params.id, { data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? ''), title: req.query.title as string | undefined, kind: req.query.kind as string | undefined })));
-  app.post('/api/sources/:id/replace', rawUpload, h((ctx, req) => files.replaceFile(ctx, req.params.id, { data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? '') })));
+  app.post('/api/subjects/:id/files', rawUpload, h((ctx, req, res) => content.noDemoUpload(ctx) ?? files.uploadFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? ''), title: req.query.title as string | undefined, kind: req.query.kind as string | undefined })));
+  app.post('/api/sources/:id/replace', rawUpload, h((ctx, req, res) => files.replaceFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? '') })));
   app.get('/api/files/:id', h((ctx, req, res) => { const f = files.getFile(ctx, req.params.id); res.setHeader('Content-Type', f.mime); res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`); res.setHeader('Cache-Control', 'private, max-age=3600'); res.send(f.data); }));
   app.post('/api/sources/:id/pages/reviewed', h((ctx, req) => files.markReviewed(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(200) }).parse(req.body).pages)));
   app.post('/api/sources/:id/discard-replacement', h((ctx, req) => files.discardPending(ctx, req.params.id)));

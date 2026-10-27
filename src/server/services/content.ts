@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { AIError } from '../../ai/provider';
 import { isMathSkill } from '../../core/mathgen';
 import { chunkText, verifyQuotes, Support, looksLikeInjectedOutput } from '../../core/sources';
+import { assessSupport, contentWords, keyGroups } from '../../core/grounding';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, parse } from './common';
 import { sweepOrphanFiles } from './files';
@@ -112,7 +113,14 @@ export async function extractConcepts(ctx: Ctx, sourceId: string, opts: { useOff
       const verified = vq.verified.filter((x) => !inBad.includes(x)), rejected = vq.rejected;
       rejectedQuotes += rejected.length;
       let support: Support, note: string;
-      if (verified.length) { support = 'source'; note = `${verified.length} supporting quote${verified.length > 1 ? 's' : ''} found in “${src.title}”.`; }
+      // A quote that exists is not the same as a quote that supports the concept: for model-proposed concepts, require the concept's own key words in the quoted passage.
+      const supported = !provider.live || verified.length === 0 || verified.some((v) => {
+        const ch = vchunks.find((r: any) => v.start >= r.start && v.start < r.end);
+        const groups = keyGroups({ kind: 'explain', keyPoints: contentWords(c.name).map((w) => ({ point: w, keywords: [w] })) });
+        return !groups.length || assessSupport(`${ch?.text ?? ''} ${v.quote}`, { kind: 'explain', keyPoints: contentWords(c.name).map((w) => ({ point: w, keywords: [w] })) }).support === 'supported';
+      });
+      if (verified.length && !supported) { support = 'unverified'; note = `A quote from “${src.title}” was attached, but it does not clearly mention “${c.name}”, so the link is unconfirmed. Check it against your material.`; }
+      else if (verified.length) { support = 'source'; note = `${verified.length} supporting quote${verified.length > 1 ? 's' : ''} found in “${src.title}”.`; }
       else if (provider.live) { support = (c.quotes ?? []).length ? 'unverified' : 'ai'; note = (c.quotes ?? []).length ? 'The AI quoted text that could not be found in your material, so the quote was discarded.' : 'Not found in your material — this is background knowledge added by the AI. Verify it.'; }
       else { support = 'unverified'; note = 'No exact supporting text located. Check it against your material.'; }
       const id = uid();

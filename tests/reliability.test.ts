@@ -86,3 +86,32 @@ describe('a quote that exists is not the same as support', () => {
     expect(db.get<any>('SELECT COUNT(*) n FROM questions').n).toBe(0);
   });
 });
+
+describe('a concept’s quote must mention the concept, not merely exist', () => {
+  it('a real quote that does not mention the proposed concept leaves its support unconfirmed', async () => {
+    const t: LLMTransport = { provider: 'fake', defaultModel: 'fake', complete: async () => JSON.stringify({ concepts: [
+      { name: 'Soil Conservation Service', summary: 'Created in 1935.', quotes: ['created in 1935 to teach farmers methods that hold soil'] },
+      { name: 'Dorothea Lange photographs', summary: 'Photographs of the era.', quotes: ['a 1934 law that regulated grazing on public land'] }] }) };
+    s = await startServer({ llm: new LLMProvider(t) });
+    const sub = (await s.call('POST', '/api/subjects', { name: 'History' })).body.id;
+    const src = (await s.call('POST', `/api/subjects/${sub}/sources`, { title: 'Packet', text: SOURCE })).body.id;
+    await s.call('POST', `/api/sources/${src}/extract`, {});
+    const cs = (await s.call('GET', `/api/subjects/${sub}`)).body.concepts;
+    expect(cs.find((c: any) => c.name === 'Soil Conservation Service').support).toBe('source');
+    const weak = cs.find((c: any) => c.name === 'Dorothea Lange photographs');
+    expect(weak.support).toBe('unverified'); expect(weak.supportNote).toMatch(/does not clearly mention/);
+  });
+});
+
+describe('cancelling an upload stops the extraction', () => {
+  it('an aborted signal terminates the worker immediately', async () => {
+    const ac = new AbortController();
+    const p = extractPdf(ALGEBRA, { testDelayMs: 30_000, signal: ac.signal, timeoutMs: 60_000 });
+    setTimeout(() => ac.abort(), 100);
+    await expect(p).rejects.toMatchObject({ code: 'failed', message: /cancelled/ });
+    expect(pdfWorkerCount()).toBe(0);
+    const pre = new AbortController(); pre.abort();
+    await expect(extractPdf(ALGEBRA, { testDelayMs: 30_000, signal: pre.signal })).rejects.toMatchObject({ message: /cancelled/ });
+    expect(pdfWorkerCount()).toBe(0);
+  });
+});

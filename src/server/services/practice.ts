@@ -161,7 +161,7 @@ async function advance(ctx: Ctx, session: any, opts: { useOffline?: boolean } = 
   let act2 = act;
   if (!act2 || !act2.focus) { // nothing from the last answer: a saved, unchecked confusion on THIS concept still shapes the next question
     const askedDisc = ctx.db.get<any>("SELECT COUNT(*) n FROM attempts a JOIN questions q ON q.id=a.question_id WHERE a.session_id=? AND a.concept_id=? AND q.focus='discriminate'", session.id, slot.conceptId).n > 0;
-    act2 = (slot.purpose !== 'review' && slot.purpose !== 'exam' ? memoryAction(ctx, slot.conceptId, askedDisc) : null) ?? act;
+    act2 = (slot.purpose !== 'exam' ? memoryAction(ctx, slot.conceptId, askedDisc) : null) ?? act;
   }
   const sameConcept = !!act2 && (slot.conceptId === last?.concept_id || !!act2.prerequisite || act2 !== act);
   const q = await pickQuestion(ctx, { conceptId: slot.conceptId, purpose: slot.done > 0 && slot.purpose === 'practice' ? 'practice' : slot.purpose, exclude: asked, lastKind, easier: !!(lastWrong && (lastWrong.idk || (lastWrong.correctness ?? 1) < 0.4)), useOffline: opts.useOffline, action: sameConcept && act2?.focus ? act2 : undefined });

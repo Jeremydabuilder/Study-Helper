@@ -10,6 +10,7 @@
 import { planToday } from '../../core/priority';
 import { Ctx, HttpError, getProfile } from './common';
 import { buildPlanInputs } from './plan';
+import { conceptsWithOpenNotes } from './teachingMemory';
 
 export type Goal = 'test' | 'understand' | 'wrong' | 'review';
 export const GOAL_LABEL: Record<Goal, string> = { test: 'Prepare for a test', understand: 'Understand this material', wrong: 'Review what I keep getting wrong', review: 'Review what’s due' };
@@ -70,6 +71,8 @@ export function buildGoalSession(ctx: Ctx, o: { goal: Goal; minutes: number; sub
   const plan = planToday({ ...inputs, minutes: 600, concepts: inputs.concepts.filter((c) => pool.has(c.id)), maxTasks: 12, maxReviewsPerDay: 6 });
   const order = plan.tasks.map((t) => t.conceptId);
   for (const id of ids) if (!order.includes(id)) order.push(id);
+  const noted = conceptsWithOpenNotes(ctx); // memory shapes later sessions: remembered, unchecked mistakes come first
+  order.sort((a, b) => Number(noted.has(b)) - Number(noted.has(a)));
   const stateOf = new Map(ctx.db.all<any>('SELECT concept_id, level, due_at FROM concept_state').map((r) => [r.concept_id as string, r]));
   const now = ctx.now();
   const Q = questionBudget(minutes);
