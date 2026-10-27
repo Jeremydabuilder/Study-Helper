@@ -93,6 +93,8 @@ export function createApp(rt: Runtime) {
   app.post('/api/subjects/:id/files', rawUpload, h((ctx, req) => content.noDemoUpload(ctx) ?? files.uploadFile(ctx, req.params.id, { data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? ''), title: req.query.title as string | undefined, kind: req.query.kind as string | undefined })));
   app.post('/api/sources/:id/replace', rawUpload, h((ctx, req) => files.replaceFile(ctx, req.params.id, { data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? '') })));
   app.get('/api/files/:id', h((ctx, req, res) => { const f = files.getFile(ctx, req.params.id); res.setHeader('Content-Type', f.mime); res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`); res.setHeader('Cache-Control', 'private, max-age=3600'); res.send(f.data); }));
+  app.post('/api/sources/:id/pages/reviewed', h((ctx, req) => files.markReviewed(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(200) }).parse(req.body).pages)));
+  app.post('/api/sources/:id/discard-replacement', h((ctx, req) => files.discardPending(ctx, req.params.id)));
   app.get('/api/sources/:id/review', h((ctx, req) => files.reviewPages(ctx, req.params.id)));
   app.put('/api/sources/:id/pages/:n', h((ctx, req) => { const b = z.object({ text: z.string(), baseRev: z.number().int() }).parse(req.body); return files.savePage(ctx, req.params.id, Number(req.params.n), b.text, b.baseRev); }));
   app.post('/api/sources/:id/confirm', h((ctx, req) => files.confirmSource(ctx, req.params.id, { acknowledgeEmptyPages: bool(req.body?.acknowledgeEmptyPages) })));

@@ -23,9 +23,15 @@ export interface GenerateInput {
   studentNotes: string[];
   practice: number; heldout: number;
   avoidPrompts: string[]; seed: number;
+  /** Another concept the student tends to confuse this one with (for discrimination questions). */
+  contrast?: { name: string; summary: string };
+  /** Rubric points the student's last answer missed (for gap-filling questions). */
+  gapPoints?: string[];
+  /** Regeneration after unsupported output: quote only what the excerpts literally say. */
+  strict?: boolean;
   /** The student's own description of their grade/course (data, may be empty). Used to pitch reading level and difficulty. */
   gradeLevel?: string;
-  focus?: 'diagnostic' | 'practice' | 'transfer' | 'repair';
+  focus?: 'diagnostic' | 'practice' | 'transfer' | 'repair' | 'discriminate' | 'gap' | 'simpler';
 }
 export interface GradeInput {
   question: { prompt: string; kind: string; rubric: { point: string; keywords: string[] }[]; sampleAnswer?: string };

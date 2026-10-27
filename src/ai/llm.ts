@@ -50,6 +50,15 @@ export function extractJson(text: string): unknown {
 
 const esc = (s: string) => s.replace(/<\/?(source|student_answer|notes)[^>]*>/gi, '[tag removed]');
 
+function focusRule(i: GenerateInput) {
+  const parts: string[] = [];
+  if (i.focus === 'discriminate' && i.contrast) parts.push(`The student tends to mix this concept up with "${esc(i.contrast.name)}" (${esc(i.contrast.summary)}). Write questions that make them tell the two apart (compare, or multiple choice where each wrong option is true of the other concept).`);
+  if (i.focus === 'gap' && i.gapPoints?.length) parts.push(`The student's last answer missed these ideas: ${i.gapPoints.map((g) => `"${esc(g)}"`).join('; ')}. Ask about those ideas directly, one idea per question, without repeating the earlier question.`);
+  if (i.focus === 'simpler') parts.push('The student is struggling. Write EASIER questions about the basic idea, with a concrete example, using the most important single fact.');
+  if (i.strict) parts.push('STRICT: every question must include a source_quote copied word for word from the excerpts, and its answer must be stated in that quote. Write fewer questions rather than inventing support.');
+  return parts.length ? parts.join(' ') + ' ' : '';
+}
+
 export class LLMProvider implements AIProvider {
   readonly live = true;
   readonly name: string;
@@ -149,7 +158,7 @@ ${src}
   generateQuestions(i: GenerateInput, opts?: CallOpts) {
     const ex = i.excerpts.map((e) => `[${e.label}] ${esc(e.text)}`).join('\n');
     return this.call('generate', 'generate', QuestionBatch, `Subject: ${i.subjectName}. Concept: ${i.concept.name} — ${i.concept.summary}
-Write ${i.practice + i.heldout} NEW questions (${i.heldout} of them should be held back for later checks: ask about the same idea from a different angle or situation, because new wording alone is not a new question). Student level: <notes>${esc(i.gradeLevel || 'not stated')}</notes> — match reading level and difficulty to it; do not make questions harder than the source material supports. Purpose: ${i.focus ?? 'practice'}. Mix question kinds to fit the skill (do not make everything multiple choice). Use only facts supported by the source excerpts; add a "source_quote" (verbatim) when a question relies on the source.
+Write ${i.practice + i.heldout} NEW questions (${i.heldout} of them should be held back for later checks: ask about the same idea from a different angle or situation, because new wording alone is not a new question). Student level: <notes>${esc(i.gradeLevel || 'not stated')}</notes> — match reading level and difficulty to it; do not make questions harder than the source material supports. Purpose: ${i.focus ?? 'practice'}. ${focusRule(i)}Mix question kinds to fit the skill (do not make everything multiple choice). Use only facts supported by the source excerpts; add a "source_quote" (verbatim) when a question relies on the source.
 Kinds: multiple_choice (choices[{text,misconception?}], correct_choice), short_answer/explain/compare/cause_effect/evidence (need rubric.key_points[{point,keywords[]}]), math (answer, math_type set|expr|number, and relation = the equation/inequality as plain text like "|2x-3| = 7" whenever possible so the app can verify your answer).
 Each question: hints (weak then strong), worked_example (a DIFFERENT example than the question), explanation of the key idea, difficulty 1-3.
 Known misconceptions to probe: ${i.misconceptions.join(' | ') || 'none'}.

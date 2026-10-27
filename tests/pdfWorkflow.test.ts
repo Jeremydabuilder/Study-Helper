@@ -157,7 +157,7 @@ describe('corrections and re-upload do not leave stale evidence behind', () => {
     const { id } = await built();
     const qs = db().all<any>('SELECT id, prompt, source_note FROM questions ORDER BY rowid');
     expect(qs).toHaveLength(2);
-    expect(qs[0].source_note).toMatch(/p\. 2/); expect(qs[1].source_note).toBe('');
+    expect(qs[0].source_note).toMatch(/From your material.*p\. 2/); expect(qs[1].source_note).toBe('Not tied to a passage in your material.');
     expect(db().get<any>('SELECT label, stale FROM question_evidence WHERE source_id=?', id)).toMatchObject({ stale: 0, label: expect.stringMatching(/^p\. 2/) });
   });
   it('editing around a quote keeps it linked; editing the quote itself retires the question and marks the concept’s support stale', async () => {
@@ -176,20 +176,51 @@ describe('corrections and re-upload do not leave stale evidence behind', () => {
     expect(q[0].retired_at).not.toBeNull(); expect(q[1].retired_at).toBeNull(); // only the question built on the changed passage
     expect(db().get<any>('SELECT stale FROM concept_refs').stale).toBe(1);
   });
-  it('replacing the file re-reads the text, keeps history, and reports what no longer matches', async () => {
+  it('replacing a CONFIRMED file waits for review: the old text stays in use until the new extraction is confirmed', async () => {
     const { sub: subId, id } = await built();
+    const before = db().get<any>('SELECT text, rev FROM sources WHERE id=?', id);
     const r = await upload(subId, ALGEBRA, { path: `/api/sources/${id}/replace`, name: 'new.pdf' });
-    expect(r.status).toBe(200); expect(r.body.reconcile).toMatchObject({ refsStale: 1, questionsRetired: 1 });
-    expect(r.body.pageCount).toBe(3);
-    expect(db().get<any>('SELECT COUNT(*) n FROM source_revisions WHERE source_id=?', id).n).toBe(2);
+    expect(r.status).toBe(200); expect(r.body).toMatchObject({ pending: true, pageCount: 3 });
+    // nothing changed yet: same text, same questions, same evidence
+    expect(db().get<any>('SELECT text, rev FROM sources WHERE id=?', id)).toEqual(before);
+    expect(db().get<any>('SELECT COUNT(*) n FROM questions WHERE retired_at IS NOT NULL').n).toBe(0);
+    expect(db().get<any>('SELECT stale FROM concept_refs').stale).toBe(0);
+    const { generateQuestions: gen } = await import('../src/server/services/questions');
+    const cid = db().get<any>('SELECT id FROM concepts').id;
+    await gen(s.rt.ctx('real'), cid, { focus: 'practice' }).catch(() => {}); // new questions still come from the CONFIRMED text
+    // the review screen shows the pending file; edits go to it, not to the live text
+    const rv = (await s.call('GET', `/api/sources/${id}/review`)).body;
+    expect(rv).toMatchObject({ pending: true, status: 'confirmed' }); expect(rv.pages).toHaveLength(3); expect(rv.pages[0].text).toMatch(/Absolute value/);
+    await s.call('PUT', `/api/sources/${id}/pages/3`, { text: 'Practice problems reviewed.', baseRev: rv.rev });
+    expect(db().get<any>('SELECT text FROM sources WHERE id=?', id).text).toBe(before.text);
+    // confirming applies it and reports what no longer matches
+    const c = await s.call('POST', `/api/sources/${id}/confirm`, {});
+    expect(c.body).toMatchObject({ status: 'confirmed', replaced: true, reconcile: { refsStale: 1, questionsRetired: 1 } });
+    expect(db().get<any>('SELECT COUNT(*) n FROM source_pending').n).toBe(0);
+    expect(db().get<any>('SELECT COUNT(*) n FROM source_revisions WHERE source_id=?', id).n).toBeGreaterThanOrEqual(2);
     expect(db().get<any>('SELECT COUNT(*) n FROM source_files').n).toBe(2); // the old original stays in history
-    const same = await upload(subId, ALGEBRA, { path: `/api/sources/${id}/replace`, name: 'again.pdf' });
-    expect(same.status).toBe(409);
-    // retired questions are never served again
+    expect((await upload(subId, ALGEBRA, { path: `/api/sources/${id}/replace`, name: 'again.pdf' })).status).toBe(409);
     const { pickQuestion } = await import('../src/server/services/questions');
-    const conceptId = db().get<any>('SELECT id FROM concepts').id;
-    const picked = await pickQuestion(s.rt.ctx('real'), { conceptId, purpose: 'transfer', exclude: [] });
+    const picked = await pickQuestion(s.rt.ctx('real'), { conceptId: cid, purpose: 'transfer', exclude: [] });
     expect(picked.prompt).toMatch(/April 14, 1935/); // the question tied to the replaced passage is skipped
+  });
+  it('a pending replacement can be discarded without touching the live material', async () => {
+    const { sub: subId, id } = await built();
+    await upload(subId, ALGEBRA, { path: `/api/sources/${id}/replace`, name: 'new.pdf' });
+    await s.call('POST', `/api/sources/${id}/discard-replacement`, {});
+    expect((await s.call('GET', `/api/sources/${id}/review`)).body.pending).toBe(false);
+    expect(db().get<any>('SELECT COUNT(*) n FROM source_files').n).toBe(1);
+  });
+  it('historical attempts survive when their question is retired by a source change', async () => {
+    const { id, concept } = await built();
+    const qid = db().get<any>('SELECT id FROM questions ORDER BY rowid').id;
+    db().run("INSERT INTO attempts (id,session_id,question_id,concept_id,answer_text,correctness,grade_status,grade_source,created_at) VALUES ('a1',NULL,?,?,?,1,'graded','deterministic',?)", qid, concept.id, 'it drew attention', Date.now());
+    const rv = (await s.call('GET', `/api/sources/${id}/review`)).body;
+    await s.call('PUT', `/api/sources/${id}/pages/2`, { text: rv.pages[1].text.replace('drew national attention to the crisis', 'was mostly ignored'), baseRev: rv.rev });
+    expect(db().get<any>('SELECT retired_at FROM questions WHERE id=?', qid).retired_at).not.toBeNull();
+    expect(db().get<any>("SELECT answer_text FROM attempts WHERE id='a1'").answer_text).toBe('it drew attention'); // history kept
+    const h = (await s.call('GET', '/api/history')).body;
+    expect(JSON.stringify(h)).toContain('it drew attention');
   });
   it('deleting the material removes its stored file too', async () => {
     const { id } = await built();

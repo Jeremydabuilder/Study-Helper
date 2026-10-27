@@ -96,7 +96,7 @@ function QuestionCard({ sid, view, onAnswered }: { sid: string; view: any; onAns
   return (
     <form className="card" onSubmit={(e) => { e.preventDefault(); if (canSubmit) send(); }} aria-labelledby="qp">
       <p id="qp" className="q-prompt">{q.prompt}</p>
-      {q.sourceNote && <p className="small muted">{q.sourceNote}</p>}
+      {q.sourceNote && <p className="small muted"><Chip tone={q.grounding === 'source' ? 'good' : q.grounding === 'weak' ? 'warn' : 'neutral'}>{q.grounding === 'source' ? 'Linked to your material' : q.grounding === 'weak' ? 'Source link unconfirmed' : 'General question'}</Chip> {q.sourceNote}</p>}
 
       {q.choices ? (
         <fieldset style={{ border: 'none', padding: 0, margin: 0 }} className="choices">

@@ -7,6 +7,8 @@
  *  - Reading order, paragraph breaks and superscripts are reconstructed from glyph positions, which is a best effort. Pages are
  *    returned separately so the student can compare each one with the original and correct it.
  */
+import { Worker } from 'node:worker_threads';
+
 export const LIMITS = { maxPdfBytes: 15 * 1024 * 1024, maxImageBytes: 10 * 1024 * 1024, maxPages: 60, maxChars: 150_000, timeoutMs: 30_000 };
 
 export type FileKind = 'pdf' | 'png' | 'jpeg' | 'webp';
@@ -80,39 +82,42 @@ function reflow(lines: Line[]): string {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => new Promise((res, rej) => {
-  const t = setTimeout(() => rej(new PdfError('timeout', `Reading this PDF took longer than ${Math.round(ms / 1000)} seconds, so I stopped. Try a smaller file or split it into parts.`)), ms);
-  p.then((v) => { clearTimeout(t); res(v); }, (e) => { clearTimeout(t); rej(e); });
-});
+/** Extraction runs in a worker thread so a timeout (or any other abort) can really terminate the work and free its memory. */
+const live = new Set<Worker>();
+export const pdfWorkerCount = () => live.size;
 
-export async function extractPdf(data: Uint8Array): Promise<{ pageCount: number; pages: PdfPage[] }> {
-  const { getDocumentProxy } = await import('unpdf');
-  return withTimeout((async () => {
-    let doc;
-    try { doc = await getDocumentProxy(new Uint8Array(data), { isEvalSupported: false, useSystemFonts: false, verbosity: 0 } as any); }
-    catch (e: any) {
-      if (e?.name === 'PasswordException') throw new PdfError('encrypted', 'This PDF is password-protected. Remove the password (or print it to a new PDF) and upload it again.');
-      if (e?.name === 'InvalidPDFException' || e?.name === 'FormatError' || e?.name === 'MissingPDFException') throw new PdfError('corrupt', 'This file looks damaged or is not a readable PDF. Try opening and re-saving it, or upload a different copy.');
-      throw new PdfError('failed', 'This PDF could not be read.');
-    }
-    if (doc.numPages > LIMITS.maxPages) throw new PdfError('too_many_pages', `This PDF has ${doc.numPages} pages; the limit is ${LIMITS.maxPages}. Split it into smaller parts.`);
-    const pages: PdfPage[] = [];
-    let chars = 0;
-    for (let n = 1; n <= doc.numPages; n++) {
-      const page = await doc.getPage(n);
-      const tc = await page.getTextContent();
-      const items: Item[] = [];
-      for (const it of tc.items as any[]) {
-        if (typeof it.str !== 'string' || !it.transform) continue;
-        items.push({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width ?? 0, h: Math.abs(it.height || it.transform[3] || 10) });
-      }
-      const text = reflow(buildLines(items));
-      chars += text.length;
-      if (chars > LIMITS.maxChars) throw new PdfError('too_long', `This PDF has more than ${LIMITS.maxChars.toLocaleString()} characters of text. Split it into smaller parts.`);
-      const bad = (text.match(PUA)?.length ?? 0) + (text.match(/�/g)?.length ?? 0);
-      pages.push({ n, text, warning: text.replace(/\s/g, '').length < 15 ? 'no_text' : bad > 0 && bad / text.length > 0.01 ? 'garbled' : null });
-    }
-    try { await (doc as any).cleanup?.(); } catch { /* best effort */ }
-    return { pageCount: doc.numPages, pages };
-  })(), LIMITS.timeoutMs);
+interface RawPage { n: number; items: Item[] }
+function readRaw(data: Uint8Array, o: { timeoutMs: number; testDelayMs?: number }): Promise<{ pageCount: number; pages: RawPage[] }> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./pdfWorker.mjs', import.meta.url), {
+      workerData: { data: new Uint8Array(data), maxPages: LIMITS.maxPages, maxChars: LIMITS.maxChars, testDelayMs: o.testDelayMs ?? 0 },
+      resourceLimits: { maxOldGenerationSizeMb: 768 },
+    });
+    live.add(worker);
+    const pages: RawPage[] = []; let pageCount = 0, settled = false;
+    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); void worker.terminate().finally(() => { live.delete(worker); fn(); }); };
+    const timer = setTimeout(() => finish(() => reject(new PdfError('timeout', `Reading this PDF took longer than ${Math.round(o.timeoutMs / 1000)} seconds, so I stopped. Try a smaller file or split it into parts.`))), o.timeoutMs);
+    worker.on('message', (m: any) => {
+      if (m.type === 'pages') pageCount = m.pageCount;
+      else if (m.type === 'page') pages.push({ n: m.n, items: m.items });
+      else if (m.type === 'done') finish(() => resolve({ pageCount, pages }));
+      else if (m.type === 'error') finish(() => reject(new PdfError(m.code, m.message)));
+    });
+    worker.on('error', () => finish(() => reject(new PdfError('failed', 'This PDF could not be read.'))));
+    worker.on('exit', () => { if (!settled) finish(() => reject(new PdfError('failed', 'This PDF could not be read.'))); });
+  });
+}
+
+export async function extractPdf(data: Uint8Array, o: { timeoutMs?: number; testDelayMs?: number } = {}): Promise<{ pageCount: number; pages: PdfPage[] }> {
+  const raw = await readRaw(data, { timeoutMs: o.timeoutMs ?? LIMITS.timeoutMs, testDelayMs: o.testDelayMs });
+  const pages: PdfPage[] = [];
+  let chars = 0;
+  for (const rp of raw.pages) {
+    const text = reflow(buildLines(rp.items));
+    chars += text.length;
+    if (chars > LIMITS.maxChars) throw new PdfError('too_long', `This PDF has more than ${LIMITS.maxChars.toLocaleString()} characters of text. Split it into smaller parts.`);
+    const bad = (text.match(PUA)?.length ?? 0) + (text.match(/�/g)?.length ?? 0);
+    pages.push({ n: rp.n, text, warning: text.replace(/\s/g, '').length < 15 ? 'no_text' : bad > 0 && bad / text.length > 0.01 ? 'garbled' : null });
+  }
+  return { pageCount: raw.pageCount, pages };
 }

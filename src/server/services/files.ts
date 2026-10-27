@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chunkAt, chunkText, findQuote } from '../../core/sources';
+import { chunkAt, chunkText, findQuote, needsMathReview } from '../../core/sources';
 import { uid } from '../db';
 import { LIMITS, FileKind, MIME, PdfError, PdfPage, extractPdf, sniff } from '../pdf';
 import { Ctx, HttpError, clip, parse } from './common';
@@ -107,12 +107,20 @@ export async function uploadFile(ctx: Ctx, subjectId: string, o: { data: Buffer;
   return { id, duplicate: false, ...fileSummary(ctx, id) };
 }
 
-function fileSummary(ctx: Ctx, id: string) {
-  const s = ctx.db.get<any>('SELECT status, page_count, extraction, text FROM sources WHERE id = ?', id);
-  const pages = (s.text as string).split('\f');
-  const meta = parse<any>(s.extraction, { method: 'none', pages: [] });
-  return { status: s.status as string, pageCount: s.page_count as number, method: meta.method as string, emptyPages: pages.map((t, i) => [t, i + 1] as const).filter(([t]) => t.replace(/\s/g, '').length < NO_TEXT_BELOW).map(([, n]) => n) };
+/** The text under review: the pending replacement when there is one, otherwise the source's working text. */
+function working(ctx: Ctx, src: any) {
+  const pend = ctx.db.get<any>('SELECT * FROM source_pending WHERE source_id = ?', src.id);
+  return pend
+    ? { pending: true as const, text: pend.text as string, rev: pend.rev as number, fileId: pend.file_id as string, pageCount: pend.page_count as number, extraction: pend.extraction as string | null }
+    : { pending: false as const, text: src.text as string, rev: src.rev as number, fileId: src.file_id as string, pageCount: src.page_count as number, extraction: src.extraction as string | null };
 }
+
+function summarize(w: { text: string; pageCount: number; extraction: string | null }) {
+  const pages = w.text.split('\f');
+  const meta = parse<any>(w.extraction, { method: 'none', pages: [] });
+  return { pageCount: w.pageCount, method: meta.method as string, emptyPages: pages.map((t, i) => [t, i + 1] as const).filter(([t]) => t.replace(/\s/g, '').length < NO_TEXT_BELOW).map(([, n]) => n) };
+}
+const fileSummary = (ctx: Ctx, id: string) => { const s = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', id); return { status: s.status as string, ...summarize(working(ctx, s)) }; };
 
 export function getFile(ctx: Ctx, id: string) {
   const f = ctx.db.get<any>('SELECT filename, kind, data FROM source_files WHERE id = ?', id);
@@ -122,15 +130,22 @@ export function getFile(ctx: Ctx, id: string) {
 
 /** Everything the review screen needs: the file, the text by page, and which pages need a human look. */
 export function reviewPages(ctx: Ctx, id: string) {
-  const s = ctx.db.get<any>('SELECT s.*, f.filename, f.kind AS fkind, f.bytes, f.id AS fid FROM sources s LEFT JOIN source_files f ON f.id = s.file_id WHERE s.id = ?', id);
+  const s = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', id);
   if (!s) throw new HttpError(404, 'not_found', 'Material not found.');
   if (!s.file_id) return null;
-  const texts = (s.text as string).split('\f');
-  const meta = parse<any>(s.extraction, { pages: [] });
-  const chunks = ctx.db.all<any>('SELECT page, uncertain FROM source_chunks WHERE source_id = ?', id);
+  const w = working(ctx, s);
+  const f = ctx.db.get<any>('SELECT id, filename, kind, bytes FROM source_files WHERE id = ?', w.fileId);
+  const texts = w.text.split('\f');
+  const meta = parse<any>(w.extraction, { pages: [] });
+  const chunks = w.pending ? [] : ctx.db.all<any>('SELECT page, uncertain FROM source_chunks WHERE source_id = ?', id);
   return {
-    subjectId: s.subject_id as string, title: s.title as string, file: { id: s.fid, name: s.filename, kind: s.fkind, bytes: s.bytes, url: `/api/files/${s.fid}` }, status: s.status, rev: s.rev, method: meta.method ?? 'none',
-    pages: texts.map((text, i) => ({ n: i + 1, text, chars: text.length, noText: text.replace(/\s/g, '').length < NO_TEXT_BELOW, warning: meta.pages?.[i]?.warning ?? null, reviewMath: chunks.some((c) => c.page === i + 1 && c.uncertain) })),
+    subjectId: s.subject_id as string, title: s.title as string, file: { id: f.id, name: f.filename, kind: f.kind, bytes: f.bytes, url: `/api/files/${f.id}` },
+    status: s.status, pending: w.pending, rev: w.rev, method: meta.method ?? 'none',
+    pages: texts.map((text, i) => {
+      const pm = meta.pages?.[i] ?? {};
+      return { n: i + 1, text, chars: text.length, noText: text.replace(/\s/g, '').length < NO_TEXT_BELOW, warning: pm.warning ?? null,
+        reviewMath: w.pending ? needsMathReview(text) : chunks.some((c) => c.page === i + 1 && c.uncertain), flags: (pm.flags ?? []) as { kind: string; note: string }[], reviewed: !!pm.reviewed, source: pm.source ?? null };
+    }),
     revisions: ctx.db.all<any>('SELECT rev, kind, note, created_at at FROM source_revisions WHERE source_id = ? ORDER BY rev DESC LIMIT 10', id),
   };
 }
@@ -139,47 +154,102 @@ export function savePage(ctx: Ctx, sourceId: string, n: number, raw: string, bas
   const src = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', sourceId);
   if (!src) throw new HttpError(404, 'not_found', 'Material not found.');
   if (!src.file_id) throw new HttpError(409, 'not_file_based', 'Only materials uploaded from a file are edited page by page.');
-  if (src.rev !== baseRev) throw new HttpError(409, 'stale_edit', 'This material changed since you opened it (another tab or an earlier save). Reload it before editing so nothing is overwritten.', { rev: src.rev });
-  if (!Number.isInteger(n) || n < 1 || n > src.page_count) throw new HttpError(400, 'invalid', `Page ${n} does not exist (this file has ${src.page_count}).`);
+  const w = working(ctx, src);
+  if (w.rev !== baseRev) throw new HttpError(409, 'stale_edit', 'This material changed since you opened it (another tab or an earlier save). Reload it before editing so nothing is overwritten.', { rev: w.rev });
+  if (!Number.isInteger(n) || n < 1 || n > w.pageCount) throw new HttpError(400, 'invalid', `Page ${n} does not exist (this file has ${w.pageCount}).`);
   const text = String(raw ?? '').replace(/\r\n/g, '\n').replace(/\f/g, '\n');
   if (text.length > MAX_PAGE_CHARS) throw new HttpError(413, 'too_long', `That page text is ${text.length.toLocaleString()} characters; the limit is ${MAX_PAGE_CHARS.toLocaleString()}.`);
-  const pages = (src.text as string).split('\f'); while (pages.length < src.page_count) pages.push('');
-  if (pages[n - 1] === text) return { rev: src.rev, unchanged: true, reconcile: null };
+  const pages = w.text.split('\f'); while (pages.length < w.pageCount) pages.push('');
+  if (pages[n - 1] === text) return { rev: w.rev, unchanged: true, reconcile: null };
   pages[n - 1] = text;
-  const meta = parse<any>(src.extraction, { method: 'none' });
-  const out = ctx.db.tx(() => applyText(ctx, src, joinPages(pages.map((t) => ({ text: t }))), meta.method === 'none' ? 'transcribed' : 'corrected', `Page ${n} edited.`));
+  const meta = parse<any>(w.extraction, { method: 'none', pages: [] });
+  const next = joinPages(pages.map((t) => ({ text: t })));
+  // an edited page was looked at by the student; mark it reviewed for any page-level review requirement
+  if (meta.pages?.[n - 1]) { meta.pages[n - 1].edited = true; }
+  const metaJson = JSON.stringify(meta);
+  if (w.pending) {
+    ctx.db.run('UPDATE source_pending SET text=?, rev=rev+1, extraction=? WHERE source_id=?', next, metaJson, sourceId);
+    return { rev: w.rev + 1, unchanged: false, reconcile: null, pending: true };
+  }
+  const out = ctx.db.tx(() => { const r = applyText(ctx, src, next, meta.method === 'none' ? 'transcribed' : 'corrected', `Page ${n} edited.`); ctx.db.run('UPDATE sources SET extraction=? WHERE id=?', metaJson, sourceId); return r; });
   return { ...out, unchanged: false };
+}
+
+/** Mark pages the student has looked at (required for pages whose content could not be verified automatically). */
+export function markReviewed(ctx: Ctx, sourceId: string, pageNums: number[]) {
+  const src = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', sourceId);
+  if (!src?.file_id) throw new HttpError(404, 'not_found', 'Material not found.');
+  const w = working(ctx, src);
+  const meta = parse<any>(w.extraction, { method: 'none', pages: [] });
+  for (const n of pageNums) if (meta.pages?.[n - 1]) meta.pages[n - 1].reviewed = true;
+  if (w.pending) ctx.db.run('UPDATE source_pending SET extraction=? WHERE source_id=?', JSON.stringify(meta), sourceId);
+  else ctx.db.run('UPDATE sources SET extraction=? WHERE id=?', JSON.stringify(meta), sourceId);
+  return { ok: true };
+}
+
+/** Pages that must be looked at before the text can be used: content read by a vision model that includes math, diagrams or unreadable parts. */
+function unreviewedRequired(w: { extraction: string | null }) {
+  const meta = parse<any>(w.extraction, { pages: [] });
+  return (meta.pages ?? []).map((p: any, i: number) => ({ n: i + 1, ...p })).filter((p: any) => p.source === 'vision' && (p.flags?.length ?? 0) > 0 && !p.reviewed && !p.edited).map((p: any) => p.n as number);
 }
 
 export function confirmSource(ctx: Ctx, sourceId: string, o: { acknowledgeEmptyPages?: boolean } = {}) {
   const src = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', sourceId);
   if (!src) throw new HttpError(404, 'not_found', 'Material not found.');
-  if (src.status === 'confirmed') return { status: 'confirmed', alreadyConfirmed: true };
-  const sum = fileSummary(ctx, sourceId);
-  if (sum.emptyPages.length === sum.pageCount) throw new HttpError(422, 'no_text', 'No text has been read from this file. It looks like a scan or a photo, which this app cannot read automatically. Type or paste the text for each page next to the original, then confirm.', { emptyPages: sum.emptyPages });
+  const w = working(ctx, src);
+  if (src.status === 'confirmed' && !w.pending) return { status: 'confirmed', alreadyConfirmed: true };
+  const sum = summarize(w);
+  if (sum.emptyPages.length === sum.pageCount) throw new HttpError(422, 'no_text', 'No text has been read from this file. It looks like a scan or a photo. Read it with the optional reader (you choose and see what is sent first), or type or paste the text for each page next to the original, then confirm.', { emptyPages: sum.emptyPages });
+  const needs = unreviewedRequired(w);
+  if (needs.length) throw new HttpError(409, 'needs_review', `${needs.length === 1 ? 'Page' : 'Pages'} ${needs.join(', ')} ${needs.length === 1 ? 'contains' : 'contain'} math, a diagram or text that could not be read. Check ${needs.length === 1 ? 'it' : 'each'} against the original and mark ${needs.length === 1 ? 'it' : 'them'} as checked (or fix the text) before using this material.`, { pages: needs });
   if (sum.emptyPages.length && !o.acknowledgeEmptyPages) throw new HttpError(409, 'empty_pages', `${sum.emptyPages.length === 1 ? 'Page' : 'Pages'} ${sum.emptyPages.join(', ')} ${sum.emptyPages.length === 1 ? 'has' : 'have'} no text, so nothing from ${sum.emptyPages.length === 1 ? 'it' : 'them'} can be used for studying. Add the text, or confirm anyway to leave ${sum.emptyPages.length === 1 ? 'it' : 'them'} out.`, { emptyPages: sum.emptyPages });
+  if (w.pending) {
+    const out = ctx.db.tx(() => {
+      const r = applyText(ctx, { ...src, status: 'confirmed' }, w.text, 'replaced', 'Replacement file reviewed and confirmed.', { fileId: w.fileId, pageCount: w.pageCount, extraction: w.extraction ?? undefined });
+      ctx.db.run('DELETE FROM source_pending WHERE source_id = ?', sourceId);
+      return r;
+    });
+    ensureFlags(ctx, sourceId);
+    return { status: 'confirmed', replaced: true, pageCount: sum.pageCount, emptyPages: sum.emptyPages, reconcile: out.reconcile };
+  }
   ctx.db.run("UPDATE sources SET status='confirmed' WHERE id = ?", sourceId);
   ensureFlags(ctx, sourceId);
   return { status: 'confirmed', pageCount: sum.pageCount, emptyPages: sum.emptyPages };
 }
 
-/** Replace the uploaded file with a newer copy. The old text, file and edits stay in the revision history. */
+export function discardPending(ctx: Ctx, sourceId: string) {
+  ctx.db.tx(() => { ctx.db.run('DELETE FROM source_pending WHERE source_id = ?', sourceId); sweepOrphanFiles(ctx); });
+  return { ok: true };
+}
+
+/**
+ * Replace the uploaded file with a newer copy. A confirmed material keeps using its current text until the student has reviewed and
+ * confirmed the new extraction; a draft (never used) is replaced directly. Old text, files and edits stay in the revision history.
+ */
 export async function replaceFile(ctx: Ctx, sourceId: string, o: { data: Buffer; filename: string }) {
   const src = ctx.db.get<any>('SELECT * FROM sources WHERE id = ?', sourceId);
   if (!src) throw new HttpError(404, 'not_found', 'Material not found.');
   if (!src.file_id) throw new HttpError(409, 'not_file_based', 'Only materials uploaded from a file can be replaced by a file. Paste new text as a new material instead.');
   const x = await readUpload(o.data);
   const hash = sha(o.data);
-  if (ctx.db.get('SELECT 1 FROM source_files WHERE id = ? AND sha256 = ?', src.file_id, hash)) throw new HttpError(409, 'same_file', 'That is the same file that is already attached.');
+  const w = working(ctx, src);
+  if (ctx.db.get('SELECT 1 FROM source_files WHERE id = ? AND sha256 = ?', w.fileId, hash)) throw new HttpError(409, 'same_file', 'That is the same file that is already attached.');
   const fileId = uid();
+  const filename = clip(o.filename, 160).replace(/[\\/\u0000-\u001f]/g, '_') || `upload.${x.kind}`;
   const out = ctx.db.tx(() => {
-    ctx.db.run('INSERT INTO source_files (id,sha256,filename,kind,bytes,data,created_at) VALUES (?,?,?,?,?,?,?)', fileId, hash, clip(o.filename, 160).replace(/[\\/\u0000-\u001f]/g, '_') || `upload.${x.kind}`, x.kind, o.data.length, o.data, ctx.now());
-    return applyText(ctx, src, joinPages(x.pages), 'replaced', 'File replaced; text re-read from the new file.', { fileId, pageCount: x.pages.length, extraction: extractionMeta(x) });
+    ctx.db.run('INSERT INTO source_files (id,sha256,filename,kind,bytes,data,created_at) VALUES (?,?,?,?,?,?,?)', fileId, hash, filename, x.kind, o.data.length, o.data, ctx.now());
+    if (src.status === 'confirmed') {
+      ctx.db.run(`INSERT INTO source_pending (source_id,file_id,text,extraction,page_count,rev,created_at) VALUES (?,?,?,?,?,1,?)
+        ON CONFLICT(source_id) DO UPDATE SET file_id=excluded.file_id, text=excluded.text, extraction=excluded.extraction, page_count=excluded.page_count, rev=1, created_at=excluded.created_at`, src.id, fileId, joinPages(x.pages), extractionMeta(x), x.pages.length, ctx.now());
+      sweepOrphanFiles(ctx);
+      return { pending: true as const, rev: 1, reconcile: null };
+    }
+    return { pending: false as const, ...applyText(ctx, src, joinPages(x.pages), 'replaced', 'File replaced; text re-read from the new file.', { fileId, pageCount: x.pages.length, extraction: extractionMeta(x) }) };
   });
   return { ...out, ...fileSummary(ctx, sourceId) };
 }
 
 /** Remove stored files that no material or revision refers to any more (called after deleting a material). */
 export function sweepOrphanFiles(ctx: Ctx) {
-  ctx.db.run('DELETE FROM source_files WHERE id NOT IN (SELECT file_id FROM sources WHERE file_id IS NOT NULL) AND id NOT IN (SELECT file_id FROM source_revisions WHERE file_id IS NOT NULL)');
+  ctx.db.run('DELETE FROM source_files WHERE id NOT IN (SELECT file_id FROM sources WHERE file_id IS NOT NULL) AND id NOT IN (SELECT file_id FROM source_revisions WHERE file_id IS NOT NULL) AND id NOT IN (SELECT file_id FROM source_pending)');
 }
