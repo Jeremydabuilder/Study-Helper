@@ -118,8 +118,9 @@ export function createApp(rt: Runtime) {
   app.get('/api/history', h((ctx) => practice.history(ctx)));
 
   /* ---------------- sessions / practice ---------------- */
-  const Start = z.object({ mode: z.enum(['diagnostic', 'practice', 'review', 'exam', 'mixed']), subjectId: z.string().nullable().optional(), minutes: z.number(), conceptIds: z.array(z.string()).optional(), itemId: z.string().nullable().optional(), abandonExisting: z.boolean().optional() });
-  app.post('/api/sessions', h(async (ctx, req) => { const { id } = practice.startSession(ctx, Start.parse(req.body)); return { id }; }));
+  const Start = z.object({ mode: z.enum(['diagnostic', 'practice', 'review', 'exam', 'mixed']).default('mixed'), goal: z.enum(['test', 'understand', 'wrong', 'review']).optional(), sourceId: z.string().nullable().optional(), subjectId: z.string().nullable().optional(), minutes: z.number(), conceptIds: z.array(z.string()).optional(), itemId: z.string().nullable().optional(), abandonExisting: z.boolean().optional() });
+  app.post('/api/sessions', h(async (ctx, req) => practice.startSession(ctx, Start.parse(req.body))));
+  app.post('/api/sessions/:id/extend', h((ctx, req) => practice.extendSession(ctx, req.params.id, Number(req.body?.minutes ?? 10))));
   app.get('/api/sessions/active', h((ctx) => { const s = practice.activeSession(ctx); return { active: s ? { id: s.id, mode: s.mode, startedAt: s.started_at } : null }; }));
   app.get('/api/sessions/:id', h((ctx, req) => practice.sessionView(ctx, req.params.id, { useOffline: req.query.offline === '1' })));
   app.post('/api/sessions/:id/hint', h((ctx, req) => practice.requestHint(ctx, req.params.id, z.object({ questionId: z.string() }).parse(req.body).questionId)));

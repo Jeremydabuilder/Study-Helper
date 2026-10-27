@@ -6,6 +6,7 @@ import { uid } from '../db';
 import { Ctx, aiInfo, getAvailability, getProfile, getSchedulerParams, getWeights, parse } from './common';
 import { computeSchedule, upcomingItems, attentionList, pendingProposalCount } from './items';
 import { activeSession, loadAttempts } from './practice';
+import { recommend } from './sessionPlan';
 
 export function buildPlanInputs(ctx: Ctx, o: { minutes: number }): Omit<PlanInput, 'minutes'> & { minutes: number } {
   const now = ctx.now();
@@ -77,6 +78,7 @@ export function getToday(ctx: Ctx, o: { minutes?: number }) {
       ...plan,
       tasks: plan.tasks.map((t) => ({ ...t, verb: TASK_VERB[t.kind], levelLabel: LEVEL_LABEL[inputs.concepts.find((c) => c.id === t.conceptId)!.state.level] })),
     },
+    recommendation: recommend(ctx, minutes, act ? { id: act.id } : null),
     heuristicNote: 'Priority scores are an ordering heuristic built from the rules below — not a prediction of how well you will do.',
     weights: inputs.weights,
     active: act ? { id: act.id, mode: act.mode, startedAt: act.started_at } : null,

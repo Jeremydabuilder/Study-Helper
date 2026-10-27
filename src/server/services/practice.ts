@@ -17,9 +17,10 @@ import { modelChunks } from './sourceSafety';
 import { memoryAction, recordImprovement, recordMistakeMemory } from './teachingMemory';
 import { PickOpts, QuestionRow, getQuestion, pickQuestion, publicQuestion } from './questions';
 import { buildPlanInputs } from './plan';
+import { Goal, Phase, buildGoalSession } from './sessionPlan';
 
 type Purpose = PickOpts['purpose'];
-interface Slot { conceptId: string; purpose: Purpose; n: number; done: number; extra: number; streak: number; priority?: boolean }
+interface Slot { conceptId: string; purpose: Purpose; n: number; done: number; extra: number; streak: number; priority?: boolean; phase?: Phase }
 /** Per-session teaching state: what to do next, and how the last few answers on each concept went. */
 interface Notes { next?: NextAction | null; fails?: Record<string, number>; explained?: Record<string, number> }
 const notesOf = (s: any): Notes => parse<Notes>(s.notes, {});
@@ -51,7 +52,7 @@ export function recomputeConcept(ctx: Ctx, conceptId: string, trace?: TraceEntry
 
 export interface StartOpts {
   mode: 'diagnostic' | 'practice' | 'review' | 'exam' | 'mixed'; subjectId?: string | null; minutes: number; conceptIds?: string[];
-  itemId?: string | null; abandonExisting?: boolean; fromPlan?: boolean;
+  itemId?: string | null; abandonExisting?: boolean; fromPlan?: boolean; goal?: Goal; sourceId?: string | null;
 }
 
 export function activeSession(ctx: Ctx) {
@@ -63,6 +64,12 @@ export function startSession(ctx: Ctx, o: StartOpts) {
   if (existing) {
     if (!o.abandonExisting) throw new HttpError(409, 'session_active', 'You have a session in progress.', { sessionId: existing.id, mode: existing.mode });
     ctx.db.run("UPDATE sessions SET status='abandoned', ended_at=? WHERE id=?", ctx.now(), existing.id);
+  }
+  if (o.goal) {
+    const g = buildGoalSession(ctx, { goal: o.goal, minutes: o.minutes, subjectId: o.subjectId, itemId: o.itemId, sourceId: o.sourceId });
+    const id = uid();
+    ctx.db.run('INSERT INTO sessions (id,subject_id,mode,status,planned_minutes,started_at,slots,hold_feedback,item_id,goal) VALUES (?,?,?,?,?,?,?,?,?,?)', id, g.subjectId, 'mixed', 'active', g.minutes, ctx.now(), JSON.stringify(g.slots), 0, o.itemId ?? null, o.goal);
+    return { id, title: g.title, questions: g.questions, minutes: g.minutes };
   }
   const minutes = Math.max(3, Math.min(180, Math.round(o.minutes || 15)));
   const slots: Slot[] = [];
@@ -114,6 +121,8 @@ function chooseSlot(slots: Slot[], mode: string, lastConcept: string | null, for
   if (!open.length) return -1;
   const pri = open.find((x) => x.s.priority); // a follow-up the last answer called for (a prerequisite check, a fresh application)
   if (pri) return pri.i;
+  const rank = (x: { s: Slot }) => (x.s.phase === 'open' ? 0 : x.s.phase === 'check' ? 2 : 1);
+  if (open.some((x) => x.s.phase)) { const first = Math.min(...open.map(rank)); for (let i = open.length - 1; i >= 0; i--) if (rank(open[i]) !== first) open.splice(i, 1); } // open → core → check
   const forced = force ? open.find((x) => x.s.conceptId === force) : null;
   if (forced) return forced.i;
   if (mode === 'practice') return open[0].i; // deep practice on one concept at a time
@@ -122,8 +131,23 @@ function chooseSlot(slots: Slot[], mode: string, lastConcept: string | null, for
   return pool.sort((a, b) => (b.s.n - b.s.done) - (a.s.n - a.s.done) || a.i - b.i)[0].i;
 }
 
-async function advance(ctx: Ctx, session: any, opts: { useOffline?: boolean } = {}): Promise<Current | null> {
+const READING_MS = 25_000;
+const usedMs = (ctx: Ctx, s: any) => s.active_ms + ctx.db.get<any>('SELECT COUNT(*) n FROM attempts WHERE session_id = ?', s.id).n * READING_MS;
+export const TIME_UP = Symbol('time_up');
+
+async function advance(ctx: Ctx, session: any, opts: { useOffline?: boolean } = {}): Promise<Current | null | typeof TIME_UP> {
   const slots = parse<Slot[]>(session.slots, []);
+  // Soft time budget: checked only BETWEEN questions. Near the end, skip the rest of the core practice so the fresh check still happens;
+  // at the budget, ask the student whether to wrap up or keep going rather than cutting anything off.
+  if (slots.some((x) => x.phase)) {
+    const used = usedMs(ctx, session), budget = session.planned_minutes * 60_000;
+    if (used >= 0.75 * budget && slots.some((x) => x.phase === 'check' && x.done < x.n)) {
+      let changed = false;
+      for (const x of slots) if (x.phase === 'core' && x.done < x.n) { x.n = x.done; changed = true; }
+      if (changed) { ctx.db.run('UPDATE sessions SET slots = ? WHERE id = ?', JSON.stringify(slots), session.id); session.slots = JSON.stringify(slots); }
+    }
+    if (used >= budget && slots.some((x) => x.done < x.n)) return TIME_UP;
+  }
   const notes = notesOf(session);
   const act = notes.next ?? null;
   const last = ctx.db.get<any>('SELECT concept_id, question_id FROM attempts WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', session.id);
@@ -168,11 +192,13 @@ export async function sessionView(ctx: Ctx, id: string, opts: { useOffline?: boo
   if (!s) throw new HttpError(404, 'not_found', 'Session not found.');
   const slots = parse<Slot[]>(s.slots, []);
   const progress = { answered: slots.reduce((a, x) => a + x.done, 0), planned: slots.reduce((a, x) => a + x.n, 0) };
-  const base = { id: s.id, mode: s.mode, status: s.status, holdFeedback: !!s.hold_feedback, plannedMinutes: s.planned_minutes, startedAt: s.started_at, subjectId: s.subject_id, progress };
+  const base = { id: s.id, mode: s.mode, goal: s.goal ?? null, status: s.status, holdFeedback: !!s.hold_feedback, plannedMinutes: s.planned_minutes, startedAt: s.started_at, subjectId: s.subject_id, progress };
   if (s.status !== 'active') return { ...base, phase: 'done' as const, summary: parse(s.summary, null) };
   let cur = parse<Current | null>(s.current, null);
   if (!cur) {
-    cur = await advance(ctx, s, opts); // may throw (AI failure) — session state is untouched so the client can retry
+    const adv = await advance(ctx, s, opts); // may throw (AI failure) — session state is untouched so the client can retry
+    if (adv === TIME_UP) return { ...base, phase: 'time_check' as const, usedMin: Math.round(usedMs(ctx, s) / 60_000) };
+    cur = adv;
     if (!cur) return { ...base, phase: 'ready_to_finish' as const };
     s = ctx.db.get<any>('SELECT * FROM sessions WHERE id = ?', id);
   }
@@ -404,7 +430,8 @@ export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput
       slot.done++;
       const failed = idk || (outcome.status === 'graded' && (outcome.correctness ?? 1) < 0.8) || revealUsed;
       slot.streak = success ? slot.streak + 1 : 0;
-      if (!hold && (slot.purpose === 'practice' || slot.purpose === 'repair') && failed && slot.extra < 2 && slot.done >= slot.n) { slot.n++; slot.extra++; }
+      const inBudget = !slotsBefore.some((x) => x.phase) || usedMs(ctx, s) + responseMs < s.planned_minutes * 60_000;
+      if (!hold && inBudget && (slot.purpose === 'practice' || slot.purpose === 'repair') && failed && slot.extra < 2 && slot.done >= slot.n) { slot.n++; slot.extra++; }
       if (!hold && slot.purpose === 'practice' && slot.streak >= 2 && slot.done < slot.n) slot.n = slot.done; // enough independent evidence today: stop drilling
     }
     if (!hold && wrong && slot && slot.purpose === 'diagnostic' && !na?.prerequisite && (fails[q.concept_id] ?? 0) <= 1 && !slots.some((x) => x.conceptId === q.concept_id && x.priority && x.done < x.n)) slots.push({ conceptId: q.concept_id, purpose: 'practice', n: 1, done: 0, extra: 0, streak: 0, priority: true }); // a miss in a quick check gets one fresh follow-up now
@@ -633,6 +660,15 @@ export async function finishSession(ctx: Ctx, sessionId: string) {
   return sessionView(ctx, sessionId);
 }
 
+/** "Keep going": the student chose to continue past the planned time. Adds time and stops asking for this session. */
+export function extendSession(ctx: Ctx, sessionId: string, minutes: number) {
+  const s = ctx.db.get<any>('SELECT * FROM sessions WHERE id = ?', sessionId);
+  if (!s || s.status !== 'active') throw new HttpError(409, 'session_inactive', 'This session is no longer active.');
+  const add = Math.max(5, Math.min(30, Math.round(minutes || 10)));
+  ctx.db.run('UPDATE sessions SET planned_minutes = planned_minutes + ?, current = NULL WHERE id = ?', add, sessionId);
+  return { plannedMinutes: s.planned_minutes + add };
+}
+
 export function abandonSession(ctx: Ctx, sessionId: string) {
   ctx.db.run("UPDATE sessions SET status='abandoned', ended_at=? WHERE id=? AND status='active'", ctx.now(), sessionId);
 }
@@ -660,7 +696,8 @@ function buildSummary(ctx: Ctx, s: any) {
   if (uncertain) nextSteps.push(`${uncertain} answer${uncertain === 1 ? '' : 's'} could not be graded with confidence — confirm them in History so they count.`);
   const due = concepts.map((c) => ctx.db.get<any>('SELECT due_at FROM concept_state WHERE concept_id=?', c.id)?.due_at).filter(Boolean).sort()[0];
   if (due) nextSteps.push(`Next review is due ${new Date(due).toISOString().slice(0, 10)}.`);
-  const out: any = { answered: total, independentCorrect: ok, independentTotal: independentGraded.length, helped: rows.filter((a) => a.hints_used || a.saw_answer || a.idk).length, notCounted: uncertain, minutes, concepts, misconceptions: mis, nextSteps, mode: s.mode };
+  const reflection = buildReflection(ctx, s, rows);
+  const out: any = { reflection, answered: total, independentCorrect: ok, independentTotal: independentGraded.length, helped: rows.filter((a) => a.hints_used || a.saw_answer || a.idk).length, notCounted: uncertain, minutes, concepts, misconceptions: mis, nextSteps, mode: s.mode };
   if (s.mode === 'exam') {
     const graded = rows.filter((a) => a.grade_status === 'graded');
     const pts = graded.reduce((t, a) => t + (a.correctness ?? 0), 0);
@@ -675,6 +712,57 @@ function buildSummary(ctx: Ctx, s: any) {
     };
   }
   return out;
+}
+
+/**
+ * The end of a session, in plain words: what was shown independently, what still needs work, what is uncertain, what to do next and what will be
+ * checked again. A correct answer right after an explanation is a good sign, not independent evidence, and nothing here predicts a test grade.
+ */
+function buildReflection(ctx: Ctx, s: any, rows: any[]) {
+  const per = new Map<string, any[]>();
+  for (const a of rows) per.set(a.concept_id, [...(per.get(a.concept_id) ?? []), a]);
+  const held = new Set(ctx.db.all<any>('SELECT id FROM questions WHERE heldout = 1').map((r) => r.id as string));
+  const demonstrated: { conceptId: string; concept: string; text: string }[] = [];
+  const needsWork: { conceptId: string; concept: string; text: string; kinds: { kind: string; label: string }[]; pattern: boolean }[] = [];
+  const uncertain: string[] = [];
+  let confusion: { name: string; other: string | null; conceptId: string } | null = null;
+  for (const [cid, list] of per) {
+    const name = list[0].concept_name as string;
+    let missed = false; const indep: any[] = [], afterHelp: any[] = [], misses: any[] = [];
+    for (const a of list) {
+      const helped = a.hints_used > 0 || a.saw_answer || a.idk;
+      if (a.grade_status !== 'graded') continue;
+      const wrong = a.correctness < 0.8 || a.idk || a.saw_answer;
+      if (wrong) { missed = true; misses.push(a); }
+      else if (helped) afterHelp.push(a);
+      else if (missed) afterHelp.push(a);  // right after an explanation on this concept today: a good sign, not independent evidence
+      else indep.push(a);
+    }
+    const freshOk = indep.filter((a) => held.has(a.question_id)).length;
+    if (indep.length) demonstrated.push({ conceptId: cid, concept: name, text: `${indep.length} correct on your own${freshOk ? `, including ${freshOk} question${freshOk === 1 ? '' : 's'} you had not seen` : ''}. This is evidence from today only.` });
+    const kinds = [...new Map(misses.filter((a) => a.mistake_kind && a.mistake_kind !== 'unreliable').map((a) => [a.mistake_kind as string, { kind: a.mistake_kind as string, label: MISTAKE_LABEL[a.mistake_kind as MistakeKind] }])).values()];
+    const unresolved = misses.length > 0 && !indep.some((a) => a.created_at > misses[misses.length - 1].created_at) && !afterHelp.some((a) => a.created_at > misses[misses.length - 1].created_at && !(a.hints_used > 0));
+    const pattern = !!ctx.db.get<any>("SELECT 1 FROM misconceptions WHERE concept_id=? AND status='active'", cid);
+    if (misses.length) needsWork.push({ conceptId: cid, concept: name, kinds, pattern, text: `${misses.length} miss${misses.length === 1 ? '' : 'es'}${kinds.length ? ` (${kinds.map((k) => k.label.toLowerCase()).join(', ')})` : ''}${unresolved ? '' : '; the later answers were better, but they came after an explanation'}.` });
+    if (afterHelp.length && !indep.length) uncertain.push(`“${name}”: right ${missed ? 'after an explanation' : 'with a hint'}. That is a good sign, but it needs an unaided check later before it counts as understood.`);
+    if (list.length === 1 && list[0].grade_status === 'graded') uncertain.push(`“${name}”: only one answer today, which is not enough to conclude much either way.`);
+    const conf = misses.find((a) => a.mistake_kind === 'concept_confusion');
+    if (conf && !confusion) { const m = ctx.db.get<any>('SELECT label FROM observed_mistakes WHERE attempt_id=?', conf.id); confusion = { name, other: (m?.label ?? '').replace(/^Mixed up with [“"]?/, '').replace(/[”"]$/, '') || null, conceptId: cid }; }
+  }
+  const nUnc = rows.filter((a) => a.grade_status === 'uncertain' || a.grade_status === 'failed').length;
+  if (nUnc) uncertain.push(`${nUnc} answer${nUnc === 1 ? '' : 's'} could not be graded with confidence and ${nUnc === 1 ? 'is' : 'are'} not counted until you confirm ${nUnc === 1 ? 'it' : 'them'} in Progress → History.`);
+  for (const w of needsWork) if (w.kinds.some((k) => k.kind === 'concept_confusion') && !w.pattern) uncertain.push(`“${w.concept}”: a mix-up was seen once. It may be a slip, so it is saved as one observation, not a pattern.`);
+  const ids = [...per.keys()];
+  const later = ids.map((id) => { const st = ctx.db.get<any>('SELECT due_at FROM concept_state WHERE concept_id=?', id); const f = ctx.db.get<any>("SELECT MIN(earliest_at) t FROM followups WHERE concept_id=? AND status='open'", id); const t = Math.min(...[st?.due_at, f?.t].filter((x) => typeof x === 'number')); return Number.isFinite(t) ? { concept: per.get(id)![0].concept_name as string, conceptId: id, when: new Date(t).toISOString().slice(0, 10), what: 'a question you have not seen' } : null; }).filter(Boolean).sort((a: any, b: any) => a.when.localeCompare(b.when)) as { concept: string; conceptId: string; when: string; what: string }[];
+  let next: { text: string; goal: Goal | null };
+  if (confusion) next = { text: `Next time: a short check that tells “${confusion.name}” and ${confusion.other ? `“${confusion.other}”` : 'the idea it was mixed up with'} apart (about 5 minutes).`, goal: 'wrong' };
+  else if (needsWork.length) next = { text: `Next: practise “${needsWork.sort((a, b) => b.text.length - a.text.length)[0].concept}” again, starting with the part you missed (about 8 minutes).`, goal: 'wrong' };
+  else if (later[0]) next = { text: `Nothing urgent. Come back on ${later[0].when} for the later check on “${later[0].concept}”.`, goal: 'review' };
+  else next = { text: 'Add more material or confirm more concepts to keep studying.', goal: null };
+  return {
+    demonstrated, needsWork, uncertain, next, later,
+    notes: ['Correct answers right after practising mostly show short-term recall. The later check, on a question you have not seen, is what shows whether it stuck.', 'This is not a prediction of a test grade.'],
+  };
 }
 
 export function history(ctx: Ctx, limit = 40) {

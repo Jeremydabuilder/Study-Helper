@@ -29,3 +29,6 @@ ALTER TABLE sessions ADD COLUMN notes TEXT;
 -- Why a question was written (so a discrimination or gap-filling question is reused as such), and what it contrasts with.
 ALTER TABLE questions ADD COLUMN focus TEXT;
 ALTER TABLE questions ADD COLUMN contrast_id TEXT;
+
+-- A session is built for a goal (test / understand / wrong / review) and a flexible time budget; slots carry a phase (open → core → check).
+ALTER TABLE sessions ADD COLUMN goal TEXT;
