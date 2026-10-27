@@ -3,7 +3,7 @@
  * Everything that affects scheduling is derived from the attempt log by core/learning.ts.
  */
 import { AIError } from '../../ai/provider';
-import { MISTAKE_BLURB, MISTAKE_LABEL, MistakeKind, diagnose, Diagnosis } from '../../core/diagnosis';
+import { MISTAKE_BLURB, MISTAKE_LABEL, MistakeKind, diagnose, Diagnosis, SELF_CAUSES, SelfCause, fromSelfCause, SELF_CAUSE_LABEL } from '../../core/diagnosis';
 import { NextAction, nextAction } from '../../core/nextAction';
 import { checkMath, MathSpec } from '../../core/mathCheck';
 import { AttemptRecord, replay, TraceEntry, isDue, LEVEL_LABEL, GradeSource, GradeStatus } from '../../core/learning';
@@ -14,7 +14,7 @@ import { HOUR, DAY } from '../../core/time';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, getProfile, getSchedulerParams, parse } from './common';
 import { modelChunks } from './sourceSafety';
-import { memoryAction, recordImprovement, recordMistakeMemory } from './teachingMemory';
+import { MemoryProvenance, memoryAction, questionTests, reconcileAttempt, recordEvidence, recordMistakeMemory } from './teachingMemory';
 import { PickOpts, QuestionRow, getQuestion, pickQuestion, publicQuestion } from './questions';
 import { buildPlanInputs } from './plan';
 import { Goal, Phase, buildGoalSession } from './sessionPlan';
@@ -327,14 +327,14 @@ function findConfused(sibs: { id: string; name: string }[], texts: (string | nul
   return [...sibs].sort((a, b) => b.name.length - a.name.length).find((x) => x.name.length >= 4 && hay.includes(x.name.toLowerCase())) ?? null; // otherwise the most specific (longest) name mentioned
 }
 
-export function diagnoseOutcome(ctx: Ctx, q: QuestionRow, o: Outcome, a: { answer: string; skipped: boolean }): Diagnosis | null {
+export function diagnoseOutcome(ctx: Ctx, q: QuestionRow, o: Outcome, a: { answer: string; skipped: boolean; reasoning?: string }): Diagnosis | null {
   const sibs = siblingsOf(ctx, q.concept_id);
   const wrong = o.status === 'graded' && (o.correctness ?? 1) < 0.8;
   const confusedWith = findConfused(sibs, [o.chosenMisconception, o.confusedName, wrong && q.kind !== 'multiple_choice' ? a.answer : null, o.graderKind === 'concept_confusion' ? a.answer : null]);
   const rp = o.rubricPoints ?? [];
   return diagnose({
     questionKind: q.kind, correctness: o.correctness, gradeStatus: o.status, reportedUnclear: !!q.reported_unclear, idk: a.skipped, blank: !a.answer.trim() && !a.skipped,
-    mathTags: o.tags, slipTag: o.slip, chosenMisconception: o.chosenMisconception ?? null, confusedWith, rubricMet: rp.filter((p) => p.met).length, rubricTotal: rp.length, graderKind: o.graderKind ?? null,
+    mathTags: o.tags, slipTag: o.slip, hasWorking: (a.reasoning ?? '').trim().length >= 8, chosenMisconception: o.chosenMisconception ?? null, confusedWith, rubricMet: rp.filter((p) => p.met).length, rubricTotal: rp.length, graderKind: o.graderKind ?? null,
   });
 }
 
@@ -342,6 +342,7 @@ export function diagnoseOutcome(ctx: Ctx, q: QuestionRow, o: Outcome, a: { answe
 function describeMistake(d: Diagnosis, o: Outcome) {
   if (o.misconception) return { label: o.misconception.label, description: o.misconception.description, origin: o.misconception.origin, specific: true };
   if (d.confusedWith) return { label: `Mixed up with “${d.confusedWith.name}”`, description: d.why, origin: 'observed' as const, specific: true };
+  if (d.kind === 'unknown_cause') return { label: 'Wrong answer, cause unknown', description: d.why, origin: 'observed' as const, specific: false };
   // a generic kind ("reasoning error", "partly right") describes this answer but is too vague to call a recurring pattern
   return { label: d.kind === 'reasoning_error' ? 'Wrong answer, cause not identified' : MISTAKE_LABEL[d.kind], description: d.why, origin: (o.source === 'ai' ? 'ai_inferred' : 'observed') as 'observed' | 'ai_inferred', specific: false };
 }
@@ -354,7 +355,7 @@ function patternSupport(ctx: Ctx, conceptId: string, label: string, now: number,
   const qs = new Set<string>(rows.map((r) => r.question_id)); qs.add(thisQuestionId);
   return { questions: qs.size, attemptIds: rows.map((r) => r.attempt_id as string) };
 }
-const NO_PATTERN: MistakeKind[] = ['missing_knowledge', 'unreliable'];
+const NO_PATTERN: MistakeKind[] = ['missing_knowledge', 'unknown_cause', 'unreliable'];
 
 /* ---- what to do next ---- */
 
@@ -398,7 +399,7 @@ export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput
   const attemptId = uid();
   const revealUsed = cur.revealed || idk || skippedAfterReveal;
   const independent = !revealUsed && cur.hintsShown === 0;
-  const diag = diagnoseOutcome(ctx, q, outcome, { answer, skipped: idk || skippedAfterReveal });
+  const diag = diagnoseOutcome(ctx, q, outcome, { answer, skipped: idk || skippedAfterReveal, reasoning });
   const mrec = diag && diag.kind !== 'unreliable' ? describeMistake(diag, outcome) : null;
   const now = ctx.now();
   const support = mrec && mrec.specific && diag && !NO_PATTERN.includes(diag.kind) ? patternSupport(ctx, q.concept_id, mrec.label, now, q.id) : null;
@@ -461,9 +462,10 @@ function attemptResult(ctx: Ctx, a: any) {
 export interface FeedbackPayload {
   verdict: 'correct' | 'partial' | 'incorrect' | 'unsure' | 'ungraded' | 'skipped'; headline: string; message: string;
   explanation: string | null; workedExample: string | null; correctAnswer: string | null; tags: string[]; rubricPoints: { point: string; met: boolean }[];
+  memoryNote?: string | null;
   gradeStatus: GradeStatus; canSelfGrade: boolean; canRetryGrading: boolean; counts: string; misconception: string | null; nextStep: string | null; yourAnswer: string;
   /** One observed mistake in THIS answer (not a claim about the student). */
-  mistake: { kind: MistakeKind; label: string; why: string } | null;
+  mistake: { kind: MistakeKind; label: string; why: string; certainty: 'direct' | 'likely' | 'unknown'; possible?: MistakeKind; youSaid?: string | null } | null;
   /** Set only when the same mistake was seen on at least two different questions. */
   pattern: { label: string; count: number } | null;
   /** What happens next and why, in plain words. */
@@ -490,7 +492,7 @@ function buildFeedback(ctx: Ctx, q: QuestionRow, o: Outcome, u: { hintsUsed: num
     correctAnswer: o.status === 'graded' && verdict === 'correct' ? null : rev.correctAnswer || null, tags: o.tags, rubricPoints: o.rubricPoints ?? [],
     gradeStatus: o.status, canSelfGrade: o.status === 'uncertain' || o.status === 'failed', canRetryGrading: o.status === 'failed', counts,
     misconception: x.pattern?.label ?? null, nextStep: o.nextStep ?? null, yourAnswer: displayAnswer(q, u.answer),
-    mistake: x.diag && x.mistake ? { kind: x.diag.kind, label: x.mistake.label, why: x.diag.why } : x.diag?.kind === 'unreliable' ? { kind: 'unreliable', label: MISTAKE_LABEL.unreliable, why: x.diag.why } : null,
+    mistake: x.diag && x.mistake ? { kind: x.diag.kind, label: x.mistake.label, why: x.diag.why, certainty: x.diag.certainty, possible: x.diag.possible, youSaid: null } : x.diag?.kind === 'unreliable' ? { kind: 'unreliable', label: MISTAKE_LABEL.unreliable, why: x.diag.why, certainty: 'unknown' } : null,
     pattern: x.pattern ?? null, next: x.na ? { type: x.na.type, reason: x.na.reason } : null, altRepresentation: alt,
   };
 }
@@ -502,7 +504,7 @@ function afterAttempt(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, p
   ctx.db.run('DELETE FROM observed_mistakes WHERE attempt_id = ?', attemptId);
   if (diag && diag.kind !== 'unreliable') {
     const m = describeMistake(diag, o);
-    ctx.db.run('INSERT INTO observed_mistakes (id,attempt_id,concept_id,kind,label,description,created_at) VALUES (?,?,?,?,?,?,?)', uid(), attemptId, q.concept_id, diag.kind, clip(m.label, 80), clip(m.description, 300), now);
+    ctx.db.run('INSERT INTO observed_mistakes (id,attempt_id,concept_id,kind,label,description,created_at,certainty) VALUES (?,?,?,?,?,?,?,?)', uid(), attemptId, q.concept_id, diag.kind, clip(m.label, 80), clip(m.description, 300), now, diag.certainty);
     const sup = patternSupport(ctx, q.concept_id, m.label, now, q.id, attemptId);
     if (m.specific) recordMistakeMemory(ctx, { conceptId: q.concept_id, attemptId, questionId: q.id, kind: diag.kind, label: m.label, description: m.description, confusedWith: diag.confusedWith, patternFormed: sup.questions >= 2, distinctQuestions: sup.questions });
     if (m.specific && !NO_PATTERN.includes(diag.kind)) {
@@ -515,16 +517,71 @@ function afterAttempt(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, p
   const trace: TraceEntry[] = [];
   recomputeConcept(ctx, q.concept_id, trace);
   const mine = trace.find((t) => t.attemptId === attemptId);
+  applyEvidence(ctx, attemptId, q, o, purpose, mine);
+}
+
+/**
+ * What a graded attempt does to the notes and patterns about this concept. Only notes THIS question tests are touched; "later" needs the scheduler's
+ * delay and a counted attempt; an immediate success is recorded as encouraging but leaves the later check open.
+ */
+function applyEvidence(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, purpose: Purpose, mine: TraceEntry | undefined) {
+  const now = ctx.now();
   const att = ctx.db.get<any>('SELECT hints_used, saw_answer, idk FROM attempts WHERE id=?', attemptId);
-  if (o.status === 'graded' && (o.correctness ?? 0) >= 0.8 && att && !att.hints_used && !att.saw_answer && !att.idk) recordImprovement(ctx, { conceptId: q.concept_id, attemptId, questionId: q.id, focus: q.focus ?? null });
-  if (purpose === 'repair' && o.status === 'graded') ctx.db.run("UPDATE followups SET status='done', done_at=? WHERE concept_id=? AND kind='repair' AND status='open'", now, q.concept_id);
-  if (mine?.counted && mine.kind === 'delayed_unaided') {
-    ctx.db.run("UPDATE followups SET status='done', done_at=? WHERE concept_id=? AND kind='repair_check' AND status='open' AND earliest_at <= ?", now, q.concept_id, now);
-    if (mine.success) {
-      const repaired = ctx.db.run("UPDATE misconceptions SET status='repaired', repaired_at=? WHERE concept_id=? AND status='active' AND last_seen_at <= ?", now, q.concept_id, now - 20 * HOUR);
-      if (repaired.changes) recomputeConcept(ctx, q.concept_id);
+  const graded = o.status === 'graded';
+  const independentSuccess = graded && (o.correctness ?? 0) >= 0.8 && !!att && !att.hints_used && !att.saw_answer && !att.idk;
+  const wrong = graded && (o.correctness ?? 1) < 0.8;
+  const outcomes = recordEvidence(ctx, { conceptId: q.concept_id, attemptId, question: q, independentSuccess, wrong, counted: !!mine?.counted && !!mine.success });
+  if (purpose === 'repair' && graded) ctx.db.run("UPDATE followups SET status='done', done_at=? WHERE concept_id=? AND kind='repair' AND status='open'", now, q.concept_id);
+  // patterns: repaired only by a later, counted, independent success on a question that tests that very pattern, never by an unrelated correct answer
+  if (independentSuccess && mine?.counted && mine.success) {
+    const delay = getSchedulerParams(ctx.db).delayHours * HOUR;
+    let any = false;
+    for (const m of ctx.db.all<any>("SELECT * FROM misconceptions WHERE concept_id=? AND status='active'", q.concept_id)) {
+      const quoted = (m.label as string).match(/[“"]([^”"]+)[”"]/)?.[1];
+      const other = quoted ? ctx.db.get<any>("SELECT id, name FROM concepts WHERE status='confirmed' AND lower(name)=lower(?) AND subject_id=(SELECT subject_id FROM concepts WHERE id=?)", quoted, q.concept_id) : null;
+      const pseudo = { origin: 'app', key: '', mistakeKind: 'reasoning_error', label: m.label, basis: 'inferred', attemptIds: [], questionIds: [], firstAt: m.first_seen_at, lastAt: m.last_seen_at, confusedWith: other ? { id: other.id, name: other.name } : null, check: { state: 'unchecked' } } as MemoryProvenance;
+      if (now - m.last_seen_at >= delay && questionTests(q, pseudo)) {
+        ctx.db.run("UPDATE misconceptions SET status='repaired', repaired_at=? WHERE id=?", now, m.id);
+        ctx.db.run("UPDATE followups SET status='done', done_at=? WHERE misconception_id=? AND kind='repair_check' AND status='open'", now, m.id);
+        any = true;
+      }
+    }
+    if (any) recomputeConcept(ctx, q.concept_id);
+  }
+  if (outcomes.length) {
+    const d = parse<FeedbackPayload | null>(ctx.db.get<any>('SELECT diagnosis FROM attempts WHERE id=?', attemptId)?.diagnosis, null);
+    if (d) {
+      const e = outcomes[0];
+      d.memoryNote = e.event === 'corrected_now' ? `That is the confusion from before (“${e.label}”), and you got it right. Good. It is saved as corrected for now; a later question, on another day, will check that it stuck.`
+        : e.event === 'improved' ? `A later, independent answer on the same confusion (“${e.label}”) was right. That suggests it improved. It is one good answer, not proof, so the regular review still runs.`
+        : `The earlier mix-up (“${e.label}”) showed up again, so it is open again.`;
+      ctx.db.run('UPDATE attempts SET diagnosis=? WHERE id=?', JSON.stringify(d), attemptId);
     }
   }
+}
+
+/**
+ * After a grade changed (self-grade, regrade, "this was unclear"): make the observed mistake, the patterns, the notes and the follow-ups agree with the
+ * attempt as it now stands. Conclusions that depended on it are reversed with a trail; new ones are drawn only from evidence that qualifies.
+ */
+export function settleAttempt(ctx: Ctx, attemptId: string) {
+  const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId);
+  if (!a) return;
+  const q = getQuestion(ctx, a.question_id);
+  const graded = a.grade_status === 'graded';
+  const wrong = graded && a.correctness < 0.8;
+  const success = graded && a.correctness >= 0.8 && !a.hints_used && !a.saw_answer && !a.idk;
+  ctx.db.tx(() => {
+    if (!wrong) ctx.db.run('DELETE FROM observed_mistakes WHERE attempt_id=?', attemptId);
+    else if (!ctx.db.get('SELECT 1 FROM observed_mistakes WHERE attempt_id=?', attemptId))
+      ctx.db.run('INSERT INTO observed_mistakes (id,attempt_id,concept_id,kind,label,description,created_at,certainty) VALUES (?,?,?,?,?,?,?,?)', uid(), attemptId, a.concept_id, 'unknown_cause', 'Wrong answer, cause unknown', 'Counted as missed after your own grade; the cause is not known.', ctx.now(), 'unknown');
+    if (!wrong && !success) ctx.db.run("UPDATE attempts SET mistake_kind = CASE WHEN grade_status='graded' THEN NULL ELSE 'unreliable' END WHERE id=?", attemptId);
+    reconcileAttempt(ctx, attemptId, { wrong, success });
+    const trace: TraceEntry[] = [];
+    recomputeConcept(ctx, a.concept_id, trace);
+    const mine = trace.find((t) => t.attemptId === attemptId);
+    if (success) applyEvidence(ctx, attemptId, q, { status: 'graded', correctness: a.correctness, source: a.grade_source, confidence: 'high', feedback: '', tags: [] } as Outcome, 'practice', mine);
+  });
 }
 
 function recordMisconception(ctx: Ctx, conceptId: string, attemptId: string, m: { label: string; description: string; origin: 'observed' | 'ai_inferred' }, now: number) {
@@ -588,6 +645,28 @@ export async function clarify(ctx: Ctx, attemptId: string, text: string) {
   return { clarifications: clarifications(ctx, attemptId) };
 }
 
+/** One optional tap: the student says what happened. It is recorded as THEIR statement and replaces a guess; it never creates a pattern by itself. */
+export function setSelfCause(ctx: Ctx, attemptId: string, cause: string) {
+  if (!(SELF_CAUSES as readonly string[]).includes(cause)) throw new HttpError(400, 'invalid', 'Choose one of the options.');
+  const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id = ?', attemptId);
+  if (!a) throw new HttpError(404, 'not_found', 'Attempt not found.');
+  const mapped = fromSelfCause(cause as SelfCause);
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE attempts SET self_cause = ? WHERE id = ?', cause, attemptId);
+    if (mapped) {
+      ctx.db.run('UPDATE attempts SET mistake_kind = ? WHERE id = ?', mapped.kind, attemptId);
+      ctx.db.run('DELETE FROM observed_mistakes WHERE attempt_id = ?', attemptId);
+      ctx.db.run('INSERT INTO observed_mistakes (id,attempt_id,concept_id,kind,label,description,created_at,certainty) VALUES (?,?,?,?,?,?,?,?)', uid(), attemptId, a.concept_id, mapped.kind, mapped.label, `You said: ${SELF_CAUSE_LABEL[cause as SelfCause]}.`, ctx.now(), 'direct');
+    }
+    const d = parse<FeedbackPayload | null>(a.diagnosis, null);
+    if (d?.mistake && d.mistake.kind !== 'unreliable') {
+      d.mistake = mapped ? { kind: mapped.kind, label: mapped.label, why: `You said: ${SELF_CAUSE_LABEL[cause as SelfCause]}.`, certainty: 'direct', youSaid: SELF_CAUSE_LABEL[cause as SelfCause] } : { ...d.mistake, youSaid: SELF_CAUSE_LABEL.unsure };
+      ctx.db.run('UPDATE attempts SET diagnosis = ? WHERE id = ?', JSON.stringify(d), attemptId);
+    }
+  });
+  return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));
+}
+
 /** The student says the question or grade is unclear. It stops counting as evidence and the question is never served again. */
 export function reportUnclear(ctx: Ctx, attemptId: string) {
   const a = ctx.db.get<any>('SELECT * FROM attempts WHERE id = ?', attemptId);
@@ -597,13 +676,14 @@ export function reportUnclear(ctx: Ctx, attemptId: string) {
     const d = parse<FeedbackPayload | null>(a.diagnosis, null);
     if (d) {
       d.gradeStatus = 'uncertain'; d.verdict = 'unsure'; d.headline = 'Marked as unclear'; d.counts = 'Not counted — you reported this question or its grading as unclear. It will not be used again.';
-      d.mistake = { kind: 'unreliable', label: MISTAKE_LABEL.unreliable, why: MISTAKE_BLURB.unreliable }; d.pattern = null; d.misconception = null; d.canSelfGrade = false;
+      d.mistake = { kind: 'unreliable', label: MISTAKE_LABEL.unreliable, why: MISTAKE_BLURB.unreliable, certainty: 'unknown' }; d.pattern = null; d.misconception = null; d.canSelfGrade = false;
       ctx.db.run('UPDATE attempts SET diagnosis = ? WHERE id = ?', JSON.stringify(d), attemptId);
     }
     ctx.db.run("UPDATE attempts SET grade_status = 'uncertain', mistake_kind = 'unreliable' WHERE id = ?", attemptId);
     ctx.db.run('DELETE FROM observed_mistakes WHERE attempt_id = ?', attemptId);
     recomputeConcept(ctx, a.concept_id);
   });
+  settleAttempt(ctx, attemptId);
   return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));
 }
 
@@ -625,6 +705,7 @@ export function selfGrade(ctx: Ctx, attemptId: string, b: { correctness: number;
     }
     recomputeConcept(ctx, a.concept_id);
   });
+  settleAttempt(ctx, attemptId);
   return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));
 }
 
@@ -635,12 +716,13 @@ export async function regrade(ctx: Ctx, attemptId: string) {
   const q = getQuestion(ctx, a.question_id);
   const o = await gradeQuestion(ctx, q, a.answer_text, a.reasoning_text);
   if (o.unparseable) throw new HttpError(422, 'unparseable', o.unparseable);
-  const diag = diagnoseOutcome(ctx, q, o, { answer: a.answer_text, skipped: !!a.idk });
+  const diag = diagnoseOutcome(ctx, q, o, { answer: a.answer_text, skipped: !!a.idk, reasoning: a.reasoning_text });
   const payload = buildFeedback(ctx, q, o, { hintsUsed: a.hints_used, revealed: !!a.saw_answer, idk: !!a.idk, answer: a.answer_text }, { diag, mistake: diag && diag.kind !== 'unreliable' ? describeMistake(diag, o) : null });
   ctx.db.tx(() => {
     ctx.db.run('UPDATE attempts SET correctness=?, grade_status=?, grade_source=?, grade_confidence=?, feedback=?, diagnosis=?, grade_model=?, mistake_kind=? WHERE id=?', o.correctness, o.status, o.source, o.confidence, o.feedback, JSON.stringify(payload), o.model ?? null, diag?.kind ?? null, attemptId);
     afterAttempt(ctx, attemptId, q, o, 'practice', diag);
   });
+  settleAttempt(ctx, attemptId);
   return attemptResult(ctx, ctx.db.get<any>('SELECT * FROM attempts WHERE id=?', attemptId));
 }
 

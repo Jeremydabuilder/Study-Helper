@@ -25,6 +25,10 @@ const MATH_RULES: [RegExp, MathSkill][] = [
   [/\b(union|intersection|subset|venn|sets?\b)/i, 'math.sets'],
 ];
 
+/** Spelling is not what a keyword check should grade: a one-letter slip in a longer word still counts as that word. */
+const lev1 = (a: string, b: string) => { if (Math.abs(a.length - b.length) > 1) return false; let i = 0, j = 0, d = 0; while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++d > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } } return d + (a.length - i) + (b.length - j) <= 1; };
+export const fuzzyHas = (text: string, kw: string) => { const k = kw.toLowerCase(); if (text.includes(k)) return true; if (k.includes(' ') || k.length < 6) return false; return (text.match(/[a-z0-9']+/g) ?? []).some((t) => t.length >= 5 && lev1(t, k)); };
+
 export class OfflineProvider implements AIProvider {
   readonly live = false;
   readonly name = 'offline';
@@ -149,11 +153,11 @@ export class OfflineProvider implements AIProvider {
     const a = `${i.answer} ${i.reasoning}`.toLowerCase();
     const pts = i.question.rubric.map((r) => {
       const kws = r.keywords.length ? r.keywords : top(r.point, 3);
-      const hit = kws.filter((k) => a.includes(k.toLowerCase()));
+      const hit = kws.filter((k) => fuzzyHas(a, k));
       return { point: r.point, met: kws.length > 0 && hit.length >= Math.max(1, Math.ceil(kws.length / 2)) };
     });
     const met = pts.filter((p) => p.met).length;
-    const exactTerm = i.question.rubric.length === 1 && i.question.kind === 'short_answer' && a.trim().replace(/[^a-z0-9 ]/g, '') === i.question.rubric[0].point.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+    const exactTerm = i.question.rubric.length === 1 && i.question.kind === 'short_answer' && (a.trim().replace(/[^a-z0-9 ]/g, '') === i.question.rubric[0].point.toLowerCase().replace(/[^a-z0-9 ]/g, '') || fuzzyHas(a.trim().replace(/[^a-z0-9 ]/g, ''), i.question.rubric[0].point.toLowerCase().replace(/[^a-z0-9 ]/g, '')) && a.trim().split(/\s+/).length <= 3);
     const correctness = exactTerm ? 1 : met / Math.max(1, pts.length);
     return {
       correctness, confidence: exactTerm ? 'high' : 'low', points: pts,

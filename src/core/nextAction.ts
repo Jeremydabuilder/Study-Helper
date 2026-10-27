@@ -11,7 +11,7 @@ export interface NextInput {
   failuresOnConcept: number;                 // consecutive wrong answers on this concept this session, including this one
   prerequisite?: { id: string; name: string } | null; questionKind: string; conceptName: string;
 }
-export type ActionType = 'move_on' | 'another_application' | 'discriminate' | 'targeted_fix' | 'teach_then_practice' | 'simplify' | 'confirm_grade';
+export type ActionType = 'unknown_cause' | 'move_on' | 'another_application' | 'discriminate' | 'targeted_fix' | 'teach_then_practice' | 'simplify' | 'confirm_grade';
 export interface NextAction {
   type: ActionType; reason: string;
   focus?: 'practice' | 'discriminate' | 'gap' | 'simpler'; contrast?: { id: string; name: string }; gapPoints?: string[]; prerequisite?: { id: string; name: string };
@@ -35,6 +35,7 @@ export function nextAction(i: NextInput): NextAction {
     case 'slip': return { type: 'targeted_fix', reason: 'Your method looked right; a small slip cost the answer. Next is a fresh problem of the same kind. Slow down on the step that went wrong.', focus: 'practice' };
     case 'partial_explanation': return { type: 'targeted_fix', reason: 'Part of it was there. Next is a question about the missing idea.', focus: 'gap', gapPoints: i.missedPoints };
     case 'reasoning_error': return { type: 'targeted_fix', reason: 'The idea was there but the steps went wrong. Look at the worked example, then try a fresh one.', focus: 'practice', avoidKind: i.questionKind };
+    case 'unknown_cause': return { type: 'unknown_cause', reason: 'I can’t tell from the answer alone why this missed, so I won’t guess. You can say what happened (optional). Next is a fresh question on the same idea; showing your steps helps.', focus: 'practice', avoidKind: undefined };
     default: return { type: 'teach_then_practice', reason: 'This looks like a missing basic. Read the short explanation and worked example, then try a fresh question on your own.', focus: 'simpler' };
   }
 }

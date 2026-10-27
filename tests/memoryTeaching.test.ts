@@ -36,7 +36,7 @@ describe('memory changes teaching', () => {
     expect(m.text).toMatch(/Seen in 1 answer/); expect(m.evidence[0]).toMatchObject({ attemptId: r.attemptId }); expect(m.effect).toMatch(/tells the two ideas apart/);
     expect(db().get<any>("SELECT COUNT(*) n FROM followups WHERE kind='repair_check' AND status='open'").n).toBe(1); // a later fresh check is scheduled after ONE observation
   });
-  it('a remembered unchecked confusion shapes the NEXT session’s question, and a later independent success marks it as “suggests improvement”', async () => {
+  it('a remembered unchecked confusion shapes the NEXT session’s question; success soon after is only “corrected for now”', async () => {
     const { A, mcq } = await setup(); mcq('q1', 'Q1 which is the First Congress?'); mcq('q2', 'Q2 another about the First Congress');
     const s1 = (await s.call('POST', '/api/sessions', { mode: 'practice', minutes: 20, conceptIds: [A] })).body.id;
     await play(s1, wrongIdx); await s.call('POST', `/api/sessions/${s1}/finish`, {});
@@ -48,8 +48,8 @@ describe('memory changes teaching', () => {
     const ok = await play(s2, rightIdx);
     expect(ok.r.feedback.verdict).toBe('correct');
     const m = (await s.call('GET', '/api/memory')).body.memories.find((x: any) => x.appMade);
-    expect(m.check).toMatchObject({ state: 'improved', targeted: true, attemptId: ok.r.attemptId });
-    expect(m.check.state).not.toBe('mastered'); // never claims mastery from one check
+    expect(m.check).toMatchObject({ state: 'corrected_now', now: { attemptId: ok.r.attemptId, targeted: true } }); // 1 hour later is immediate, not a later check
+    expect(m.check.state).not.toBe('improved');
   });
   it('a hinted success does not count as a later independent check', async () => {
     const { A, mcq } = await setup(); mcq('q1', 'Q1'); mcq('q2', 'Q2');

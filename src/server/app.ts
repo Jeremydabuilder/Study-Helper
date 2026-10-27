@@ -119,6 +119,7 @@ export function createApp(rt: Runtime) {
   app.post('/api/plan/rebuild', h((ctx) => plan.rebuildOverdue(ctx)));
   app.get('/api/progress', h((ctx) => plan.getProgress(ctx)));
   app.post('/api/attempts/:id/clarify', h((ctx, req) => practice.clarify(ctx, req.params.id, z.object({ text: z.string() }).parse(req.body).text)));
+  app.post('/api/attempts/:id/cause', h((ctx, req) => practice.setSelfCause(ctx, req.params.id, z.object({ cause: z.string() }).parse(req.body).cause)));
   app.post('/api/attempts/:id/report-unclear', h((ctx, req) => practice.reportUnclear(ctx, req.params.id)));
   app.get('/api/history', h((ctx) => practice.history(ctx)));
 

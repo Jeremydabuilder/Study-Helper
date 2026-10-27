@@ -14,7 +14,7 @@ import { AIError } from '../../ai/provider';
 export interface QuestionRow {
   id: string; concept_id: string; subject_id: string; kind: string; prompt: string; choices: string | null; answer_spec: string; rubric: string | null;
   hints: string; worked_example: string; explanation: string; difficulty: number; family: string | null; heldout: number; origin: string;
-  verified: number | null; verify_note: string; source_note: string; grounding: 'source' | 'weak' | 'none'; retired_at?: number | null; reported_unclear?: number; focus?: string | null; contrast_id?: string | null;
+  verified: number | null; verify_note: string; source_note: string; grounding: 'source' | 'weak' | 'none'; retired_at?: number | null; reported_unclear?: number; focus?: string | null; contrast_id?: string | null; tests_key?: string | null; support_state?: string; on_hold?: number; interpretive?: number;
 }
 
 /** What the browser may see *before* answering: never the key, rubric, or explanation. */

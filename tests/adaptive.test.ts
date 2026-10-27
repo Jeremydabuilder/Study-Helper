@@ -13,7 +13,8 @@ describe('diagnosis: six kinds, no guessing', () => {
   const base = { questionKind: 'explain', correctness: 0.3, gradeStatus: 'graded' as const };
   it('classifies from the evidence the app can see', () => {
     expect(diagnose({ ...base, idk: true })?.kind).toBe('missing_knowledge');
-    expect(diagnose({ ...base, questionKind: 'math', mathTags: ['sign_error'], slipTag: true })?.kind).toBe('slip');
+    expect(diagnose({ ...base, questionKind: 'math', mathTags: ['sign_error'], slipTag: true, hasWorking: true })?.kind).toBe('slip');
+    expect(diagnose({ ...base, questionKind: 'math', mathTags: ['sign_error'], slipTag: true })).toMatchObject({ kind: 'unknown_cause', possible: 'slip', certainty: 'unknown' }); // no working: a guess is not a finding
     expect(diagnose({ ...base, questionKind: 'math', mathTags: ['flipped_inequality'] })?.kind).toBe('reasoning_error');
     expect(diagnose({ ...base, questionKind: 'multiple_choice', chosenMisconception: 'Mixed up with “B”', confusedWith: { id: 'b', name: 'B' } })).toMatchObject({ kind: 'concept_confusion', confusedWith: { name: 'B' } });
     expect(diagnose({ ...base, correctness: 0.5, rubricMet: 1, rubricTotal: 2 })?.kind).toBe('partial_explanation');
@@ -201,8 +202,8 @@ describe('generic wrong answers are not patterns, and drilling stops after three
     const { sid } = await mathSetup();
     let last: any;
     for (let i = 0; i < 2; i++) { last = (await answer(sid, 'x = 98765')).r; if (i === 0) await s.call('POST', `/api/sessions/${sid}/next`, {}); }
-    expect(last.feedback.mistake).toMatchObject({ kind: 'reasoning_error', label: 'Wrong answer, cause not identified' });
-    expect(last.feedback.mistake.why).toMatch(/could not tell why/); expect(last.feedback.pattern).toBeNull();
+    expect(last.feedback.mistake).toMatchObject({ kind: 'unknown_cause', label: 'Wrong answer, cause unknown', certainty: 'unknown' });
+    expect(last.feedback.mistake.why).toMatch(/does not show why/); expect(last.feedback.pattern).toBeNull();
     expect(db().get<any>('SELECT COUNT(*) n FROM misconceptions').n).toBe(0);
     expect(db().get<any>('SELECT COUNT(*) n FROM observed_mistakes').n).toBe(2);
   });
