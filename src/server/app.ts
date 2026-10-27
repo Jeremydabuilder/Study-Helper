@@ -201,7 +201,7 @@ export function createApp(rt: Runtime) {
     const missing = ctx.cfg.google ? [] : (['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'APP_SECRET'] as const).filter((k) => !process.env[k]);
     const calState = ctx.calendar.kind === 'memory' ? (c.status === 'disconnected' ? 'disconnected' : c.status) : !c.available ? 'not_configured' : c.status;
     return {
-      workspace: ctx.workspace, ai: aiInfo(ctx),
+      workspace: ctx.workspace, ai: aiInfo(ctx), ocr: ocr.ocrAvailability(ctx),
       calendar: { state: calState, demo: c.demo, missingEnv: ctx.calendar.kind === 'memory' ? [] : missing, partialConfig: ctx.cfg.googlePartial, redirectUri: ctx.cfg.googleRedirectUri, lastSyncOkAt: c.lastSyncOkAt, lastError: c.lastError },
       boundary: 'Local single-user app with no login. Do not expose this server to a network until authentication and per-user data isolation exist.',
     };

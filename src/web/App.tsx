@@ -4,6 +4,8 @@ import { useHashRoute } from './ui';
 import { Today } from './pages/Today';
 import { Study } from './pages/Study';
 import { Subjects, SubjectDetail } from './pages/Subjects';
+import { StartFlow } from './pages/StartFlow';
+import { Prepare } from './pages/Prepare';
 import { ReviewSource } from './pages/ReviewSource';
 import { Plan } from './pages/Plan';
 import { CalendarPage } from './pages/CalendarPage';
@@ -22,6 +24,8 @@ export function App() {
 
   let page;
   if (path.startsWith('/study/')) page = <Study id={path.split('/')[2]} go={go} />;
+  else if (path === '/start') page = <StartFlow go={go} />;
+  else if (path.startsWith('/prepare/')) page = <Prepare sourceId={path.split('/')[2]} go={go} />;
   else if (path.startsWith('/review/')) page = <ReviewSource id={path.split('/')[2]} go={go} />;
   else if (path.startsWith('/subjects/')) page = <SubjectDetail id={path.split('/')[2]} go={go} />;
   else if (path === '/subjects') page = <Subjects go={go} />;

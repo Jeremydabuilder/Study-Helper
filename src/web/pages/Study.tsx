@@ -32,6 +32,12 @@ export function Study({ id, go }: { id: string; go: (p: string) => void }) {
   if (!view) return <div className="study"><Spinner label={busy ?? 'Loading…'} /></div>;
 
   if (view.phase === 'done') return <Summary view={view} go={go} />;
+  if (view.phase === 'time_check') return (
+    <div className="study card"><h2>You’ve reached about {view.plannedMinutes} minutes</h2>
+      <p className="muted">You’ve spent roughly {view.usedMin} minutes (answering and reading feedback). Nothing was cut off. Wrap up now to see what you showed and what to do next, or keep going for a few more questions.</p>
+      <div className="row"><button className="btn primary" onClick={async () => setView(await post(`/sessions/${id}/finish`))}>Wrap up and see my summary</button>
+        <button className="btn" onClick={async () => { await post(`/sessions/${id}/extend`, { minutes: 10 }); await load(); }}>Keep going (10 more min)</button></div></div>
+  );
   if (view.phase === 'ready_to_finish') return (
     <div className="study card"><h2>That’s everything planned</h2><p className="muted">Finish to see what you did and what’s next.</p>
       <button className="btn primary" onClick={async () => setView(await post(`/sessions/${id}/finish`))}>Finish session</button></div>
@@ -49,6 +55,7 @@ export function Study({ id, go }: { id: string; go: (p: string) => void }) {
       </div>
       {error && <ErrorBox error={error} onRetry={() => (view.phase === 'feedback' ? advance() : load())}>{error.offlineFallback && <button className="btn" onClick={() => { setOffline(true); view.phase === 'feedback' ? advance(true) : load(true); }}>Use a basic offline question</button>}</ErrorBox>}
       {busy && <Spinner label={busy} />}
+      {!busy && view.phase === 'question' && view.why && <p className="notice info small" role="note"><strong>Why this question:</strong> {view.why}</p>}
       {!busy && view.phase === 'question' && <QuestionCard key={view.question.id} sid={id} view={view} onAnswered={() => load()} />}
       {!busy && view.phase === 'feedback' && <FeedbackCard key={view.attemptId} sid={id} view={view} onNext={() => advance()} reload={() => load()} last={done >= total} onFinish={async () => setView(await post(`/sessions/${id}/finish`))} />}
     </div>
@@ -183,7 +190,14 @@ function FeedbackCard({ sid, view, onNext, reload, last, onFinish }: { sid: stri
       {f.rubricPoints.length > 0 && <ul className="small">{f.rubricPoints.map((p: any, i: number) => <li key={i}>{p.met ? '✓' : '○'} {p.point}</li>)}</ul>}
       {f.explanation && <p><strong>The idea:</strong> {f.explanation}</p>}
       {f.workedExample && <details open={f.verdict === 'skipped'}><summary>Worked example</summary><p style={{ whiteSpace: 'pre-wrap' }}>{f.workedExample}</p></details>}
-      {f.misconception && <div className="notice info small">Saved as a pattern to repair: <strong>{f.misconception}</strong>. You’ll get a targeted follow-up and a fresh check later.</div>}
+      {f.altRepresentation && <p className="small muted">The first explanation didn’t land, so this is a different way to see it rather than the same words again.</p>}
+      {f.mistake && f.mistake.kind !== 'unreliable' && (
+        <div className="notice info small" role="note">
+          <strong>What I noticed in this answer:</strong> {f.mistake.label}. <span className="muted">{f.mistake.why}</span>
+          <div className="muted">{f.pattern ? <>This has now shown up on {f.pattern.count} different questions, so it is saved as a <strong>pattern</strong> to work on.</> : 'This is one observation, not a pattern. It is only called a pattern if it happens on a second, different question.'}</div>
+        </div>)}
+      {f.mistake?.kind === 'unreliable' && <div className="notice warn small">{f.mistake.why}</div>}
+      {f.next && <p className="small"><strong>Next:</strong> {f.next.reason}</p>}
       <p className="small muted"><Chip tone={f.gradeStatus === 'graded' ? 'good' : 'warn'}>{f.gradeStatus === 'graded' ? 'Counted' : 'Not counted yet'}</Chip> {f.counts}</p>
 
       {f.canSelfGrade && (
@@ -196,10 +210,33 @@ function FeedbackCard({ sid, view, onNext, reload, last, onFinish }: { sid: stri
         </div>
       )}
       {err && <ErrorBox error={err} />}
+      <Clarify attemptId={view.attemptId} initial={view.clarifications ?? []} onUnclear={reload} />
       <div className="row mt">
         {!last ? <button ref={nextRef} className="btn primary" onClick={onNext}>Next question</button> : <button ref={nextRef} className="btn primary" onClick={onFinish}>Finish session</button>}
         {!last && <button className="btn ghost" onClick={onFinish}>End session here</button>}
       </div>
+    </div>
+  );
+}
+
+function Clarify({ attemptId, initial, onUnclear }: { attemptId: string; initial: any[]; onUnclear: () => void }) {
+  const [list, setList] = useState<any[]>(initial);
+  const [open, setOpen] = useState(initial.length > 0);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const ask = async () => { if (text.trim().length < 3 || busy) return; setBusy(true); setErr(null); try { const r = await post(`/attempts/${attemptId}/clarify`, { text }); setList(r.clarifications); setText(''); } catch (e) { setErr(e as ApiError); } finally { setBusy(false); } };
+  const unclear = async () => { if (!confirm('Mark this question or its grading as unclear? It will not count and will not be used again.')) return; try { await post(`/attempts/${attemptId}/report-unclear`); onUnclear(); } catch (e) { setErr(e as ApiError); } };
+  return (
+    <div className="mt-s">
+      {!open ? <div className="row gap-s"><button className="btn small ghost" onClick={() => setOpen(true)}>Ask about this feedback</button><button className="btn small ghost" onClick={unclear}>This question or grade seems unclear</button></div> : (
+        <div className="notice info small">
+          <strong>Ask about this feedback</strong> <span className="muted">— about this question and your answer only.</span>
+          {list.map((c) => <div key={c.id} className="mt-s"><div><em>You:</em> {c.ask}</div><div><em>{c.ai ? 'Answer' : 'Note'}:</em> {c.answer}</div></div>)}
+          <div className="row gap-s mt-s"><input style={{ flex: 1, minWidth: 180 }} aria-label="Your question about this feedback" value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="e.g. Why isn’t my answer partly right?" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); ask(); } }} /><button className="btn small" disabled={busy || text.trim().length < 3} onClick={ask}>{busy ? 'Asking…' : 'Ask'}</button></div>
+          {err && <p className="unknown">{err.message}</p>}
+          <button className="btn small ghost mt-s" onClick={unclear}>This question or grade seems unclear</button>
+        </div>)}
     </div>
   );
 }
@@ -212,6 +249,7 @@ function Summary({ view, go }: { view: any; go: (p: string) => void }) {
       <div className="card hero">
         <h1>{s.mode === 'exam' ? 'Test practice results' : 'Nice work — here’s what happened'}</h1>
         <p>{s.answered} question{s.answered === 1 ? '' : 's'} · about {s.minutes} min · {s.independentCorrect}/{s.independentTotal} correct without help{s.helped ? ` · ${s.helped} with hints or shown answers` : ''}</p>
+        {s.reflection && <Reflection r={s.reflection} go={go} />}
         {s.notCounted > 0 && <div className="notice warn small">{s.notCounted} answer{s.notCounted === 1 ? '' : 's'} couldn’t be graded with confidence and {s.notCounted === 1 ? 'isn’t' : 'aren’t'} counted yet. Confirm {s.notCounted === 1 ? 'it' : 'them'} in <a href="#/progress">Progress → History</a>.</div>}
         <h3>By concept</h3>
         <div className="scroll-x"><table><thead><tr><th>Concept</th><th>Right</th><th>Partly</th><th>Missed</th><th>With help</th><th>Where it stands</th></tr></thead>
@@ -229,6 +267,24 @@ function Summary({ view, go }: { view: any; go: (p: string) => void }) {
         {s.nextSteps.length > 0 && <><h3>What’s next</h3><ul>{s.nextSteps.map((n: string, i: number) => <li key={i}>{n}</li>)}</ul></>}
         <div className="row mt"><button className="btn primary" onClick={() => go('/')}>Back to Today</button><button className="btn" onClick={() => go('/progress')}>See progress</button></div>
       </div>
+    </div>
+  );
+}
+
+function Reflection({ r, go }: { r: any; go: (p: string) => void }) {
+  return (
+    <div className="mt">
+      <div className="grid2" style={{ alignItems: 'start' }}>
+        <section><h3>What you showed on your own</h3>
+          {r.demonstrated.length ? <ul>{r.demonstrated.map((d: any) => <li key={d.conceptId}><strong>{d.concept}</strong> — {d.text}</li>)}</ul> : <p className="muted">Nothing yet counts as independent today. That is useful to know, not a failure.</p>}</section>
+        <section><h3>What still needs work</h3>
+          {r.needsWork.length ? <ul>{r.needsWork.map((d: any) => <li key={d.conceptId}><strong>{d.concept}</strong> — {d.text}{d.pattern && <> <Chip tone="warn">pattern</Chip></>}</li>)}</ul> : <p className="muted">No misses today.</p>}</section>
+      </div>
+      {r.uncertain.length > 0 && <section><h3>What is still uncertain</h3><ul>{r.uncertain.map((u: string, i: number) => <li key={i}>{u}</li>)}</ul></section>}
+      <div className="notice good" role="note"><strong>Do next:</strong> {r.next.text}</div>
+      {r.later.length > 0 && <section><h3>What will be checked again</h3><ul>{r.later.map((l: any) => <li key={l.conceptId}><strong>{l.concept}</strong> on {l.when}: {l.what}</li>)}</ul></section>}
+      <p className="small muted">{r.notes.join(' ')}</p>
+      {r.next.goal && <div className="row"><button className="btn" onClick={() => go('/')}>Plan the next session</button></div>}
     </div>
   );
 }

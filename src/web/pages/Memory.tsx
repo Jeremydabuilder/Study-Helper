@@ -4,8 +4,8 @@ import { Chip, Empty, ErrorBox, Field, Spinner } from '../ui';
 
 const KIND: Record<string, { label: string; tone: 'good' | 'info' | 'warn'; help: string }> = {
   student_stated: { label: 'You told me', tone: 'good', help: 'Facts and preferences you entered.' },
-  observed: { label: 'Observed', tone: 'info', help: 'Seen in your actual answers.' },
-  ai_inferred: { label: 'AI guess', tone: 'warn', help: 'An inference — might be wrong. Correct or delete it.' },
+  observed: { label: 'Observed once', tone: 'info', help: 'Seen in one of your actual answers. One answer can be a slip.' },
+  ai_inferred: { label: 'Inferred from several answers', tone: 'warn', help: 'The same mistake showed up on different questions. Still an inference: correct or dismiss it if it is wrong.' },
 };
 
 export function Memory({ go }: { go: (p: string) => void }) {
@@ -35,7 +35,8 @@ export function Memory({ go }: { go: (p: string) => void }) {
       </section>
 
       {d.memories.some((x: any) => x.kind !== 'student_stated') && (
-        <section className="card" aria-labelledby="inf"><h2 id="inf">Things I inferred</h2>
+        <section className="card" aria-labelledby="inf"><h2 id="inf">What I noticed in your answers</h2>
+          <p className="small muted">These describe specific mistakes on specific topics, never you as a person. Each lists the answers behind it and what it changes. Dismiss any that are wrong: dismissed notes stop affecting your questions.</p>
           {d.memories.filter((x: any) => x.kind !== 'student_stated').map((x: any) => <MemRow key={x.id} x={x} edit={edit} setEdit={setEdit} act={act} />)}</section>
       )}
 
@@ -70,6 +71,7 @@ function MemRow({ x, edit, setEdit, act }: any) {
       <div className="row between top">
         <div className="grow">
           {editing ? <input aria-label="Edit note" value={edit.text} onChange={(e) => setEdit({ id: x.id, text: e.target.value })} maxLength={400} /> : <span>{x.text}</span>}
+          {x.appMade && <AppMemoryDetail x={x} act={act} />}
           <div className="small muted"><Chip tone={k.tone} title={k.help}>{k.label}</Chip> {x.provenance?.correctedByStudent ? 'corrected by you · ' : ''}{x.provenance?.origin === 'import' ? 'imported · ' : ''}added {fmtDate(x.createdAt)}{x.updatedAt !== x.createdAt ? ` · edited ${fmtDate(x.updatedAt)}` : ''}</div>
         </div>
         <div className="row gap-s">
@@ -77,6 +79,24 @@ function MemRow({ x, edit, setEdit, act }: any) {
             : <><button className="btn small ghost" onClick={() => setEdit({ id: x.id, text: x.text })}>{x.kind === 'student_stated' ? 'Edit' : 'Correct'}</button><button className="btn small ghost danger" onClick={() => act(() => del(`/memory/${x.id}`))}>Delete</button></>}
         </div>
       </div>
+    </div>
+  );
+}
+
+const CHECK_TEXT: Record<string, { tone: 'good' | 'warn' | 'info'; text: string }> = {
+  unchecked: { tone: 'info', text: 'Not re-checked yet' },
+  improved: { tone: 'good', text: 'A later independent check suggests improvement' },
+  not_improved: { tone: 'warn', text: 'It came back after an earlier good check' },
+};
+function AppMemoryDetail({ x, act }: { x: any; act: (fn: () => Promise<any>) => Promise<void> }) {
+  const c = x.check ? CHECK_TEXT[x.check.state] : null;
+  return (
+    <div className="small" style={{ margin: '.3rem 0' }}>
+      {x.dismissed && <p className="unknown">Dismissed by you — this no longer affects your questions.</p>}
+      <div className="row gap-s">{c && <Chip tone={c.tone}>{c.text}{x.check.at ? ` · ${fmtDate(x.check.at)}` : ''}</Chip>}{x.check?.state === 'improved' && <span className="muted">That is one good answer, not proof it is learned; the later review still runs.</span>}</div>
+      {x.effect && <p className="muted" style={{ margin: '.2rem 0' }}>What this changes: {x.effect}</p>}
+      <details><summary>The answers behind this ({x.evidence.length})</summary>{x.evidence.map((e: any) => <div key={e.attemptId} className="quote small">{fmtDate(e.at)} — {e.prompt.slice(0, 120)}<br /><span className="muted">You answered: {e.answer || '(no answer)'}</span></div>)}</details>
+      <div className="row gap-s mt-s">{x.dismissed ? <button className="btn small" onClick={() => act(() => post(`/memory/${x.id}/status`, { status: 'active' }))}>Undo dismiss</button> : <button className="btn small ghost" onClick={() => act(() => post(`/memory/${x.id}/status`, { status: 'dismissed' }))}>This isn’t right — dismiss</button>}</div>
     </div>
   );
 }

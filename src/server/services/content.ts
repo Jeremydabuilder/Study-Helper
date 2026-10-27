@@ -188,7 +188,7 @@ export function subjectOverview(ctx: Ctx, id: string) {
     const refs = ctx.db.all<any>('SELECT quote, label, source_id, stale FROM concept_refs WHERE concept_id = ?', c.id);
     const st = ctx.db.get<any>('SELECT state, level, due_at FROM concept_state WHERE concept_id = ?', c.id);
     return {
-      id: c.id, name: c.name, summary: c.summary, status: c.status, skillTag: c.skill_tag, support: c.support, supportNote: c.support_note, origin: c.origin,
+      id: c.id, name: c.name, summary: c.summary, status: c.status, sourceId: c.source_id, skillTag: c.skill_tag, support: c.support, supportNote: c.support_note, origin: c.origin,
       refs, level: st?.level ?? 'not_assessed', dueAt: st?.due_at ?? null, state: st ? parse(st.state, null) : null,
       prereqIds: ctx.db.all<any>('SELECT prereq_id FROM concept_prereqs WHERE concept_id = ?', c.id).map((r) => r.prereq_id),
       activeMisconceptions: ctx.db.get<any>("SELECT COUNT(*) n FROM misconceptions WHERE concept_id = ? AND status = 'active'", c.id).n,

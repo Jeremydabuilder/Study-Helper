@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ApiError, post, setWorkspace, useApi } from '../api';
-import { Chip, Empty, ErrorBox, Modal, Spinner } from '../ui';
+import { Chip, ErrorBox, Modal, Spinner } from '../ui';
+import { RecommendationCard } from './Recommendation';
 
 const WEIGHT_LABEL: Record<string, string> = { urgency: 'Deadline pressure', weakness: 'Needs work', overdue: 'Review overdue', prereq: 'Underpins other topics', unassessed: 'Not assessed yet', repair: 'Unresolved mistake' };
 
@@ -45,82 +46,40 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
       {t.welcomeBack && <div className="notice info" role="status">{t.welcomeBack.message}</div>}
       {err && <ErrorBox error={err} onRetry={() => start()} />}
 
-      {t.empty ? (
-        <div className="card hero">
-          <h2>{t.empty === 'no_subjects' ? 'Let’s set up your first subject' : t.empty === 'unconfirmed_concepts' ? 'Confirm what you want to learn' : 'Add some class material'}</h2>
-          <p className="muted">
-            {t.empty === 'no_subjects' && 'Create a subject, paste in your notes or a review packet, confirm the concepts I find, and take a short check. Then this screen will tell you what to study, why, and for how long.'}
-            {t.empty === 'unconfirmed_concepts' && 'I found some concepts in your material. Check them and confirm the ones that are right — nothing is assigned until you do.'}
-            {t.empty === 'no_concepts' && 'Paste notes or a review packet into a subject and I will propose concepts, linked to your text.'}
-          </p>
-          <div className="row"><button className="btn primary big" onClick={() => go('/subjects')}>{t.empty === 'no_subjects' ? 'Create a subject' : 'Go to subjects'}</button>
-            <button className="btn" onClick={() => setWorkspace('demo')}>Explore with sample data</button></div>
-        </div>
-      ) : (
-        <section className="card hero" aria-labelledby="next-h">
-          <h2 id="next-h">What to study next</h2>
-          <div className="row between mb-s">
-            <div className="seg" role="group" aria-label="Time available">
-              {[10, 20, 30].map((m) => <button key={m} aria-pressed={mins === m && custom === ''} onClick={() => { setMinutes(m); setCustom(''); }}>{m} min</button>)}
-              <button aria-pressed={custom !== ''} onClick={() => document.getElementById('custom-min')?.focus()}>Other</button>
-            </div>
-            <label className="row gap-s small muted">Custom
-              <input id="custom-min" type="number" min={3} max={180} value={custom} placeholder="min" style={{ width: 80 }} onChange={(e) => { setCustom(e.target.value); const n = Number(e.target.value); if (n >= 3 && n <= 180) setMinutes(n); }} />
-            </label>
-          </div>
-          {t.freeMinutesToday > 0 && <p className="small muted">About {t.freeMinutesToday} min free today after your calendar, protected time and daily limit.</p>}
+      <RecommendationCard t={t} mins={mins} setMinutes={(m: number) => { setMinutes(m); setCustom(''); }} go={go} onSample={() => setWorkspace('demo')} />
 
-          {t.plan.tasks.length === 0 ? (
-            <Empty title="Nothing needs you right now">You’re caught up for today. Come back tomorrow, or practise a topic you choose from Subjects.</Empty>
-          ) : (
-            <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {t.plan.tasks.map((k: any, i: number) => (
-                <li className="task" key={k.conceptId}>
-                  <span className="task-num" aria-hidden>{i + 1}</span>
-                  <div className="grow">
-                    <div className="row between top">
-                      <div><span className="task-title">{k.verb}: {k.conceptName}</span><div className="muted small">{k.subjectName}</div></div>
-                      <Chip>{k.minutes} min</Chip>
+      {!t.empty && t.plan.tasks.length > 0 && (
+        <details className="card" style={{ padding: '.9rem 1.1rem' }}>
+          <summary><strong>See today’s full plan</strong> <span className="muted small">(topics ranked by deadline, weakness and review dates)</span></summary>
+          <ol style={{ listStyle: 'none', padding: 0, margin: '.6rem 0 0' }}>
+            {t.plan.tasks.map((k: any, i: number) => (
+              <li className="task" key={k.conceptId}>
+                <span className="task-num" aria-hidden>{i + 1}</span>
+                <div className="grow">
+                  <div className="row between top"><div><span className="task-title">{k.verb}: {k.conceptName}</span><div className="muted small">{k.subjectName}</div></div><Chip>{k.minutes} min</Chip></div>
+                  <p className="why mb-s">{k.reasons.slice(0, 2).join(' ')}</p>
+                  <details>
+                    <summary>Why this order? (see the rule inputs)</summary>
+                    <div className="bars" role="list" aria-label={`Priority inputs for ${k.conceptName}`}>
+                      {Object.entries(k.components).map(([key, v]: any) => (
+                        <div key={key} style={{ display: 'contents' }} role="listitem"><span>{WEIGHT_LABEL[key]}</span><div className="bar" aria-hidden><span style={{ width: `${Math.round(v * 100)}%` }} /></div><span>{Math.round(v * 100)}%</span></div>
+                      ))}
                     </div>
-                    <p className="why mb-s">{k.reasons.slice(0, 2).join(' ')}</p>
-                    <details>
-                      <summary>Why this order? (see the rule inputs)</summary>
-                      <div className="bars" role="list" aria-label={`Priority inputs for ${k.conceptName}`}>
-                        {Object.entries(k.components).map(([key, v]: any) => (
-                          <div key={key} style={{ display: 'contents' }} role="listitem">
-                            <span>{WEIGHT_LABEL[key]}</span><div className="bar" aria-hidden><span style={{ width: `${Math.round(v * 100)}%` }} /></div><span>{Math.round(v * 100)}%</span>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="small muted mt-s">Each input is combined using the weights in Settings → Priorities. The result is an ordering aid, not a prediction.</p>
-                    </details>
-                    <div className="row gap-s mt-s">
-                      <button className="btn small ghost" onClick={() => override(k.conceptId, 'skip')}>Skip today</button>
-                      {!k.pinned && i > 0 && <button className="btn small ghost" onClick={() => override(k.conceptId, 'pin')}>Do this first</button>}
-                      {k.pinned && <Chip tone="info">Pinned by you</Chip>}
-                    </div>
+                    <p className="small muted mt-s">Each input is combined using the weights in Settings → Priorities. The result is an ordering aid, not a prediction.</p>
+                  </details>
+                  <div className="row gap-s mt-s">
+                    <button className="btn small ghost" onClick={() => override(k.conceptId, 'skip')}>Skip today</button>
+                    {!k.pinned && i > 0 && <button className="btn small ghost" onClick={() => override(k.conceptId, 'pin')}>Do this first</button>}
+                    {k.pinned && <Chip tone="info">Pinned by you</Chip>}
                   </div>
-                </li>
-              ))}
-            </ol>
-          )}
-          {t.plan.deferredNote && (
-            <div className="notice info small">{t.plan.deferredNote} <button className="btn small" onClick={async () => { await post('/plan/rebuild'); today.reload(); }}>Spread them out</button></div>
-          )}
+                </div>
+              </li>
+            ))}
+          </ol>
+          {t.plan.deferredNote && <div className="notice info small">{t.plan.deferredNote} <button className="btn small" onClick={async () => { await post('/plan/rebuild'); today.reload(); }}>Spread them out</button></div>}
           {t.plan.skipped.length > 0 && <p className="small muted">Skipped for today: {t.plan.skipped.join(', ')}</p>}
-          <div className="row mt">
-            {t.active ? (
-              <>
-                <button className="btn primary big" onClick={() => go(`/study/${t.active.id}`)}>Resume your session</button>
-                <button className="btn" onClick={() => start(true)}>Start a new one instead</button>
-              </>
-            ) : (
-              <button className="btn primary big" disabled={starting || t.plan.tasks.length === 0} onClick={() => start()}>{starting ? 'Starting…' : `Start studying · ${mins} min`}</button>
-            )}
-            {t.dueReviews > 0 && !t.active && <span className="muted small">{t.dueReviews} review{t.dueReviews === 1 ? '' : 's'} due</span>}
-          </div>
           <p className="small muted mt-s">{t.heuristicNote}</p>
-        </section>
+        </details>
       )}
 
       {t.attention.length > 0 || t.pendingProposals > 0 || t.schedule.changes.some((c: any) => c.kind !== 'added') ? (

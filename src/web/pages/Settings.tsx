@@ -165,6 +165,13 @@ function SetupTab() {
       </>)}
     </section>
 
+    <section className="card" aria-labelledby="ocr-h"><h2 id="ocr-h">Reading scans and screenshots</h2>
+      <p><Chip tone={st.data.ocr?.available ? 'good' : 'neutral'}>{st.data.ocr?.available ? 'Available (Anthropic)' : 'Off'}</Chip> <span className="small muted">Live reading has not been verified in this build; fixtures only until you try it.</span></p>
+      {st.data.ocr?.available
+        ? <p className="small muted">When you ask to read a scanned page or screenshot you will see the provider, model and exactly which pages are sent, with a worst-case cost, and must approve it. Usage counts in the budget below. The reader only transcribes; math, diagrams and anything unclear are flagged for you to check.</p>
+        : <><p className="small muted">{st.data.ocr?.reason} Without it you can always type a scanned page beside the original.</p>{st.data.ocr?.steps?.length > 0 && <ol className="small">{st.data.ocr.steps.map((x: string, i: number) => <li key={i}>{x}</li>)}</ol>}</>}
+    </section>
+
     {ai.live && (
       <section className="card" aria-labelledby="use-h"><h2 id="use-h">Usage & budget (last 24 hours)</h2>
         <p className="metric" style={{ fontSize: '1.5rem' }}>{usd(u.spentUsd)} <span className="small muted">spent (estimated) of {usd(u.budgetUsd)} budget{u.heldUsd > 0 && <> · <strong>{usd(u.heldUsd)}</strong> held</>}</span></p>
