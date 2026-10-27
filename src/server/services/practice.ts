@@ -14,6 +14,7 @@ import { HOUR, DAY } from '../../core/time';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, getProfile, getSchedulerParams, parse } from './common';
 import { modelChunks } from './sourceSafety';
+import { memoryAction, recordImprovement, recordMistakeMemory } from './teachingMemory';
 import { PickOpts, QuestionRow, getQuestion, pickQuestion, publicQuestion } from './questions';
 import { buildPlanInputs } from './plan';
 
@@ -133,9 +134,14 @@ async function advance(ctx: Ctx, session: any, opts: { useOffline?: boolean } = 
   const asked = ctx.db.all<any>('SELECT question_id FROM attempts WHERE session_id = ?', session.id).map((r) => r.question_id);
   const lastKind = last ? ctx.db.get<any>('SELECT kind FROM questions WHERE id=?', last.question_id)?.kind : null;
   const lastWrong = last ? ctx.db.get<any>('SELECT correctness, idk FROM attempts WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1', session.id) : null;
-  const sameConcept = !!act && (slot.conceptId === last?.concept_id || !!act.prerequisite);
-  const q = await pickQuestion(ctx, { conceptId: slot.conceptId, purpose: slot.done > 0 && slot.purpose === 'practice' ? 'practice' : slot.purpose, exclude: asked, lastKind, easier: !!(lastWrong && (lastWrong.idk || (lastWrong.correctness ?? 1) < 0.4)), useOffline: opts.useOffline, action: sameConcept && act!.focus ? act : undefined });
-  const cur: Current = { questionId: q.id, conceptId: q.concept_id, purpose: slot.purpose, servedAt: ctx.now(), hintsShown: 0, revealed: false, attemptId: null, why: act?.reason ?? null };
+  let act2 = act;
+  if (!act2 || !act2.focus) { // nothing from the last answer: a saved, unchecked confusion on THIS concept still shapes the next question
+    const askedDisc = ctx.db.get<any>("SELECT COUNT(*) n FROM attempts a JOIN questions q ON q.id=a.question_id WHERE a.session_id=? AND a.concept_id=? AND q.focus='discriminate'", session.id, slot.conceptId).n > 0;
+    act2 = (slot.purpose !== 'review' && slot.purpose !== 'exam' ? memoryAction(ctx, slot.conceptId, askedDisc) : null) ?? act;
+  }
+  const sameConcept = !!act2 && (slot.conceptId === last?.concept_id || !!act2.prerequisite || act2 !== act);
+  const q = await pickQuestion(ctx, { conceptId: slot.conceptId, purpose: slot.done > 0 && slot.purpose === 'practice' ? 'practice' : slot.purpose, exclude: asked, lastKind, easier: !!(lastWrong && (lastWrong.idk || (lastWrong.correctness ?? 1) < 0.4)), useOffline: opts.useOffline, action: sameConcept && act2?.focus ? act2 : undefined });
+  const cur: Current = { questionId: q.id, conceptId: q.concept_id, purpose: slot.purpose, servedAt: ctx.now(), hintsShown: 0, revealed: false, attemptId: null, why: sameConcept ? act2?.reason ?? null : null };
   ctx.db.run('UPDATE sessions SET current = ?, notes = ? WHERE id = ?', JSON.stringify(cur), JSON.stringify({ ...notes, next: null } satisfies Notes), session.id);
   return cur;
 }
@@ -463,8 +469,9 @@ function afterAttempt(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, p
   if (diag && diag.kind !== 'unreliable') {
     const m = describeMistake(diag, o);
     ctx.db.run('INSERT INTO observed_mistakes (id,attempt_id,concept_id,kind,label,description,created_at) VALUES (?,?,?,?,?,?,?)', uid(), attemptId, q.concept_id, diag.kind, clip(m.label, 80), clip(m.description, 300), now);
+    const sup = patternSupport(ctx, q.concept_id, m.label, now, q.id, attemptId);
+    recordMistakeMemory(ctx, { conceptId: q.concept_id, attemptId, questionId: q.id, kind: diag.kind, label: m.label, description: m.description, confusedWith: diag.confusedWith, patternFormed: sup.questions >= 2, distinctQuestions: sup.questions });
     if (!NO_PATTERN.includes(diag.kind)) {
-      const sup = patternSupport(ctx, q.concept_id, m.label, now, q.id, attemptId);
       if (sup.questions >= 2) {
         recordMisconception(ctx, q.concept_id, attemptId, { label: m.label, description: m.description, origin: m.origin }, now);
         for (const id of sup.attemptIds) ctx.db.run('INSERT OR IGNORE INTO misconception_evidence (misconception_id, attempt_id) SELECT id, ? FROM misconceptions WHERE concept_id=? AND lower(label)=lower(?) AND status != \'dismissed\'', id, q.concept_id, m.label);
@@ -474,6 +481,8 @@ function afterAttempt(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, p
   const trace: TraceEntry[] = [];
   recomputeConcept(ctx, q.concept_id, trace);
   const mine = trace.find((t) => t.attemptId === attemptId);
+  const att = ctx.db.get<any>('SELECT hints_used, saw_answer, idk FROM attempts WHERE id=?', attemptId);
+  if (o.status === 'graded' && (o.correctness ?? 0) >= 0.8 && att && !att.hints_used && !att.saw_answer && !att.idk) recordImprovement(ctx, { conceptId: q.concept_id, attemptId, questionId: q.id, focus: q.focus ?? null });
   if (purpose === 'repair' && o.status === 'graded') ctx.db.run("UPDATE followups SET status='done', done_at=? WHERE concept_id=? AND kind='repair' AND status='open'", now, q.concept_id);
   if (mine?.counted && mine.kind === 'delayed_unaided') {
     ctx.db.run("UPDATE followups SET status='done', done_at=? WHERE concept_id=? AND kind='repair_check' AND status='open' AND earliest_at <= ?", now, q.concept_id, now);
@@ -492,7 +501,12 @@ function recordMisconception(ctx: Ctx, conceptId: string, attemptId: string, m: 
   else { id = uid(); ctx.db.run('INSERT INTO misconceptions (id,concept_id,label,description,status,origin,count,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,?,?,?,?)', id, conceptId, clip(m.label, 80), clip(m.description, 300), 'active', m.origin, 2, now, now); }
   ctx.db.run('INSERT OR IGNORE INTO misconception_evidence (misconception_id, attempt_id) VALUES (?,?)', id, attemptId);
   if (!ctx.db.get("SELECT 1 FROM followups WHERE misconception_id=? AND kind='repair' AND status='open'", id)) ctx.db.run("INSERT INTO followups (id,concept_id,misconception_id,kind,earliest_at,created_at) VALUES (?,?,?,?,?,?)", uid(), conceptId, id, 'repair', now, now);
-  if (!ctx.db.get("SELECT 1 FROM followups WHERE misconception_id=? AND kind='repair_check' AND status='open'", id)) ctx.db.run("INSERT INTO followups (id,concept_id,misconception_id,kind,earliest_at,created_at) VALUES (?,?,?,?,?,?)", uid(), conceptId, id, 'repair_check', now + DAY, now);
+  if (!ctx.db.get("SELECT 1 FROM followups WHERE misconception_id=? AND kind='repair_check' AND status='open'", id)) {
+    // a later check may already be scheduled from the first observation: adopt it instead of adding a second one
+    const generic = ctx.db.get<any>("SELECT id FROM followups WHERE concept_id=? AND kind='repair_check' AND status='open' AND misconception_id IS NULL ORDER BY earliest_at LIMIT 1", conceptId);
+    if (generic) ctx.db.run('UPDATE followups SET misconception_id=? WHERE id=?', id, generic.id);
+    else ctx.db.run("INSERT INTO followups (id,concept_id,misconception_id,kind,earliest_at,created_at) VALUES (?,?,?,?,?,?)", uid(), conceptId, id, 'repair_check', now + DAY, now);
+  }
 }
 
 /** Saved notes about this student on this concept, passed to the grader and generator so memory changes teaching. */

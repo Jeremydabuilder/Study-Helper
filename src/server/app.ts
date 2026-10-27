@@ -9,6 +9,7 @@ import { DEFAULT_AVAILABILITY } from '../core/schedule';
 import { isValidTimeZone } from '../core/time';
 import { WorkspaceName } from './db';
 import { Runtime } from './context';
+import { memoryStatus } from './services/teachingMemory';
 import { setFlagDecision } from './services/sourceSafety';
 import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfile, getSetting, getWeights, setSetting, usageReport } from './services/common';
 import * as content from './services/content';
@@ -136,6 +137,7 @@ export function createApp(rt: Runtime) {
   app.get('/api/memory', h((ctx) => mem.listMemory(ctx)));
   app.post('/api/memory', h((ctx, req) => mem.addMemory(ctx, z.object({ text: z.string(), subjectId: z.string().nullable().optional(), conceptId: z.string().nullable().optional() }).parse(req.body))));
   app.patch('/api/memory/:id', h((ctx, req) => mem.updateMemory(ctx, req.params.id, z.object({ text: z.string() }).parse(req.body))));
+  app.post('/api/memory/:id/status', h((ctx, req) => { if (!memoryStatus(ctx, req.params.id, z.object({ status: z.enum(['active', 'dismissed']) }).parse(req.body).status)) throw new HttpError(404, 'not_found', 'Memory not found.'); }));
   app.delete('/api/memory/:id', h((ctx, req) => mem.deleteMemory(ctx, req.params.id)));
   app.patch('/api/misconceptions/:id', h((ctx, req) => mem.setMisconceptionStatus(ctx, req.params.id, z.object({ status: z.enum(['active', 'dismissed', 'repaired']) }).parse(req.body).status)));
   app.delete('/api/misconceptions/:id', h((ctx, req) => mem.deleteMisconception(ctx, req.params.id)));
