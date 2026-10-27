@@ -322,7 +322,9 @@ function displayAnswer(q: QuestionRow, a: string) {
 const siblingsOf = (ctx: Ctx, conceptId: string) => ctx.db.all<{ id: string; name: string }>("SELECT id, name FROM concepts WHERE status='confirmed' AND subject_id=(SELECT subject_id FROM concepts WHERE id=?) AND id != ?", conceptId, conceptId);
 function findConfused(sibs: { id: string; name: string }[], texts: (string | null | undefined)[]) {
   const hay = texts.filter(Boolean).join(' \n ').toLowerCase();
-  return sibs.find((x) => x.name.length >= 4 && hay.includes(x.name.toLowerCase())) ?? null;
+  const quoted = [...hay.matchAll(/[“"]([^”"]{3,90})[”"]/g)].map((m) => m[1].trim());
+  for (const q of quoted) { const hit = sibs.find((x) => x.name.toLowerCase() === q); if (hit) return hit; } // a name the app itself quoted ("Mixed up with “X”") is exact
+  return [...sibs].sort((a, b) => b.name.length - a.name.length).find((x) => x.name.length >= 4 && hay.includes(x.name.toLowerCase())) ?? null; // otherwise the most specific (longest) name mentioned
 }
 
 export function diagnoseOutcome(ctx: Ctx, q: QuestionRow, o: Outcome, a: { answer: string; skipped: boolean }): Diagnosis | null {
@@ -338,9 +340,10 @@ export function diagnoseOutcome(ctx: Ctx, q: QuestionRow, o: Outcome, a: { answe
 
 /** The observed mistake as it will be remembered: a specific label when the app knows one, otherwise the kind. */
 function describeMistake(d: Diagnosis, o: Outcome) {
-  if (o.misconception) return { label: o.misconception.label, description: o.misconception.description, origin: o.misconception.origin };
-  if (d.confusedWith) return { label: `Mixed up with “${d.confusedWith.name}”`, description: d.why, origin: 'observed' as const };
-  return { label: MISTAKE_LABEL[d.kind], description: d.why, origin: (o.source === 'ai' ? 'ai_inferred' : 'observed') as 'observed' | 'ai_inferred' };
+  if (o.misconception) return { label: o.misconception.label, description: o.misconception.description, origin: o.misconception.origin, specific: true };
+  if (d.confusedWith) return { label: `Mixed up with “${d.confusedWith.name}”`, description: d.why, origin: 'observed' as const, specific: true };
+  // a generic kind ("reasoning error", "partly right") describes this answer but is too vague to call a recurring pattern
+  return { label: d.kind === 'reasoning_error' ? 'Wrong answer, cause not identified' : MISTAKE_LABEL[d.kind], description: d.why, origin: (o.source === 'ai' ? 'ai_inferred' : 'observed') as 'observed' | 'ai_inferred', specific: false };
 }
 
 const PATTERN_DAYS = 30;
@@ -398,7 +401,7 @@ export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput
   const diag = diagnoseOutcome(ctx, q, outcome, { answer, skipped: idk || skippedAfterReveal });
   const mrec = diag && diag.kind !== 'unreliable' ? describeMistake(diag, outcome) : null;
   const now = ctx.now();
-  const support = mrec && diag && !NO_PATTERN.includes(diag.kind) ? patternSupport(ctx, q.concept_id, mrec.label, now, q.id) : null;
+  const support = mrec && mrec.specific && diag && !NO_PATTERN.includes(diag.kind) ? patternSupport(ctx, q.concept_id, mrec.label, now, q.id) : null;
 
   // teaching state for this session: consecutive misses, and what the next question should do
   const notes = notesOf(s); const fails = { ...(notes.fails ?? {}) }; const explained = { ...(notes.explained ?? {}) };
@@ -410,11 +413,14 @@ export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput
   const slotNow = slotsBefore.find((x) => x.conceptId === cur.conceptId && x.done < x.n) ?? slotsBefore.find((x) => x.conceptId === cur.conceptId);
   const success = counted && (outcome.correctness ?? 0) >= 0.8 && independent;
   const concept = ctx.db.get<any>('SELECT name FROM concepts WHERE id=?', q.concept_id);
-  const na = hold ? null : nextAction({
+  let na = hold ? null : nextAction({
     mistake: diag?.kind ?? null, correctness: counted ? outcome.correctness : null, independent, confidence: confidence as 1 | 2 | 3 | null, confusedWith: diag?.confusedWith ?? null,
     missedPoints: (outcome.rubricPoints ?? []).filter((p) => !p.met).map((p) => p.point), streakIndependent: success ? (slotNow?.streak ?? 0) + 1 : 0, failuresOnConcept: fails[q.concept_id] ?? 0,
     prerequisite: wrong ? weakestPrerequisite(ctx, q.concept_id) : null, questionKind: q.kind, conceptName: concept.name,
   });
+  // Three misses in a row on one concept: more of the same will not help. Stop drilling it today; it is saved to come back to from the basics.
+  const giveUp = !hold && counted && wrong && (fails[q.concept_id] ?? 0) >= 3;
+  if (giveUp) na = { type: 'simplify', reason: `Three misses in a row on “${concept.name}”. More of the same would not help, so I’m moving on. This topic is saved to come back to from the basics, ideally with the explanation above or your teacher.`, alternativeRepresentation: true, closeSlot: true };
   const payload = buildFeedback(ctx, q, outcome, { hintsUsed: cur.hintsShown, revealed: revealUsed, idk, answer }, {
     diag, mistake: mrec, pattern: support && support.questions >= 2 ? { label: mrec!.label, count: support.questions } : null, na,
   });
@@ -434,7 +440,8 @@ export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput
       if (!hold && inBudget && (slot.purpose === 'practice' || slot.purpose === 'repair') && failed && slot.extra < 2 && slot.done >= slot.n) { slot.n++; slot.extra++; }
       if (!hold && slot.purpose === 'practice' && slot.streak >= 2 && slot.done < slot.n) slot.n = slot.done; // enough independent evidence today: stop drilling
     }
-    if (!hold && wrong && slot && slot.purpose === 'diagnostic' && !na?.prerequisite && (fails[q.concept_id] ?? 0) <= 1 && !slots.some((x) => x.conceptId === q.concept_id && x.priority && x.done < x.n)) slots.push({ conceptId: q.concept_id, purpose: 'practice', n: 1, done: 0, extra: 0, streak: 0, priority: true }); // a miss in a quick check gets one fresh follow-up now
+    if (giveUp) for (const x of slots) if (x.conceptId === q.concept_id && x.done < x.n) x.n = x.done;
+    if (!hold && !giveUp && wrong && slot && slot.purpose === 'diagnostic' && !na?.prerequisite && (fails[q.concept_id] ?? 0) <= 1 && !slots.some((x) => x.conceptId === q.concept_id && x.priority && x.done < x.n)) slots.push({ conceptId: q.concept_id, purpose: 'practice', n: 1, done: 0, extra: 0, streak: 0, priority: true }); // a miss in a quick check gets one fresh follow-up now
     if (na?.prerequisite && !slots.some((x) => x.conceptId === na.prerequisite!.id && x.priority && x.done < x.n)) slots.push({ conceptId: na.prerequisite.id, purpose: 'diagnostic', n: 1, done: 0, extra: 0, streak: 0, priority: true });
     ctx.db.run('UPDATE sessions SET slots=?, current=?, active_ms=active_ms+?, notes=? WHERE id=?', JSON.stringify(slots), JSON.stringify(cur), Math.min(responseMs, 10 * 60_000), JSON.stringify({ next: na, fails, explained } satisfies Notes), sessionId);
     afterAttempt(ctx, attemptId, q, outcome, cur.purpose, diag);
@@ -497,8 +504,8 @@ function afterAttempt(ctx: Ctx, attemptId: string, q: QuestionRow, o: Outcome, p
     const m = describeMistake(diag, o);
     ctx.db.run('INSERT INTO observed_mistakes (id,attempt_id,concept_id,kind,label,description,created_at) VALUES (?,?,?,?,?,?,?)', uid(), attemptId, q.concept_id, diag.kind, clip(m.label, 80), clip(m.description, 300), now);
     const sup = patternSupport(ctx, q.concept_id, m.label, now, q.id, attemptId);
-    recordMistakeMemory(ctx, { conceptId: q.concept_id, attemptId, questionId: q.id, kind: diag.kind, label: m.label, description: m.description, confusedWith: diag.confusedWith, patternFormed: sup.questions >= 2, distinctQuestions: sup.questions });
-    if (!NO_PATTERN.includes(diag.kind)) {
+    if (m.specific) recordMistakeMemory(ctx, { conceptId: q.concept_id, attemptId, questionId: q.id, kind: diag.kind, label: m.label, description: m.description, confusedWith: diag.confusedWith, patternFormed: sup.questions >= 2, distinctQuestions: sup.questions });
+    if (m.specific && !NO_PATTERN.includes(diag.kind)) {
       if (sup.questions >= 2) {
         recordMisconception(ctx, q.concept_id, attemptId, { label: m.label, description: m.description, origin: m.origin }, now);
         for (const id of sup.attemptIds) ctx.db.run('INSERT OR IGNORE INTO misconception_evidence (misconception_id, attempt_id) SELECT id, ? FROM misconceptions WHERE concept_id=? AND lower(label)=lower(?) AND status != \'dismissed\'', id, q.concept_id, m.label);

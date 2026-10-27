@@ -30,12 +30,15 @@ export interface DiagnoseInput {
 export interface Diagnosis { kind: MistakeKind; confusedWith: { id: string; name: string } | null; why: string }
 
 export function diagnose(i: DiagnoseInput): Diagnosis | null {
-  if (i.reportedUnclear || i.gradeStatus === 'uncertain' || i.gradeStatus === 'failed') return { kind: 'unreliable', confusedWith: null, why: 'The grade was uncertain or the question was reported as unclear, so this answer is not counted as evidence.' };
+  if (i.reportedUnclear) return { kind: 'unreliable', confusedWith: null, why: 'You reported this question or its grading as unclear, so it is not counted as evidence.' };
+  if (i.gradeStatus === 'failed') return { kind: 'unreliable', confusedWith: null, why: 'Grading failed, so this answer is not counted yet. Retry grading or grade yourself.' };
+  if (i.gradeStatus === 'uncertain') return { kind: 'unreliable', confusedWith: null, why: 'The grade is uncertain, so this answer is not counted as evidence until you confirm how you did.' };
   if (i.gradeStatus !== 'graded' || i.correctness === null) return null;
   if (i.correctness >= 0.8) return null;
   if (i.idk || i.blank) return { kind: 'missing_knowledge', confusedWith: null, why: 'You said you did not know, which tells us where to start.' };
   if (i.slipTag) return { kind: 'slip', confusedWith: null, why: 'The method looked right but a sign or calculation was off.' };
   if (i.mathTags?.length) return { kind: 'reasoning_error', confusedWith: null, why: 'The setup or logic of the solution went wrong.' };
+  if (i.questionKind === 'math') return { kind: 'reasoning_error', confusedWith: null, why: 'The solution did not match, and the app could not tell why from the answer alone. Adding your steps next time helps tell a slip from a misunderstanding.' };
   if (i.confusedWith && (i.chosenMisconception || i.questionKind === 'compare' || i.questionKind === 'multiple_choice' || i.graderKind === 'concept_confusion'))
     return { kind: 'concept_confusion', confusedWith: i.confusedWith, why: `The answer fits “${i.confusedWith.name}” rather than this idea.` };
   if (i.graderKind && i.graderKind !== 'unreliable') return { kind: i.graderKind, confusedWith: i.confusedWith ?? null, why: MISTAKE_BLURB[i.graderKind] };

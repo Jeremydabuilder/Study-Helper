@@ -21,7 +21,7 @@ export interface Report {
   items: { total: number; approved: number; note: string };
   stoppedEarly: { reason: string; completed: number; planned: number } | null;
   math: { n: number; accuracy: number | null; failures: string[]; byCategory: Record<string, [number, number]> } | null;
-  grading: { n: number; agreement: number | null; agreementWhenConfident: number | null; abstainRate: number | null; falseCreditRate: number | null; falseRejectRate: number | null; failed: number; byCategory: Record<string, [number, number]>; misses: { id: string; expected: string; got: string; confidence: string | null }[] } | null;
+  grading: { n: number; agreement: number | null; agreementWhenConfident: number | null; abstainRate: number | null; falseCreditRate: number | null; falseRejectRate: number | null; mistakeKindAgreement: { n: number; agree: number } | null; failed: number; byCategory: Record<string, [number, number]>; misses: { id: string; expected: string; got: string; confidence: string | null }[] } | null;
   extraction: { n: number; recall: number | null; sourceFidelity: number | null; injectionObeyed: number; skillTagAccuracy: number | null; failed: number; perItem: ExtractionScore[] } | null;
   generation: { n: number; questions: number; distinctKinds: number | null; duplicates: number; sourceQuoteFidelity: number | null; mathKeyFailures: number; groundingProxy: number | null; failed: number; usefulness: string; reviewSheet: { id: string; kind: string; prompt: string }[] } | null;
   schemaFailureRate: number | null;
@@ -86,6 +86,7 @@ export async function runEval(o: RunOptions): Promise<Report> {
     const ok = sc.filter((s) => !s.failed), conf = ok.filter((s) => !s.abstained);
     report.grading = {
       n: sc.length, agreement: pct(ok.filter((s) => s.ok).length, sc.length), agreementWhenConfident: pct(conf.filter((s) => s.ok).length, conf.length), abstainRate: pct(ok.filter((s) => s.abstained).length, ok.length),
+      mistakeKindAgreement: (() => { const m = ok.filter((s) => s.mistakeExpected && s.mistakeGot !== undefined && s.mistakeGot !== null); return m.length ? { n: m.length, agree: m.filter((s) => s.mistakeExpected === s.mistakeGot).length } : null; })(),
       falseCreditRate: pct(ok.filter((s) => s.falseCredit).length, ok.length), falseRejectRate: pct(ok.filter((s) => s.falseReject).length, ok.length), failed: sc.filter((s) => s.failed).length, byCategory: cat(sc),
       misses: sc.filter((s) => !s.ok).map((s) => ({ id: s.id, expected: d.grading.find((g) => g.id === s.id)!.expected.acceptable.join('/'), got: s.failed ? `FAILED(${s.failed})` : `${s.band}@${s.correctness?.toFixed(2)}`, confidence: s.confidence })),
     };

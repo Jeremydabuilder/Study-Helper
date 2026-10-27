@@ -187,3 +187,33 @@ describe('partial credit, gap follow-up, clarification and unclear reports (scri
     expect(db().get<any>("SELECT grade_status FROM attempts WHERE id=?", r.attemptId).grade_status).toBe('uncertain'); // not counted, but kept in history
   });
 });
+
+describe('generic wrong answers are not patterns, and drilling stops after three misses', () => {
+  async function mathSetup() {
+    s = await startServer();
+    const sub = (await s.call('POST', '/api/subjects', { name: 'Math' })).body.id;
+    const c = (await s.call('POST', `/api/subjects/${sub}/concepts`, { name: 'Absolute value equations', skillTag: 'math.abs_equation', summary: 'Two cases.' })).body.id;
+    await s.call('PATCH', `/api/concepts/${c}`, { status: 'confirmed' });
+    const sid = (await s.call('POST', '/api/sessions', { mode: 'practice', minutes: 30, conceptIds: [c] })).body.id;
+    return { c, sid };
+  }
+  it('a wrong math answer with no identifiable cause is described honestly and never becomes a recurring pattern', async () => {
+    const { sid } = await mathSetup();
+    let last: any;
+    for (let i = 0; i < 2; i++) { last = (await answer(sid, 'x = 98765')).r; if (i === 0) await s.call('POST', `/api/sessions/${sid}/next`, {}); }
+    expect(last.feedback.mistake).toMatchObject({ kind: 'reasoning_error', label: 'Wrong answer, cause not identified' });
+    expect(last.feedback.mistake.why).toMatch(/could not tell why/); expect(last.feedback.pattern).toBeNull();
+    expect(db().get<any>('SELECT COUNT(*) n FROM misconceptions').n).toBe(0);
+    expect(db().get<any>('SELECT COUNT(*) n FROM observed_mistakes').n).toBe(2);
+  });
+  it('three misses in a row stop the drilling for that concept, say why, and do not pretend more of the same would help', async () => {
+    const { sid } = await mathSetup();
+    let r: any;
+    for (let i = 0; i < 3; i++) { r = (await answer(sid, 'x = 98765')).r; if (i < 2) await s.call('POST', `/api/sessions/${sid}/next`, {}); }
+    expect(r.feedback.next.reason).toMatch(/Three misses in a row.*moving on.*from the basics/);
+    const slots = JSON.parse(db().get<any>('SELECT slots FROM sessions WHERE id=?', sid).slots);
+    expect(slots.every((x: any) => x.done >= x.n)).toBe(true); // nothing left to drill on this concept
+    const n = await s.call('POST', `/api/sessions/${sid}/next`, {});
+    expect(n.body.phase).toBe('done');
+  });
+});

@@ -247,10 +247,10 @@ function Summary({ view, go }: { view: any; go: (p: string) => void }) {
   return (
     <div className="study">
       <div className="card hero">
-        <h1>{s.mode === 'exam' ? 'Test practice results' : 'Nice work — here’s what happened'}</h1>
+        <h1>{s.mode === 'exam' ? 'Test practice results' : 'Here’s what happened'}</h1>
         <p>{s.answered} question{s.answered === 1 ? '' : 's'} · about {s.minutes} min · {s.independentCorrect}/{s.independentTotal} correct without help{s.helped ? ` · ${s.helped} with hints or shown answers` : ''}</p>
         {s.reflection && <Reflection r={s.reflection} go={go} />}
-        {s.notCounted > 0 && <div className="notice warn small">{s.notCounted} answer{s.notCounted === 1 ? '' : 's'} couldn’t be graded with confidence and {s.notCounted === 1 ? 'isn’t' : 'aren’t'} counted yet. Confirm {s.notCounted === 1 ? 'it' : 'them'} in <a href="#/progress">Progress → History</a>.</div>}
+        {s.notCounted > 0 && !s.reflection && <div className="notice warn small">{s.notCounted} answer{s.notCounted === 1 ? '' : 's'} couldn’t be graded with confidence and {s.notCounted === 1 ? 'isn’t' : 'aren’t'} counted yet. Confirm {s.notCounted === 1 ? 'it' : 'them'} in <a href="#/progress">Progress → History</a>.</div>}
         <h3>By concept</h3>
         <div className="scroll-x"><table><thead><tr><th>Concept</th><th>Right</th><th>Partly</th><th>Missed</th><th>With help</th><th>Where it stands</th></tr></thead>
           <tbody>{s.concepts.map((c: any) => <tr key={c.id}><td>{c.name}</td><td>{c.right}</td><td>{c.partial}</td><td>{c.wrong}</td><td>{c.helped}</td><td><LevelChip level={c.level} /></td></tr>)}</tbody></table></div>
@@ -264,7 +264,7 @@ function Summary({ view, go }: { view: any; go: (p: string) => void }) {
             {s.exam.recommendation && <p><strong>Best next step:</strong> work on “{s.exam.recommendation}”.</p>}
           </div>
         )}
-        {s.nextSteps.length > 0 && <><h3>What’s next</h3><ul>{s.nextSteps.map((n: string, i: number) => <li key={i}>{n}</li>)}</ul></>}
+        {!s.reflection && s.nextSteps.length > 0 && <><h3>What’s next</h3><ul>{s.nextSteps.map((n: string, i: number) => <li key={i}>{n}</li>)}</ul></>}
         <div className="row mt"><button className="btn primary" onClick={() => go('/')}>Back to Today</button><button className="btn" onClick={() => go('/progress')}>See progress</button></div>
       </div>
     </div>
