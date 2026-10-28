@@ -1,7 +1,7 @@
 import { tokens } from '../../core/retrieval';
 import { uid } from '../db';
 import { Ctx, HttpError, clip, parse } from './common';
-import { CATEGORY_LABEL, annotationRow, locate } from './annotations';
+import { CATEGORY_LABEL, annotationRow, locate, modelView } from './annotations';
 import { generateQuestions } from './questions';
 import { startSession } from './practice';
 
@@ -105,7 +105,17 @@ export async function makeStudyItems(ctx: Ctx, sourceId: string, b: { annotation
   if (kinds.includes('practice')) {
     if (ctx.ai.live) {
       // Written by the configured model from the passages you selected (the concept's linked passages), then held to the same grounding checks as any generated question.
-      const r = await generateQuestions(ctx, conceptId, { focus: 'practice' });
+      // every selected passage is used (up to 8), with the student's own notes as data; passages that look like instructions to an AI are left out
+      const passages: { label: string; text: string }[] = [], notes: string[] = [];
+      for (const a of anns.slice(0, 8)) {
+        const v = modelView(ctx, s, a.char_start, a.char_end);
+        if (!v.usable) { skipped.push({ annotationId: a.id, kind: 'practice', reason: 'A passage that looks like instructions to an AI was left out of what the model sees.' }); continue; }
+        const label = locate(ctx, s, a.char_start, a.char_end).label;
+        passages.push({ label: `${s.title}, ${label}`, text: v.passage });
+        if (a.note) notes.push(`Student's note on ${label}: ${clip(a.note, 300)}`);
+      }
+      if (!passages.length) throw new HttpError(409, 'excluded', 'None of the selected passages can be sent to an AI model.');
+      const r = await generateQuestions(ctx, conceptId, { focus: 'practice', passages, notes });
       made.practice += r.inserted;
       if (r.held) skipped.push({ annotationId: '', kind: 'practice', reason: `${r.held} generated question${r.held > 1 ? 's were' : ' was'} held for your review because the checks found a problem (Subjects → Questions on hold).` });
     } else {
