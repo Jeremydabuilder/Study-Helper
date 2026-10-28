@@ -16,6 +16,10 @@ import * as content from './services/content';
 import * as files from './services/files';
 import { resolveQuestion } from './services/questions';
 import { firstUse } from './services/firstUse';
+import * as ann from './services/annotations';
+import * as study from './services/studyItems';
+import { skipReadingToday } from './services/readingPlan';
+import * as chat from './services/chat';
 import * as ocr from './services/ocr';
 import * as practice from './services/practice';
 import * as plan from './services/plan';
@@ -242,6 +246,45 @@ export function createApp(rt: Runtime) {
     return { level, results, ai: aiInfo(ctx) };
 
   }));
+
+
+  /* ---------------- readings, annotations, study items, outlines ---------------- */
+  const Span = z.object({ start: z.number().int(), end: z.number().int(), category: z.string().optional(), note: z.string().max(5000).optional() });
+  app.get('/api/readings', h((ctx) => ({ readings: ann.listReadings(ctx), categories: ann.CATEGORIES.map((c) => ({ id: c, label: ann.CATEGORY_LABEL[c] })), subjects: content.listSubjects(ctx) })));
+  app.post('/api/readings', h((ctx, req) => {
+    const b = z.object({ subjectId: z.string().optional(), subjectName: z.string().max(80).optional(), title: z.string().max(120).optional(), text: z.string() }).parse(req.body);
+    let subjectId = b.subjectId;
+    if (!subjectId) {
+      if (!b.subjectName?.trim()) throw new HttpError(400, 'invalid', 'Choose a subject or name a new one.');
+      subjectId = ctx.db.get<any>('SELECT id FROM subjects WHERE lower(name) = lower(?) AND archived = 0', b.subjectName.trim())?.id ?? content.createSubject(ctx, { name: b.subjectName.trim() }).id;
+    }
+    return content.addSource(ctx, subjectId as string, { title: b.title, kind: 'passage', text: b.text, origin: 'pasted reading' });
+  }));
+  app.get('/api/readings/:id', h((ctx, req) => ann.getReading(ctx, req.params.id)));
+  app.put('/api/readings/:id/prompt', h((ctx, req) => ann.setPrompt(ctx, req.params.id, z.object({ kind: z.enum(['prompt', 'rubric']), text: z.string() }).parse(req.body))));
+  app.delete('/api/readings/:id/prompt', h((ctx, req) => ann.setPrompt(ctx, req.params.id, null)));
+  app.post('/api/readings/:id/annotations', h((ctx, req) => ann.createAnnotation(ctx, req.params.id, Span.parse(req.body))));
+  app.patch('/api/readings/:id/annotations/:aid', h((ctx, req) => ann.updateAnnotation(ctx, req.params.id, req.params.aid, z.object({ category: z.string().optional(), note: z.string().max(5000).optional() }).parse(req.body))));
+  app.delete('/api/readings/:id/annotations/:aid', h((ctx, req) => ann.deleteAnnotation(ctx, req.params.id, req.params.aid)));
+  app.post('/api/readings/:id/annotations/:aid/assist', h((ctx, req) => ann.assist(ctx, req.params.id, req.params.aid, z.object({ kind: z.string(), term: z.string().optional() }).parse(req.body))));
+  app.post('/api/readings/:id/annotations/:aid/feedback', h((ctx, req) => ann.feedback(ctx, req.params.id, req.params.aid)));
+  app.delete('/api/readings/:id/annotations/:aid/assists/:xid', h((ctx, req) => ann.deleteAssist(ctx, req.params.id, req.params.aid, req.params.xid)));
+  app.post('/api/readings/:id/study', h((ctx, req) => study.makeStudyItems(ctx, req.params.id, z.object({ annotationIds: z.array(z.string()).max(40), kinds: z.array(z.string()).max(5) }).parse(req.body))));
+  app.post('/api/readings/:id/study/start', h((ctx, req) => study.startReadingSession(ctx, req.params.id, z.object({ minutes: z.number().optional(), abandonExisting: z.boolean().optional() }).parse(req.body ?? {}))));
+  app.post('/api/readings/:id/outlines', h((ctx, req) => study.makeOutline(ctx, req.params.id, z.object({ annotationIds: z.array(z.string()).max(60), title: z.string().optional() }).parse(req.body))));
+  app.post('/api/readings/:id/skip-today', h((ctx, req) => skipReadingToday(ctx, req.params.id)));
+  app.get('/api/outlines/:id', h((ctx, req) => study.getOutline(ctx, req.params.id)));
+  app.patch('/api/outlines/:id', h((ctx, req) => study.updateOutline(ctx, req.params.id, z.object({ title: z.string().optional(), thesis: z.string().optional(), claims: z.record(z.string()).optional() }).parse(req.body))));
+  app.delete('/api/outlines/:id', h((ctx, req) => study.deleteOutline(ctx, req.params.id)));
+
+  /* ---------------- chat (study / general) ---------------- */
+  app.get('/api/chat/status', h((ctx) => chat.chatStatus(ctx)));
+  app.get('/api/chat/context', h((ctx, req) => chat.contextPreview(ctx, { mode: String(req.query.mode ?? ''), q: String(req.query.q ?? ''), subjectId: req.query.subjectId as string | undefined, sourceId: req.query.sourceId as string | undefined })));
+  app.get('/api/conversations', h((ctx, req) => ({ conversations: chat.listConversations(ctx, req.query.mode as string | undefined) })));
+  app.post('/api/conversations', h((ctx, req) => chat.createConversation(ctx, z.object({ mode: z.string(), subjectId: z.string().nullable().optional(), sourceId: z.string().nullable().optional() }).parse(req.body))));
+  app.get('/api/conversations/:id', h((ctx, req) => chat.getConversation(ctx, req.params.id)));
+  app.delete('/api/conversations/:id', h((ctx, req) => chat.deleteConversation(ctx, req.params.id)));
+  app.post('/api/conversations/:id/messages', h((ctx, req) => chat.sendMessage(ctx, req.params.id, z.object({ text: z.string(), direct: z.boolean().optional() }).parse(req.body))));
 
   /* ---------------- static client ---------------- */
   const dist = resolve(process.cwd(), 'dist');

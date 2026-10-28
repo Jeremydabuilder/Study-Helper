@@ -17,6 +17,7 @@ const Learning = z.object({
   subjects: z.array(Row).default([]), sources: z.array(Row).default([]), concepts: z.array(Row).default([]), concept_refs: z.array(Row).default([]),
   concept_prereqs: z.array(Row).default([]), questions: z.array(Row).default([]), attempts: z.array(Row).default([]),
   misconceptions: z.array(Row).default([]), misconception_evidence: z.array(Row).default([]),
+  annotations: z.array(Row).default([]), reading_prompts: z.array(Row).default([]), outlines: z.array(Row).default([]),
 });
 export const ExportFile = z.object({
   format: z.literal(FORMAT), version: z.number().int().max(VERSION), exportedAt: z.number(), workspace: z.enum(['real', 'demo']).optional(),
@@ -53,6 +54,10 @@ export function exportData(ctx: Ctx, o: { sections: string[]; includeSourceText?
     for (const [t, cols] of Object.entries(COLS)) {
       L[t] = ctx.db.all<any>(`SELECT ${cols.join(',')} FROM ${t}`);
     }
+    // highlights, prompts and outlines quote the reading, so they travel only with the source text
+    L.annotations = o.includeSourceText ? ctx.db.all<any>('SELECT id,source_id,char_start,char_end,quote,source_rev,category,note,created_at,updated_at FROM annotations') : [];
+    L.reading_prompts = o.includeSourceText ? ctx.db.all<any>('SELECT source_id,kind,text,updated_at FROM reading_prompts') : [];
+    L.outlines = o.includeSourceText ? ctx.db.all<any>('SELECT id,source_id,title,body,created_at,updated_at FROM outlines') : [];
     if (!o.includeSourceText) L.sources = L.sources.map((s: any) => ({ ...s, text: '' })); // metadata only
     sections.learning = L;
   }
@@ -141,6 +146,19 @@ export function commitImport(ctx: Ctx, raw: unknown, sel: Selection) {
       const mids = new Set(ms.map((m: any) => m.id));
       const aids = new Set(L.attempts.map((a: any) => a.id));
       ins('misconception_evidence', L.misconception_evidence.filter((e: any) => mids.has(e.misconception_id) && aids.has(e.attempt_id)));
+      // reading workspace: a highlight is kept only if its quote still matches the imported text at the saved position
+      const textOf = new Map<string, string>(srcRows.map((x: any) => [x.id, String(x.text ?? '')]));
+      counts.annotations = 0;
+      for (const a of L.annotations ?? []) {
+        const t = textOf.get(a.source_id);
+        if (!t || !ctx.db.get('SELECT 1 FROM sources WHERE id=?', a.source_id) || t.slice(a.char_start, a.char_end) !== a.quote || !a.quote) continue;
+        counts.annotations += Number(ctx.db.run('INSERT OR IGNORE INTO annotations (id,source_id,char_start,char_end,quote,source_rev,category,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+          a.id, a.source_id, a.char_start, a.char_end, a.quote, a.source_rev ?? 1, ['theme', 'characterization', 'imagery', 'argument', 'evidence', 'question', 'vocabulary', 'other'].includes(a.category) ? a.category : 'none', String(a.note ?? '').slice(0, 2000), a.created_at ?? now, a.updated_at ?? now).changes);
+      }
+      for (const p of L.reading_prompts ?? []) if (textOf.has(p.source_id) && ctx.db.get('SELECT 1 FROM sources WHERE id=?', p.source_id) && ['prompt', 'rubric'].includes(p.kind))
+        ctx.db.run('INSERT OR IGNORE INTO reading_prompts (source_id,kind,text,updated_at) VALUES (?,?,?,?)', p.source_id, p.kind, String(p.text ?? '').slice(0, 6000), p.updated_at ?? now);
+      for (const o of L.outlines ?? []) if (textOf.has(o.source_id) && ctx.db.get('SELECT 1 FROM sources WHERE id=?', o.source_id) && typeof o.body === 'string')
+        ctx.db.run('INSERT OR IGNORE INTO outlines (id,source_id,title,body,created_at,updated_at) VALUES (?,?,?,?,?,?)', o.id, o.source_id, String(o.title ?? 'Outline').slice(0, 120), o.body, o.created_at ?? now, o.updated_at ?? now);
       for (const cid of cids) if (ctx.db.get('SELECT 1 FROM concepts WHERE id=?', cid)) recomputeConcept(ctx, cid as string);
     }
     counts.items = 0;
