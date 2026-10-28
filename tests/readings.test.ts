@@ -280,6 +280,21 @@ describe('annotations become study items in the existing system', () => {
     expect(q.support_state).toMatch(/plausible|located/);
     void t;
   });
+
+  it('with an AI, every selected passage (not just the first three) and the student\u2019s notes reach the question writer, as tagged data', async () => {
+    const { t, llm } = live();
+    s = await startServer({ llm });
+    const id = await reading();
+    const needles = ['The lighthouse stood alone', 'Mara climbed the stairs', 'did not complain', 'black glass', 'the boats came home'];
+    const ids: string[] = [];
+    for (const n of needles) ids.push((await annotate(id, n, `Note about ${n.split(' ')[0]} here`)).id);
+    const r = await s.call('POST', `/api/readings/${id}/study`, { annotationIds: ids, kinds: ['practice'] });
+    expect(r.status).toBe(200);
+    const sent = t.calls.find((c) => c.user.includes('"questions":[{'))!.user;
+    for (const n of needles) expect(sent).toContain(n);
+    expect(sent).toContain("Student's note on");
+    expect(sent).toMatch(/<source>[\s\S]*The lighthouse stood alone[\s\S]*<\/source>/);
+  });
 });
 
 describe('essay outlines link back to the student’s evidence', () => {
@@ -350,5 +365,23 @@ describe('export and import carry highlights only with their text, and only if t
     await s.close(); s = await startServer();
     const r2 = await s.call('POST', '/api/import/commit', { file: bad, selection: { subjectIds: [prev.subjects[0].id] } });
     expect(r2.body.imported.annotations).toBe(0);
+  });
+});
+
+describe('a generated question that conflicts with the highlighted passage is held, explained, and only used if the student accepts it', () => {
+  it('says it was held (not a generic failure), lists it under the subject, and accepting makes it servable', async () => {
+    const { t, llm } = live();
+    s = await startServer({ llm });
+    const id = await reading();
+    const a = await annotate(id, 'did not complain about the cold', 'She endures the cold quietly without a word', 'characterization');
+    t.replies.generate = { questions: [{ kind: 'short_answer', prompt: 'How did Mara respond to the cold?', rubric: { key_points: [{ point: 'Mara complained about the cold', keywords: ['complained'] }] }, hints: ['Look at paragraph two.'], worked_example: 'w', explanation: 'e', difficulty: 1, source_quote: 'She did not complain about the cold' }] };
+    const r = await s.call('POST', `/api/readings/${id}/study`, { annotationIds: [a.id], kinds: ['practice'] });
+    expect(r.status).toBe(502); expect(r.body.error.message).toMatch(/held for your review/);
+    const subjectId = db().get<any>('SELECT subject_id FROM sources WHERE id = ?', id).subject_id;
+    const held = (await s.call('GET', `/api/subjects/${subjectId}`)).body.heldQuestions;
+    expect(held).toHaveLength(1); expect(held[0].state).toBe('contradicted');
+    expect(db().get<any>("SELECT COUNT(*) n FROM questions WHERE on_hold = 0 AND origin = 'ai'").n).toBe(0); // nothing servable yet
+    await s.call('POST', `/api/questions/${held[0].id}/resolve`, { action: 'accept' });
+    expect(db().get<any>("SELECT COUNT(*) n FROM questions WHERE on_hold = 0 AND origin = 'ai'").n).toBe(1);
   });
 });

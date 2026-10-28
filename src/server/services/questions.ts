@@ -80,7 +80,11 @@ export async function pickQuestion(ctx: Ctx, o: PickOpts): Promise<QuestionRow> 
 }
 
 export type GenFocus = 'diagnostic' | 'practice' | 'transfer' | 'repair' | 'discriminate' | 'gap' | 'simpler';
-export interface GenOpts { focus: GenFocus; useOffline?: boolean; contrastConceptId?: string; gapPoints?: string[]; strict?: boolean }
+export interface GenOpts {
+  focus: GenFocus; useOffline?: boolean; contrastConceptId?: string; gapPoints?: string[]; strict?: boolean;
+  /** Exact passages to write from (already masked for the model) instead of the concept's top linked chunks, and the student's own notes about them (data). */
+  passages?: { label: string; text: string }[]; notes?: string[];
+}
 
 /** Checks of the student's own material (diagnostic / fresh checks) must be grounded in it; practice questions may be labelled instead. */
 const REQUIRES_GROUNDING: GenFocus[] = ['diagnostic', 'transfer'];
@@ -100,8 +104,8 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts)
   const others = ctx.db.all<any>("SELECT name, summary FROM concepts WHERE subject_id = ? AND status = 'confirmed' AND id != ?", c.subject_id, conceptId);
   const contrast = o.contrastConceptId ? ctx.db.get<any>('SELECT name, summary FROM concepts WHERE id = ?', o.contrastConceptId) : null;
   const batch = await provider.generateQuestions({
-    subjectName: c.subject_name, concept: { name: c.name, summary: c.summary, skillTag: c.skill_tag }, excerpts: context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })),
-    otherConcepts: others, misconceptions: context.misconceptions, studentNotes: context.memories,
+    subjectName: c.subject_name, concept: { name: c.name, summary: c.summary, skillTag: c.skill_tag }, excerpts: o.passages?.length ? o.passages : context.sourceExcerpts.map((e) => ({ label: e.label, text: e.text })),
+    otherConcepts: others, misconceptions: context.misconceptions, studentNotes: [...context.memories, ...(o.notes ?? [])],
     practice: o.focus === 'diagnostic' ? 2 : 3, heldout: 1, avoidPrompts: existing, seed: existing.length + 1, focus: o.focus, gradeLevel: getProfile(ctx.db).grade,
     contrast: contrast ? { name: contrast.name, summary: contrast.summary } : undefined, gapPoints: o.gapPoints, strict: o.strict,
   });
@@ -148,8 +152,12 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts)
       if (hold) held++; else served++;
     }
   });
-  if (!served && (ungrounded || held) && !o.strict) return generateQuestions(ctx, conceptId, { ...o, strict: true }); // one regeneration, told to quote only what the excerpts say
-  if (!served) throw new AIError('malformed', held ? 'The generated questions conflict with, or are not supported by, your material, so they were held for your review (Subjects → Questions on hold) and not used.' : ungrounded ? 'The generated questions could not be tied to your material, so I did not use them. Try again, or practise from Subjects.' : 'None of the generated questions passed validation. Please try again.');
+  const HELD_MSG = 'The generated questions conflict with, or are not supported by, your material, so they were held for your review (Subjects → Questions on hold) and not used.';
+  if (!served && (ungrounded || held) && !o.strict) {
+    // one regeneration, told to quote only what the excerpts say; if it only repeats what was already held, say that instead of a generic failure
+    try { return await generateQuestions(ctx, conceptId, { ...o, strict: true }); } catch (e) { if (held && e instanceof AIError) throw new AIError('malformed', HELD_MSG); throw e; }
+  }
+  if (!served) throw new AIError('malformed', held ? HELD_MSG : ungrounded ? 'The generated questions could not be tied to your material, so I did not use them. Try again, or practise from Subjects.' : 'None of the generated questions passed validation. Please try again.');
   return { inserted: served, dropped, ungrounded, held };
 }
 

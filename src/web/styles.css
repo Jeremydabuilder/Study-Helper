@@ -155,3 +155,8 @@ main.wide { max-width: 1180px; }
 .msgs { max-height: 55vh; overflow: auto; padding: .5rem 0; display: flex; flex-direction: column; gap: .7rem; }
 .msg { padding: .6rem .8rem; border-radius: 12px; max-width: 92%; } .msg.user { align-self: flex-end; background: var(--accent-soft); } .msg.assistant { align-self: flex-start; background: var(--surface-2); }
 @media (max-width: 720px) { .chat-layout { grid-template-columns: 1fr; } .chat-list { flex-direction: row; overflow-x: auto; } .chat-item { min-width: 140px; } }
+
+.sel-bar { display: none; }
+@media (max-width: 860px) {
+  .sel-bar { display: flex; align-items: center; gap: .5rem; position: sticky; top: 56px; z-index: 5; background: var(--surface); border: 1px solid var(--accent); border-radius: 12px; padding: .4rem .6rem; margin-bottom: .6rem; box-shadow: var(--shadow); }
+}

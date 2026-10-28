@@ -80,7 +80,14 @@ export function Reader({ id, go }: { id: string; go: (p: string) => void }) {
       </div>
       <div className="reader">
         <section className={`reader-text card ${pane === 'text' ? '' : 'hide-sm'}`} aria-label="Reading text">
-          {confirmed ? <p className="small muted">Select text to highlight it. Click a highlight to see your note. Page numbers appear only where the text has reliable page markers.</p> : null}
+          {confirmed ? <p className="small muted">Select text to highlight it (on a phone, press and hold a word, drag the handles, then tap “Add a note”). Tap or click a highlight to see your note. Page numbers appear only where the text has reliable page markers.</p> : null}
+          {sel && confirmed && pane === 'text' && (
+            <div className="sel-bar" role="region" aria-label="Selected text">
+              <span className="small grow">{Math.min(99999, sel.end - sel.start)} characters selected</span>
+              <button className="btn primary small" onClick={() => setPane('notes')}>Add a note</button>
+              <button className="btn small" onClick={() => { setSel(null); window.getSelection()?.removeAllRanges(); }}>Clear</button>
+            </div>
+          )}
           <div className="reading-text" ref={textRef} tabIndex={0} aria-label={`Text of ${rd.title}`}>
             {segs.map((sg) => <span key={sg.from} data-o={sg.from} className={sg.ids.length ? `hl hl-${sg.cat || 'none'} ${sg.ids.includes(active ?? '') ? 'on' : ''}` : undefined} onClick={sg.ids.length ? () => { if (window.getSelection()?.isCollapsed) open(sg.ids[0]); } : undefined}>{rd.text.slice(sg.from, sg.to)}</span>)}
           </div>

@@ -90,7 +90,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
             ))}
           </ul>
         )}
-        <p className="small muted mt-s">You can paste text, add a .txt/.md file, upload a <strong>PDF</strong> (text is read on this computer, page by page, and you check it first), or upload a <strong>PNG/JPEG/WebP screenshot</strong> or a scanned PDF to type out beside the original. There is no OCR: nothing is sent to an outside service to read your files.</p>
+        <p className="small muted mt-s">You can paste text, add a .txt/.md file, upload a <strong>PDF</strong> (text is read on this computer, page by page, and you check it first), or upload a <strong>PNG/JPEG/WebP screenshot</strong> or a scanned PDF to type out beside the original. Automatic reading of scans is off unless you turn it on in <code>.env</code> (Anthropic only, and you approve what is sent each time); by default nothing is sent to an outside service to read your files.</p>
       </section>
 
       {d.heldQuestions?.length > 0 && <HeldQuestions items={d.heldQuestions} reload={ov.reload} />}
