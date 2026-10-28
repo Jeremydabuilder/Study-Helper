@@ -56,6 +56,25 @@ export interface ReadResult { pages: { page: number; blocks: { kind: 'text' | 'm
 export interface AssessItem { index: number; question: string; kind: string; key: string[]; passage: string; label: string; interpretive: boolean }
 export interface AssessResult { items: { index: number; verdict: 'supported' | 'contradicted' | 'insufficient'; note: string }[] }
 
+/** Help with ONE selected passage of a reading. All text is student material (data). */
+export interface AssistInput {
+  kind: 'explain' | 'define' | 'question';
+  passage: string; context: string; location: string; term?: string;
+  readingTitle: string; subjectName: string; prompt?: { kind: 'prompt' | 'rubric'; text: string } | null; gradeLevel?: string;
+}
+/** Feedback on the student's OWN written annotation. `overlap` is a rule-based 0..1 measure of how much of the note just repeats the passage's words. */
+export interface AnnotationFeedbackInput {
+  passage: string; context: string; location: string; category: string; note: string; overlap: number;
+  readingTitle: string; subjectName: string; prompt?: { kind: 'prompt' | 'rubric'; text: string } | null; gradeLevel?: string;
+}
+export interface ChatInput {
+  mode: 'study' | 'general'; direct: boolean;
+  /** Study mode only: the retrieved context block, already labelled. Empty in general mode. */
+  context: string;
+  history: { role: 'user' | 'assistant'; content: string }[];
+  message: string; gradeLevel?: string;
+}
+
 export type AITask = 'extract' | 'generate' | 'grade';
 
 /** How a request's cost is known. 'estimated' and 'unknown' are held at the conservative reservation, never at zero. */
@@ -104,6 +123,9 @@ export interface AIProvider {
   clarify?(i: ClarifyInput, opts?: CallOpts): Promise<{ answer: string }>;
   /** Optional vision reading of page images / PDF pages. Only used when the operator has explicitly enabled it and the student has approved exactly what is sent. */
   /** Optional: a structured semantic check of question + key against the cited passage (one request for a whole batch). */
+  assist?(i: AssistInput, opts?: CallOpts): Promise<{ text: string }>;
+  annotationFeedback?(i: AnnotationFeedbackInput, opts?: CallOpts): Promise<import('./schemas').AnnotationFeedback>;
+  chat?(i: ChatInput, opts?: CallOpts): Promise<{ reply: string }>;
   assessSupport?(items: AssessItem[], opts?: CallOpts): Promise<AssessResult>;
   readPages?(i: ReadInput, opts?: CallOpts): Promise<ReadResult>;
   ocrModel?(): string;

@@ -79,3 +79,17 @@ export const SupportAssessment = z.object({
   items: z.array(z.object({ index: z.number().int().min(0).max(100), verdict: z.enum(['supported', 'contradicted', 'insufficient']), note: z.string().max(300).default('') })).min(1).max(24),
 });
 export type SupportAssessment = z.infer<typeof SupportAssessment>;
+
+export const AssistReply = z.object({ text: z.string().trim().min(3).max(2500) });
+export const AnnotationFeedback = z.object({
+  /** restates: mostly repeats or summarises the passage. interprets: says what it means or does. develops: explains how/why with evidence and a point of view. */
+  stance: z.enum(['restates', 'interprets', 'develops']),
+  observation: z.string().trim().min(3).max(700),
+  strengths: z.string().max(500).default(''),
+  next_steps: z.array(z.string().max(300)).min(1).max(3),
+  questions: z.array(z.string().max(250)).max(3).default([]),
+  /** how the teacher's prompt/rubric bears on this note, only when one was provided */
+  prompt_link: z.string().max(400).default(''),
+});
+export type AnnotationFeedback = z.infer<typeof AnnotationFeedback>;
+export const ChatReply = z.object({ reply: z.string().trim().min(1).max(8000) });

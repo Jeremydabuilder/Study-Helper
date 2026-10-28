@@ -1,4 +1,4 @@
-import { AIProvider, CallOpts, ClarifyInput, ExtractInput, GenerateInput, GradeInput, ReadInput, AssessItem } from '../../ai/provider';
+import { AIProvider, CallOpts, ClarifyInput, ExtractInput, GenerateInput, GradeInput, ReadInput, AssessItem, AssistInput, AnnotationFeedbackInput, ChatInput } from '../../ai/provider';
 import { DEFAULT_TASKS, type TaskConfig } from '../../ai/llm';
 import { PRICING_AS_OF } from '../../ai/pricing';
 import { OfflineProvider } from '../../ai/offline';
@@ -77,6 +77,9 @@ export function metered(ctx: { db: Db; now: () => number; cfg: AppConfig }, inne
     gradeAnswer: (i: GradeInput, opts?: CallOpts) => inner.gradeAnswer(i, o(opts)),
     assessSupport: inner.assessSupport ? (items: AssessItem[], opts?: CallOpts) => inner.assessSupport!(items, o(opts)) : undefined,
     readPages: inner.readPages ? (i: ReadInput, opts?: CallOpts) => inner.readPages!(i, o(opts)) : undefined, ocrModel: inner.ocrModel?.bind(inner),
+    assist: inner.assist ? (i: AssistInput, opts?: CallOpts) => inner.assist!(i, o(opts)) : undefined,
+    annotationFeedback: inner.annotationFeedback ? (i: AnnotationFeedbackInput, opts?: CallOpts) => inner.annotationFeedback!(i, o(opts)) : undefined,
+    chat: inner.chat ? (i: ChatInput, opts?: CallOpts) => inner.chat!(i, o(opts)) : undefined,
     clarify: inner.clarify ? (i: ClarifyInput, opts?: CallOpts) => inner.clarify!(i, o(opts)) : undefined,
   };
 }
