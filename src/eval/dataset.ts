@@ -12,7 +12,7 @@ export const GradingItem = z.object({
   rubric: z.array(z.object({ point: z.string(), keywords: z.array(z.string()) })), sampleAnswer: z.string().nullable(),
   excerpts: z.array(Excerpt), answer: z.string(), reasoning: z.string(),
   /** acceptable outcome bands (high ≥ 0.8, mid 0.35–0.8, low < 0.35); mustNotBeConfident = the grader should not claim "high" confidence */
-  expected: z.object({ acceptable: z.array(Band).min(1), mustNotBeConfident: z.boolean().optional() }),
+  expected: z.object({ acceptable: z.array(Band).min(1), mustNotBeConfident: z.boolean().optional(), mistakeKind: z.enum(['missing_knowledge', 'concept_confusion', 'reasoning_error', 'slip', 'partial_explanation']).optional() }),
   note: z.string(), review: Review,
 });
 export const ExtractionItem = z.object({

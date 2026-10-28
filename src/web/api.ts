@@ -20,6 +20,16 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
   if (!res.ok) { const e = data?.error ?? {}; throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Request failed (${res.status}).`, e); }
   return data as T;
 }
+/** Upload a file's raw bytes (not JSON). The server checks the real type from the contents. */
+export async function upload<T = any>(path: string, file: File): Promise<T> {
+  let res: Response;
+  try { res = await fetch(`/api${path}${path.includes('?') ? '&' : '?'}filename=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'content-type': ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'].includes(file.type) ? file.type : 'application/octet-stream', 'x-workspace': getWorkspace() }, body: file }); }
+  catch { throw new ApiError(0, 'network', 'Could not reach the Study Helper server. Check that it is running, then try again.'); }
+  let data: any = null;
+  try { data = await res.json(); } catch { /* empty */ }
+  if (!res.ok) { const e = data?.error ?? {}; throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Upload failed (${res.status}).`, e); }
+  return data as T;
+}
 export const get = <T = any>(p: string) => api<T>('GET', p);
 export const post = <T = any>(p: string, b: unknown = {}) => api<T>('POST', p, b);
 export const put = <T = any>(p: string, b: unknown) => api<T>('PUT', p, b);

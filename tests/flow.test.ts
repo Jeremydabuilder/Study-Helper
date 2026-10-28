@@ -123,23 +123,28 @@ describe('hint-assisted vs independent evidence (end to end)', () => {
     expect(state.level).not.toBe('solid');
   });
 
-  it('wrong inequality direction creates a misconception with evidence, a repair task, and a later fresh check', async () => {
+  it('one wrong inequality direction is an observed mistake; the same mistake on a second question becomes a pattern with evidence, a repair task, and a later fresh check', async () => {
     s = await startServer();
     const sub = (await s.call('POST', '/api/subjects', { name: 'Math' })).body.id;
     const c = (await s.call('POST', `/api/subjects/${sub}/concepts`, { name: 'Inequalities', skillTag: 'math.linear_inequality' })).body.id;
     const sid = (await s.call('POST', '/api/sessions', { mode: 'practice', minutes: 20, conceptIds: [c] })).body.id;
     const db = s.rt.ctx('real').db;
-    let flipped = false;
-    for (let i = 0; i < 6 && !flipped; i++) {
+    let flips = 0, sawObservedOnly = false;
+    for (let i = 0; i < 14 && flips < 2; i++) {
       const v = (await s.call('GET', `/api/sessions/${sid}`)).body;
       const spec = JSON.parse(db.get<any>('SELECT answer_spec FROM questions WHERE id=?', v.question.id).answer_spec);
       const ans = String(spec.answer).replace(/<=?/, (m: string) => (m === '<=' ? '>=' : '>')).replace(/>=?(?!.*[<>])/, (m: string) => m); // flip sign
       const wrong = /</.test(spec.answer) ? spec.answer.replace('<=', '>=').replace('<', '>') : spec.answer.replace('>=', '<=').replace('>', '<');
       const r = await s.call('POST', `/api/sessions/${sid}/answer`, { questionId: v.question.id, answer: wrong || ans, clientToken: token(), confidence: 3 });
-      if (r.body.feedback?.tags?.includes('flipped_inequality')) flipped = true;
+      if (r.body.feedback?.tags?.includes('flipped_inequality')) {
+        flips++;
+        if (flips === 1) { // a single answer is an observation, not a pattern
+          sawObservedOnly = db.get<any>('SELECT COUNT(*) n FROM observed_mistakes').n === 1 && db.get<any>('SELECT COUNT(*) n FROM misconceptions').n === 0 && r.body.feedback.pattern === null && r.body.feedback.mistake?.label;
+        } else expect(r.body.feedback.pattern).toMatchObject({ count: 2 });
+      }
       await s.call('POST', `/api/sessions/${sid}/next`, {});
     }
-    expect(flipped).toBe(true);
+    expect(sawObservedOnly).toBeTruthy(); expect(flips).toBe(2);
     const mis = db.get<any>("SELECT * FROM misconceptions WHERE status='active'");
     expect(mis.label).toMatch(/flip/i);
     expect(db.get<any>('SELECT COUNT(*) n FROM misconception_evidence WHERE misconception_id=?', mis.id).n).toBeGreaterThan(0);

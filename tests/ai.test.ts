@@ -65,7 +65,9 @@ describe('Anthropic transport error mapping', () => {
     await expect(mk(async () => new Response('{}', { status: 429, headers: { 'retry-after': '7' } })).complete(req)).rejects.toMatchObject({ code: 'rate_limited', retryAfterMs: 7000 });
     await expect(mk(async () => new Response('{}', { status: 529 })).complete(req)).rejects.toMatchObject({ code: 'unavailable' });
     await expect(mk(async () => new Response('{}', { status: 401 })).complete(req)).rejects.toMatchObject({ code: 'not_configured' });
-    await expect(mk(async () => new Response(JSON.stringify({ content: [] }), { status: 200 })).complete(req)).rejects.toMatchObject({ code: 'malformed' });
+    await expect(mk(async () => new Response('<html>gateway</html>', { status: 200 })).complete(req)).rejects.toMatchObject({ code: 'malformed', billing: 'unknown' });
+    // an empty-but-readable 200 is returned (with its usage) so the caller can account for it, not thrown away
+    await expect(mk(async () => new Response(JSON.stringify({ content: [], usage: { input_tokens: 9, output_tokens: 0 } }), { status: 200 })).complete(req)).resolves.toMatchObject({ text: '', usage: { input: 9 } });
     await expect(mk(async () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 5, output_tokens: 2 } }), { status: 200 })).complete(req)).resolves.toMatchObject({ text: 'hi' });
   });
   it('times out hung requests and reports network failure', async () => {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ApiError, del, patch, post, useApi, fmtDate } from '../api';
+import { ApiError, del, patch, post, put, upload, useApi, fmtDate } from '../api';
 import { Chip, Empty, ErrorBox, Field, LevelChip, Modal, Spinner, SUPPORT_TEXT } from '../ui';
 
 const SUGGESTIONS = ['Math', 'History', 'English', 'Science'];
@@ -42,7 +42,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(() => { try { const f = sessionStorage.getItem('sh.flash'); if (f) sessionStorage.removeItem('sh.flash'); return f; } catch { return null; } });
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [viewSrc, setViewSrc] = useState<string | null>(null);
   const [newConcept, setNewConcept] = useState('');
@@ -59,7 +59,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
   const extract = (sid: string, useOffline = false, force = false) => run('Reading your material and finding concepts…', async () => {
     const r = await post(`/sources/${sid}/extract`, { useOffline, force });
     if (r.reused) { setMsg('Concepts were already found in this material, so nothing was re-run (that avoids paying for the same extraction twice). Use “Find again” to force it.'); return; }
-    setMsg(`Found ${r.created} new concept${r.created === 1 ? '' : 's'}${r.skippedExisting ? ` (${r.skippedExisting} you already had)` : ''}${r.discardedQuotes ? `. ${r.discardedQuotes} quote${r.discardedQuotes === 1 ? '' : 's'} could not be found in your text and ${r.discardedQuotes === 1 ? 'was' : 'were'} discarded` : ''}${r.truncated ? '. Only the first part of a long text was read' : ''}${r.ignoredInstructionLines ? `. ${r.ignoredInstructionLines} line${r.ignoredInstructionLines === 1 ? '' : 's'} that read like instructions to an AI ${r.ignoredInstructionLines === 1 ? 'was' : 'were'} ignored — your material is treated as content, never as commands` : ''}. Review them below.`);
+    setMsg(`Found ${r.created} new concept${r.created === 1 ? '' : 's'}${r.skippedExisting ? ` (${r.skippedExisting} you already had)` : ''}${r.discardedQuotes ? `. ${r.discardedQuotes} quote${r.discardedQuotes === 1 ? '' : 's'} could not be found in your text and ${r.discardedQuotes === 1 ? 'was' : 'were'} discarded` : ''}${r.truncated ? '. Only the first part of a long text was read' : ''}${r.excludedPassages ? `. ${r.excludedPassages} passage${r.excludedPassages === 1 ? '' : 's'} that read like orders to an AI ${r.excludedPassages === 1 ? 'was' : 'were'} left out of what the AI saw (your original is unchanged — open the material to review or restore ${r.excludedPassages === 1 ? 'it' : 'them'})` : ''}${r.droppedSuspiciousConcepts ? `. ${r.droppedSuspiciousConcepts} suggested concept${r.droppedSuspiciousConcepts === 1 ? '' : 's'} that looked like an injected command ${r.droppedSuspiciousConcepts === 1 ? 'was' : 'were'} dropped` : ''}. Review them below.`);
     await ov.reload();
   });
   const bulk = (status: 'confirmed' | 'rejected') => run('Saving…', async () => { await post('/concepts/bulk', { ids: [...sel], status }); setSel(new Set()); await ov.reload(); });
@@ -83,14 +83,17 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
             {d.sources.map((s: any) => (
               <li key={s.id} className="upcoming">
                 <div><strong>{s.title}</strong> <Chip>{KINDS.find((k) => k[0] === s.kind)?.[1] ?? s.kind}</Chip>{s.origin === 'sample' && <> <Chip tone="warn">sample</Chip></>}
+                  {s.status === 'draft' && <> <Chip tone="warn">needs your review</Chip></>}{s.file_id && <> <Chip>{s.origin.replace('file:', '').toUpperCase()} · {s.page_count} page{s.page_count === 1 ? '' : 's'}</Chip></>}
                   <div className="small muted">{s.chars.toLocaleString()} characters · {s.chunks} passages · added {fmtDate(s.created_at)}{s.uncertain_chunks ? ` · ${s.uncertain_chunks} passages with uncertain text` : ''}</div></div>
-                <div className="row gap-s"><button className="btn small" onClick={() => setViewSrc(s.id)}>View</button><button className="btn small" disabled={!!busy} onClick={() => extract(s.id)}>Find concepts</button><button className="btn small ghost" disabled={!!busy} title="Run extraction again even if concepts exist" onClick={() => extract(s.id, false, true)}>Find again</button></div>
+                <div className="row gap-s">{s.file_id ? <a className="btn small" href={`#/review/${s.id}`}>{s.status === 'draft' ? 'Review text' : 'Compare with original'}</a> : <button className="btn small" onClick={() => setViewSrc(s.id)}>View</button>}{s.file_id && <button className="btn small ghost" onClick={() => setViewSrc(s.id)} title="Passages the AI is not shown, and why">AI view</button>}{s.status !== 'draft' && <><button className="btn small" disabled={!!busy} onClick={() => extract(s.id)}>Find concepts</button><button className="btn small ghost" disabled={!!busy} title="Run extraction again even if concepts exist" onClick={() => extract(s.id, false, true)}>Find again</button></>}</div>
               </li>
             ))}
           </ul>
         )}
-        <p className="small muted mt-s">PDF and image uploads (with OCR and page references) are <strong>not available yet</strong>. You can upload .txt/.md files or paste text.</p>
+        <p className="small muted mt-s">You can paste text, add a .txt/.md file, upload a <strong>PDF</strong> (text is read on this computer, page by page, and you check it first), or upload a <strong>PNG/JPEG/WebP screenshot</strong> or a scanned PDF to type out beside the original. There is no OCR: nothing is sent to an outside service to read your files.</p>
       </section>
+
+      {d.heldQuestions?.length > 0 && <HeldQuestions items={d.heldQuestions} reload={ov.reload} />}
 
       {proposed.length > 0 && (
         <section className="card" aria-labelledby="prop-h">
@@ -116,9 +119,27 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
         </form>
       </section>
 
-      {adding && <AddMaterial subjectId={id} onClose={() => setAdding(false)} onAdded={async (sid, dup) => { setAdding(false); await ov.reload(); if (dup) setMsg('You already added that exact text.'); else await extract(sid); }} />}
+      {adding && <AddMaterial subjectId={id} onClose={() => setAdding(false)} onAdded={async (sid, dup) => { setAdding(false); await ov.reload(); if (dup) setMsg('You already added that exact text.'); else await extract(sid); }} onUploaded={(sid, dup) => { setAdding(false); if (dup) { setMsg('That exact file is already in this subject.'); ov.reload(); } else go(`/review/${sid}`); }} />}
       {viewSrc && <SourceViewer id={viewSrc} onClose={() => setViewSrc(null)} />}
     </div>
+  );
+}
+
+function HeldQuestions({ items, reload }: { items: any[]; reload: () => void }) {
+  const [err, setErr] = useState<ApiError | null>(null);
+  const act = async (id: string, action: 'accept' | 'discard') => { setErr(null); try { await post(`/questions/${id}/resolve`, { action }); reload(); } catch (e) { setErr(e as ApiError); } };
+  return (
+    <section className="card" aria-labelledby="held-h">
+      <h2 id="held-h">Questions on hold <Chip tone="warn">{items.length}</Chip></h2>
+      <p className="small muted">These were held back because a check found their answer key may conflict with your material, or your material may not say enough to check them. They are not used for practice or counted as evidence until you decide. The checks are fallible: read the passage and decide.</p>
+      {err && <ErrorBox error={err} />}
+      {items.map((h) => <div key={h.id} className="upcoming" style={{ display: 'block' }}>
+        <strong>{h.prompt}</strong> <span className="small muted">({h.concept})</span>
+        <div className="small">{h.reason}</div>
+        {h.quote && <div className="quote small">“{h.quote}” <span className="muted">— {h.label}</span></div>}
+        <div className="row gap-s mt-s"><button className="btn small" onClick={() => act(h.id, 'accept')}>The question is fine — use it</button><button className="btn small ghost danger" onClick={() => act(h.id, 'discard')}>Discard it</button></div>
+      </div>)}
+    </section>
   );
 }
 
@@ -143,7 +164,7 @@ function ConceptRow({ c, all, selectable, sel, setSel, reload, onPractice }: any
             <p className="small muted" style={{ margin: '.1rem 0' }}>{c.supportNote}</p>
             {c.refs.length > 0 && <>
               <button className="btn small ghost" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide' : 'Show'} source ({c.refs.length})</button>
-              {open && c.refs.map((r: any, i: number) => <div className="quote" key={i}>“{r.quote}” <span className="muted small">— {r.label}</span></div>)}</>}
+              {open && c.refs.map((r: any, i: number) => <div className="quote" key={i} style={r.stale ? { opacity: 0.65 } : undefined}>“{r.quote}” <span className="muted small">— {r.stale ? 'no longer in the current material' : r.label}</span></div>)}</>}
             {c.prereqIds.length > 0 && <p className="small muted" style={{ margin: '.1rem 0' }}>Builds on: {c.prereqIds.map((p: string) => all.find((x: any) => x.id === p)?.name).filter(Boolean).join(', ')}</p>}
             {c.status === 'confirmed' && c.dueAt && <p className="small muted" style={{ margin: '.1rem 0' }}>Next review: {fmtDate(c.dueAt)}{c.state && <> · {c.state.independentSuccesses} independent success{c.state.independentSuccesses === 1 ? '' : 'es'}</>}</p>}
             <div className="row gap-s">
@@ -158,10 +179,16 @@ function ConceptRow({ c, all, selectable, sel, setSel, reload, onPractice }: any
   );
 }
 
-function AddMaterial({ subjectId, onClose, onAdded }: { subjectId: string; onClose: () => void; onAdded: (sourceId: string, dup: boolean) => void }) {
+function AddMaterial({ subjectId, onClose, onAdded, onUploaded }: { subjectId: string; onClose: () => void; onAdded: (sourceId: string, dup: boolean) => void; onUploaded: (sourceId: string, dup: boolean) => void }) {
   const [title, setTitle] = useState(''), [kind, setKind] = useState('notes'), [text, setText] = useState('');
   const [err, setErr] = useState<ApiError | null>(null);
   const [saving, setSaving] = useState(false);
+  const onBinary = async (f?: File) => {
+    if (!f) return;
+    setSaving(true); setErr(null);
+    try { const r = await upload(`/subjects/${subjectId}/files?title=${encodeURIComponent(title)}&kind=${encodeURIComponent(kind)}`, f); onUploaded(r.id, r.duplicate); }
+    catch (e) { setErr(e as ApiError); } finally { setSaving(false); }
+  };
   const onFile = async (f?: File) => {
     if (!f) return;
     if (!/\.(txt|md|markdown)$/i.test(f.name) && !f.type.startsWith('text/')) { setErr(new ApiError(0, 'unsupported', 'Only .txt and .md files can be read for now. PDFs and images are not available yet — paste the text instead.')); return; }
@@ -178,7 +205,8 @@ function AddMaterial({ subjectId, onClose, onAdded }: { subjectId: string; onClo
       <Field label="What is it?"><select value={kind} onChange={(e) => setKind(e.target.value)}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
       <Field label="Paste text" hint="Tip: lines like “Term: definition”, headings, and “Page 2” markers help me find concepts and keep page references."><textarea value={text} onChange={(e) => setText(e.target.value)} rows={10} placeholder="Paste your notes, packet, passage, or rubric here…" /></Field>
       <div className="row gap-s mt-s"><label className="btn small">Choose a .txt / .md file<input type="file" accept=".txt,.md,.markdown,text/plain" hidden onChange={(e) => onFile(e.target.files?.[0])} /></label>
-        <button className="btn small unavailable" disabled title="Not available yet">PDF / image upload — coming later</button></div>
+        <label className="btn small">Upload a PDF or screenshot<input type="file" accept="application/pdf,image/png,image/jpeg,image/webp,.pdf,.png,.jpg,.jpeg,.webp" hidden onChange={(e) => { onBinary(e.target.files?.[0]); e.target.value = ''; }} /></label></div>
+      <p className="small muted mt-s"><strong>PDFs and images stay on this computer.</strong> Text PDFs are read locally (up to 15 MB and 60 pages); scanned pages and screenshots can’t be read automatically, so you type them beside the original. You review everything before it’s used.</p>
       <p className="small muted mt-s">Text you add is treated as <em>content</em>, never as instructions to this app. Only the passages needed for a task are sent to an AI model, and only if you have configured one.</p>
       {err && <ErrorBox error={err} />}
       <div className="row mt"><button className="btn primary" disabled={saving || text.trim().length < 20} onClick={submit}>{saving ? 'Saving…' : 'Add and find concepts'}</button><button className="btn" onClick={onClose}>Cancel</button></div>
@@ -188,10 +216,24 @@ function AddMaterial({ subjectId, onClose, onAdded }: { subjectId: string; onClo
 
 function SourceViewer({ id, onClose }: { id: string; onClose: () => void }) {
   const s = useApi<any>(`/sources/${id}`);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const decide = async (flagId: string, decision: 'include' | 'exclude' | null) => { setErr(null); try { await put(`/sources/${id}/flags/${flagId}`, { decision }); await s.reload(); } catch (e) { setErr(e as ApiError); } };
+  const d = s.data;
+  const parts: { text: string; flag?: any }[] = [];
+  if (d) { let pos = 0; for (const f of d.flags) { if (f.start < pos) continue; if (f.start > pos) parts.push({ text: d.text.slice(pos, f.start) }); parts.push({ text: d.text.slice(f.start, f.end), flag: f }); pos = f.end; } parts.push({ text: d.text.slice(pos) }); }
   return (
-    <Modal title={s.data?.title ?? 'Material'} onClose={onClose}>
-      {s.loading && <Spinner />}{s.error && <ErrorBox error={s.error} onRetry={s.reload} />}
-      {s.data && <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '.92rem', margin: 0 }}>{s.data.text}</pre>}
+    <Modal title={d?.title ?? 'Material'} onClose={onClose}>
+      {s.loading && !d && <Spinner />}{s.error && <ErrorBox error={s.error} onRetry={s.reload} />}{err && <ErrorBox error={err} />}
+      {d && <>
+        {d.flags.length > 0 && <div className="notice info small" role="status">
+          <strong>{d.flags.length} passage{d.flags.length === 1 ? '' : 's'} flagged.</strong> Wording like this is sometimes an attempt to give orders to an AI, and sometimes ordinary text (a story, a lesson about AI). The check is a guess, not proof. Your original text is never changed; this only decides what an AI model is shown.
+          <ul>{d.flags.map((f: any) => <li key={f.id} className="mt-s"><Chip tone={f.excludedFromAi ? 'warn' : 'neutral'}>{f.excludedFromAi ? 'left out of AI view' : 'shown to AI'}</Chip> <span className="muted">{f.label || 'text'} · {f.severity === 'strong' ? 'reads like an order to an AI' : 'contains a phrase to watch'}</span>
+            <div className="quote">“{f.excerpt.length > 240 ? f.excerpt.slice(0, 240) + '…' : f.excerpt}”</div>
+            <div className="row gap-s">{f.excludedFromAi ? <button className="btn small" onClick={() => decide(f.id, 'include')}>Show this to the AI</button> : <button className="btn small" onClick={() => decide(f.id, 'exclude')}>Leave this out of the AI view</button>}{f.decision && <button className="btn small ghost" onClick={() => decide(f.id, null)}>Reset to default</button>}</div></li>)}</ul>
+          <p className="muted">Changes apply to future AI requests; concepts and questions already made are not rewritten.</p>
+        </div>}
+        <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '.92rem', margin: 0 }}>{parts.map((p, i) => p.flag ? <mark key={i} style={{ background: p.flag.excludedFromAi ? 'var(--warn-bg, #fde9c8)' : 'var(--info-bg, #e3eefc)' }}>{p.text.replace(/\f/g, '\n— page break —\n')}</mark> : <span key={i}>{p.text.replace(/\f/g, '\n— page break —\n')}</span>)}</pre>
+      </>}
     </Modal>
   );
 }

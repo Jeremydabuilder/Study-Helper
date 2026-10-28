@@ -2,11 +2,11 @@
 
 Goal: decide **with measurements** whether a cheaper or faster model (Claude Haiku 5.5, or optionally Groq) may take over some tasks from the Sonnet 5.5 baseline. No model is assumed better or worse in general; the answer depends on the task and on *this* material.
 
-## What is in the set (`eval/dataset/*.json`, 58 items)
+## What is in the set (`eval/dataset/*.json`, 64 items)
 
 | File | Items | Measures |
 |---|---|---|
-| `grading.json` | 21 | History, English and math-explanation answers against rubrics: correct in different words, partial, confident misconception, keyword stuffing, **unsupported/invented quotation**, quote-vs-paraphrase, **ambiguous question**, **prompt injection in the answer**, **injection inside the source excerpt** |
+| `grading.json` | 27 | History, English and math-explanation answers against rubrics: correct in different words, partial, confident misconception, keyword stuffing, **unsupported/invented quotation**, quote-vs-paraphrase, **ambiguous question**, **prompt injection in the answer**, **injection inside the source excerpt**, plus 6 items for the adaptive loop (confusion between related concepts, partial explanation, missing knowledge, correct in different words, keyword stuffing, invented quotation) with an optional `expected.mistakeKind` |
 | `extraction.json` | 3 | Concept extraction from a history packet, an English passage + rubric **containing an injected instruction**, and math notes (skill tags) |
 | `generation.json` | 4 | Question generation grounded in history/English excerpts |
 | `math.json` | 30 | The deterministic math checker (no model): equivalent forms, endpoints, flipped inequalities, sign errors, missing/extraneous solutions, unparseable and code-like input |
@@ -53,8 +53,14 @@ Run the same set on Sonnet 5.5 and Haiku 5.5 (and Groq if you opted in), then:
 
 ## Groq (optional)
 
-`AI_PROVIDER=groq`, `GROQ_API_KEY`, `GROQ_MODEL` enable a transport for Groq's OpenAI-compatible API. It is **opt-in, has no default model, and has not been run against the live API**: Groq's official model list could not be reached when this was written and third-party sources disagreed, so no model ID is asserted. Pick one from Groq's current docs, add `AI_PRICE_IN_PER_MTOK`/`AI_PRICE_OUT_PER_MTOK` so cost estimates are meaningful, and run the evaluation first. When Groq is active, **student material is sent to Groq instead of Anthropic**; there is one active provider per server process, no automatic fallback, and no switching during a session (the Setup screen and every usage row show the provider and model).
+`AI_PROVIDER=groq` and `GROQ_API_KEY` enable a transport for Groq's OpenAI-compatible API with one fixed built-in model (`openai/gpt-oss-120b`, no model choice). It is **opt-in and has not been run against the live API**: Groq's official model list could not be reached and secondary sources disagreed, so treat the ID as a best guess. Add `AI_PRICE_IN_PER_MTOK`/`AI_PRICE_OUT_PER_MTOK` so cost estimates are meaningful, and run the evaluation first. When Groq is active, **student material is sent to Groq instead of Anthropic**; there is one active provider per server process, no automatic fallback, and no switching during a session (the Setup screen and every usage row show the provider and model).
 
 ## What has actually been measured so far
 
 See `docs/eval-results/offline-baseline.md`: the offline fallback and the deterministic math checker. **No model has been evaluated** because no API credentials were available in the build environment.
+
+## Adaptive-loop items and what they can and cannot show
+
+The six newest grading items carry `expected.mistakeKind`. With a live model the report adds a *mistake-kind agreement* row (how often the grader's `mistake_kind` matches the draft label). The offline provider gives no mistake kind, so that row is empty for it. These labels are drafts like every other item.
+
+`tests/experience.test.ts` and `tests/adaptive.test.ts` check what the **app** does with a grade (count it, hold it back, follow up, ask again later) using the offline provider or scripted fake AI. They are not model evaluations and say nothing about real grading quality. No study has measured whether the loop improves learning.

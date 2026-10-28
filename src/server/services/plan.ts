@@ -6,6 +6,7 @@ import { uid } from '../db';
 import { Ctx, aiInfo, getAvailability, getProfile, getSchedulerParams, getWeights, parse } from './common';
 import { computeSchedule, upcomingItems, attentionList, pendingProposalCount } from './items';
 import { activeSession, loadAttempts } from './practice';
+import { recommend } from './sessionPlan';
 
 export function buildPlanInputs(ctx: Ctx, o: { minutes: number }): Omit<PlanInput, 'minutes'> & { minutes: number } {
   const now = ctx.now();
@@ -77,6 +78,7 @@ export function getToday(ctx: Ctx, o: { minutes?: number }) {
       ...plan,
       tasks: plan.tasks.map((t) => ({ ...t, verb: TASK_VERB[t.kind], levelLabel: LEVEL_LABEL[inputs.concepts.find((c) => c.id === t.conceptId)!.state.level] })),
     },
+    recommendation: recommend(ctx, minutes, act ? { id: act.id } : null),
     heuristicNote: 'Priority scores are an ordering heuristic built from the rules below — not a prediction of how well you will do.',
     weights: inputs.weights,
     active: act ? { id: act.id, mode: act.mode, startedAt: act.started_at } : null,
@@ -133,7 +135,7 @@ export function getProgress(ctx: Ctx) {
     notes: [
       'Rates show a plausible range (Wilson 95% interval) because small samples are noisy.',
       'Study minutes are measured from time spent answering questions — a rough proxy, not a stopwatch.',
-      '“Held-out” questions are kept unseen until review/transfer checks, to tell learning from remembering one question.',
+      '“Held-back” questions are kept unseen until a review or test practice, so a result is not just remembering one question you already saw. A differently worded question still can’t prove you can apply the idea somewhere new; treat it as one more piece of evidence.',
     ],
   };
 }

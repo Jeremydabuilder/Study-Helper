@@ -8,7 +8,7 @@ import type { Band, ExtractionItem, GenerationItem, GradingItem, MathItem } from
 
 export const bandOf = (c: number): Band => (c >= 0.8 ? 'high' : c >= 0.35 ? 'mid' : 'low');
 
-export interface GradeScore { id: string; category: string; ok: boolean; band: Band | null; correctness: number | null; confidence: string | null; abstained: boolean; falseCredit: boolean; falseReject: boolean; failed: string | null }
+export interface GradeScore { id: string; category: string; ok: boolean; band: Band | null; correctness: number | null; confidence: string | null; abstained: boolean; falseCredit: boolean; falseReject: boolean; failed: string | null; mistakeExpected?: string | null; mistakeGot?: string | null }
 export function scoreGrade(item: GradingItem, r: GradeResult | null, failed: string | null = null): GradeScore {
   if (!r) return { id: item.id, category: item.category, ok: false, band: null, correctness: null, confidence: null, abstained: false, falseCredit: false, falseReject: false, failed };
   const band = bandOf(r.correctness);
@@ -18,6 +18,7 @@ export function scoreGrade(item: GradingItem, r: GradeResult | null, failed: str
   return {
     id: item.id, category: item.category, ok: okBand && okConf, band, correctness: r.correctness, confidence: r.confidence, abstained: r.confidence === 'low',
     falseCredit: !accept.includes('high') && band === 'high', falseReject: accept.length === 1 && accept[0] === 'high' && band === 'low', failed: null,
+    mistakeExpected: item.expected.mistakeKind ?? null, mistakeGot: r.mistake_kind && r.mistake_kind !== 'none' ? r.mistake_kind : null,
   };
 }
 

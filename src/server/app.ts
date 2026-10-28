@@ -9,8 +9,14 @@ import { DEFAULT_AVAILABILITY } from '../core/schedule';
 import { isValidTimeZone } from '../core/time';
 import { WorkspaceName } from './db';
 import { Runtime } from './context';
+import { memoryStatus } from './services/teachingMemory';
+import { setFlagDecision } from './services/sourceSafety';
 import { Ctx, HttpError, aiInfo, budgetUsd, callLimit, getAvailability, getProfile, getSetting, getWeights, setSetting, usageReport } from './services/common';
 import * as content from './services/content';
+import * as files from './services/files';
+import { resolveQuestion } from './services/questions';
+import { firstUse } from './services/firstUse';
+import * as ocr from './services/ocr';
 import * as practice from './services/practice';
 import * as plan from './services/plan';
 import * as mem from './services/memory';
@@ -31,6 +37,12 @@ const AvailabilitySchema = z.object({
 });
 const WeightsSchema = z.object(Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, z.number().min(0).max(10)])) as Record<keyof typeof DEFAULT_WEIGHTS, z.ZodNumber>);
 
+const UPLOAD_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'application/octet-stream'];
+const isUploadRoute = (req: Request) => req.method === 'POST' && (/^\/api\/subjects\/[^/]+\/files$/.test(req.path) || /^\/api\/sources\/[^/]+\/replace$/.test(req.path));
+/** Aborts when the client goes away before the response finished, so abandoned uploads stop consuming a worker. */
+const cancelOnClose = (res: Response) => { const ac = new AbortController(); res.on('close', () => { if (!res.writableEnded) ac.abort(); }); return ac.signal; };
+const rawUpload = express.raw({ type: UPLOAD_TYPES, limit: '16mb' });
+
 export function createApp(rt: Runtime) {
   const app = express();
   app.disable('x-powered-by');
@@ -40,7 +52,7 @@ export function createApp(rt: Runtime) {
   app.use((req, res, next) => {
     const origin = req.headers.origin, host = req.headers.host;
     if (origin && host) { try { if (new URL(origin).host !== host) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-origin requests are not allowed.' } }); } catch { return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Bad origin.' } }); } }
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.is('application/json') === false) return res.status(415).json({ error: { code: 'unsupported', message: 'JSON only.' } });
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.is('application/json') === false && !(isUploadRoute(req) && req.is(UPLOAD_TYPES))) return res.status(415).json({ error: { code: 'unsupported', message: 'JSON only.' } });
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store');
     next();
   });
@@ -84,7 +96,18 @@ export function createApp(rt: Runtime) {
   app.patch('/api/subjects/:id', h((ctx, req) => content.updateSubject(ctx, req.params.id, z.object({ name: z.string().optional(), description: z.string().optional(), aliases: z.array(z.string()).optional(), archived: z.boolean().optional() }).parse(req.body))));
   app.delete('/api/subjects/:id', h((ctx, req) => content.deleteSubject(ctx, req.params.id)));
   app.post('/api/subjects/:id/sources', h((ctx, req) => content.addSource(ctx, req.params.id, z.object({ title: z.string().optional(), kind: z.string().optional(), text: z.string(), origin: z.string().optional() }).parse(req.body))));
+  app.post('/api/subjects/:id/files', rawUpload, h((ctx, req, res) => content.noDemoUpload(ctx) ?? files.uploadFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? ''), title: req.query.title as string | undefined, kind: req.query.kind as string | undefined })));
+  app.post('/api/sources/:id/replace', rawUpload, h((ctx, req, res) => files.replaceFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? '') })));
+  app.get('/api/files/:id', h((ctx, req, res) => { const f = files.getFile(ctx, req.params.id); res.setHeader('Content-Type', f.mime); res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`); res.setHeader('Cache-Control', 'private, max-age=3600'); res.send(f.data); }));
+  app.post('/api/sources/:id/pages/reviewed', h((ctx, req) => files.markReviewed(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(200) }).parse(req.body).pages)));
+  app.post('/api/sources/:id/discard-replacement', h((ctx, req) => files.discardPending(ctx, req.params.id)));
+  app.post('/api/sources/:id/ocr/preview', h((ctx, req) => ocr.ocrDisclosure(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(60).optional() }).parse(req.body ?? {}).pages)));
+  app.post('/api/sources/:id/ocr', h((ctx, req) => { const b = z.object({ pages: z.array(z.number().int()).max(60).optional(), consentToken: z.string(), overwrite: z.boolean().optional() }).parse(req.body); return ocr.runOcr(ctx, req.params.id, b); }));
+  app.get('/api/sources/:id/review', h((ctx, req) => { const r = files.reviewPages(ctx, req.params.id); return r ? { ...r, ocr: ocr.ocrAvailability(ctx) } : r; }));
+  app.put('/api/sources/:id/pages/:n', h((ctx, req) => { const b = z.object({ text: z.string(), baseRev: z.number().int() }).parse(req.body); return files.savePage(ctx, req.params.id, Number(req.params.n), b.text, b.baseRev); }));
+  app.post('/api/sources/:id/confirm', h((ctx, req) => files.confirmSource(ctx, req.params.id, { acknowledgeEmptyPages: bool(req.body?.acknowledgeEmptyPages) })));
   app.get('/api/sources/:id', h((ctx, req) => content.getSource(ctx, req.params.id)));
+  app.put('/api/sources/:id/flags/:flagId', h((ctx, req) => setFlagDecision(ctx, req.params.id, req.params.flagId, z.object({ decision: z.enum(['include', 'exclude']).nullable() }).parse(req.body).decision)));
   app.delete('/api/sources/:id', h((ctx, req) => content.deleteSource(ctx, req.params.id)));
   app.post('/api/sources/:id/extract', h((ctx, req) => content.extractConcepts(ctx, req.params.id, { useOffline: bool(req.body?.useOffline), force: bool(req.body?.force) })));
   app.post('/api/subjects/:id/concepts', h((ctx, req) => content.addConcept(ctx, req.params.id, z.object({ name: z.string(), summary: z.string().optional(), skillTag: z.string().nullable().optional() }).parse(req.body))));
@@ -97,11 +120,17 @@ export function createApp(rt: Runtime) {
   app.post('/api/plan/override', h((ctx, req) => { const b = z.object({ conceptId: z.string(), action: z.enum(['pin', 'skip']).nullable() }).parse(req.body); plan.setOverride(ctx, b.conceptId, b.action); }));
   app.post('/api/plan/rebuild', h((ctx) => plan.rebuildOverdue(ctx)));
   app.get('/api/progress', h((ctx) => plan.getProgress(ctx)));
+  app.post('/api/attempts/:id/clarify', h((ctx, req) => practice.clarify(ctx, req.params.id, z.object({ text: z.string() }).parse(req.body).text)));
+  app.post('/api/questions/:id/report-support', h((ctx, req) => practice.reportSupport(ctx, req.params.id)));
+  app.post('/api/questions/:id/resolve', h((ctx, req) => resolveQuestion(ctx, req.params.id, z.object({ action: z.enum(['accept', 'discard']) }).parse(req.body).action)));
+  app.post('/api/attempts/:id/cause', h((ctx, req) => practice.setSelfCause(ctx, req.params.id, z.object({ cause: z.string() }).parse(req.body).cause)));
+  app.post('/api/attempts/:id/report-unclear', h((ctx, req) => practice.reportUnclear(ctx, req.params.id)));
   app.get('/api/history', h((ctx) => practice.history(ctx)));
 
   /* ---------------- sessions / practice ---------------- */
-  const Start = z.object({ mode: z.enum(['diagnostic', 'practice', 'review', 'exam', 'mixed']), subjectId: z.string().nullable().optional(), minutes: z.number(), conceptIds: z.array(z.string()).optional(), itemId: z.string().nullable().optional(), abandonExisting: z.boolean().optional() });
-  app.post('/api/sessions', h(async (ctx, req) => { const { id } = practice.startSession(ctx, Start.parse(req.body)); return { id }; }));
+  const Start = z.object({ mode: z.enum(['diagnostic', 'practice', 'review', 'exam', 'mixed']).default('mixed'), goal: z.enum(['test', 'understand', 'wrong', 'review']).optional(), sourceId: z.string().nullable().optional(), subjectId: z.string().nullable().optional(), minutes: z.number(), conceptIds: z.array(z.string()).optional(), itemId: z.string().nullable().optional(), abandonExisting: z.boolean().optional() });
+  app.post('/api/sessions', h(async (ctx, req) => practice.startSession(ctx, Start.parse(req.body))));
+  app.post('/api/sessions/:id/extend', h((ctx, req) => practice.extendSession(ctx, req.params.id, Number(req.body?.minutes ?? 10))));
   app.get('/api/sessions/active', h((ctx) => { const s = practice.activeSession(ctx); return { active: s ? { id: s.id, mode: s.mode, startedAt: s.started_at } : null }; }));
   app.get('/api/sessions/:id', h((ctx, req) => practice.sessionView(ctx, req.params.id, { useOffline: req.query.offline === '1' })));
   app.post('/api/sessions/:id/hint', h((ctx, req) => practice.requestHint(ctx, req.params.id, z.object({ questionId: z.string() }).parse(req.body).questionId)));
@@ -119,6 +148,7 @@ export function createApp(rt: Runtime) {
   app.get('/api/memory', h((ctx) => mem.listMemory(ctx)));
   app.post('/api/memory', h((ctx, req) => mem.addMemory(ctx, z.object({ text: z.string(), subjectId: z.string().nullable().optional(), conceptId: z.string().nullable().optional() }).parse(req.body))));
   app.patch('/api/memory/:id', h((ctx, req) => mem.updateMemory(ctx, req.params.id, z.object({ text: z.string() }).parse(req.body))));
+  app.post('/api/memory/:id/status', h((ctx, req) => { if (!memoryStatus(ctx, req.params.id, z.object({ status: z.enum(['active', 'dismissed']) }).parse(req.body).status)) throw new HttpError(404, 'not_found', 'Memory not found.'); }));
   app.delete('/api/memory/:id', h((ctx, req) => mem.deleteMemory(ctx, req.params.id)));
   app.patch('/api/misconceptions/:id', h((ctx, req) => mem.setMisconceptionStatus(ctx, req.params.id, z.object({ status: z.enum(['active', 'dismissed', 'repaired']) }).parse(req.body).status)));
   app.delete('/api/misconceptions/:id', h((ctx, req) => mem.deleteMisconception(ctx, req.params.id)));
@@ -178,22 +208,39 @@ export function createApp(rt: Runtime) {
     const missing = ctx.cfg.google ? [] : (['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'APP_SECRET'] as const).filter((k) => !process.env[k]);
     const calState = ctx.calendar.kind === 'memory' ? (c.status === 'disconnected' ? 'disconnected' : c.status) : !c.available ? 'not_configured' : c.status;
     return {
-      workspace: ctx.workspace, ai: aiInfo(ctx),
+      workspace: ctx.workspace, ai: aiInfo(ctx), ocr: ocr.ocrAvailability(ctx),
       calendar: { state: calState, demo: c.demo, missingEnv: ctx.calendar.kind === 'memory' ? [] : missing, partialConfig: ctx.cfg.googlePartial, redirectUri: ctx.cfg.googleRedirectUri, lastSyncOkAt: c.lastSyncOkAt, lastError: c.lastError },
       boundary: 'Local single-user app with no login. Do not expose this server to a network until authentication and per-user data isolation exist.',
     };
   }));
+  app.get('/api/first-use', h((ctx) => firstUse(ctx)));
   app.get('/api/ai/usage', h((ctx) => usageReport(ctx)));
-  app.post('/api/ai/verify', h(async (ctx) => {
+  app.post('/api/ai/verify', h(async (ctx, req) => {
     if (ctx.workspace === 'demo') throw new HttpError(409, 'demo_workspace', 'The sample workspace never calls a paid AI model.');
     if (!ctx.ai.live || !ctx.ai.verify) throw new HttpError(409, 'no_ai', 'No AI provider is configured, so there is nothing to verify. See the setup steps in Settings.');
-    const models = [...new Set((['extract', 'generate', 'grade'] as const).map((t) => ctx.ai.modelFor!(t)))];
-    const results: { model: string; ok: boolean; latencyMs?: number; error?: string }[] = [];
-    for (const m of models) {
-      try { const r = await ctx.ai.verify(undefined, m); results.push({ model: m, ok: true, latencyMs: r.latencyMs }); }
-      catch (e) { results.push({ model: m, ok: false, error: e instanceof AIError ? e.message : 'failed' }); }
+    const level = (req.body as { level?: string } | undefined)?.level === 'output' ? 'output' : 'connection';
+    const results: { task?: string; model: string; ok: boolean; latencyMs?: number; error?: string }[] = [];
+    if (level === 'connection') {
+      // Proves only that an authenticated HTTP round trip works. It says nothing about study output quality or schema validity.
+      for (const m of [...new Set((['extract', 'generate', 'grade'] as const).map((t) => ctx.ai.modelFor!(t)))]) {
+        try { const r = await ctx.ai.verify(undefined, m); results.push({ model: m, ok: true, latencyMs: r.latencyMs }); }
+        catch (e) { results.push({ model: m, ok: false, error: e instanceof AIError ? e.message : 'failed' }); }
+      }
+    } else {
+      // Runs one tiny real task per model role and requires schema-valid output; invalid output is reported as a failure.
+      const probes: Record<'extract' | 'generate' | 'grade', () => Promise<unknown>> = {
+        extract: () => ctx.ai.extractConcepts({ subjectName: 'Verification', maxConcepts: 3, chunks: [{ id: '0', label: 'Probe p.1', text: 'The absolute value of a number is its distance from zero. For example |-4| = 4 and |4| = 4. To solve |x| < 3, write -3 < x < 3.' }] }, {}),
+        generate: () => ctx.ai.generateQuestions({ subjectName: 'Verification', concept: { name: 'Absolute value', summary: 'Distance from zero.', skillTag: null }, excerpts: [{ label: 'Probe p.1', text: 'The absolute value of a number is its distance from zero. |-4| = 4.' }], otherConcepts: [], misconceptions: [], studentNotes: [], practice: 1, heldout: 0, avoidPrompts: [], seed: 1 }, {}),
+        grade: () => ctx.ai.gradeAnswer({ question: { prompt: 'What is the absolute value of -4, and why?', kind: 'short_answer', rubric: [{ point: 'States 4', keywords: ['4', 'four'] }, { point: 'Distance from zero', keywords: ['distance', 'zero'] }] }, answer: '4, because it is the distance from zero.', reasoning: '', excerpts: [{ label: 'Probe p.1', text: 'The absolute value of a number is its distance from zero. |-4| = 4.' }] }, {}),
+      };
+      for (const task of ['extract', 'generate', 'grade'] as const) {
+        const t0 = Date.now();
+        try { await probes[task](); results.push({ task, model: ctx.ai.modelFor!(task), ok: true, latencyMs: Date.now() - t0 }); }
+        catch (e) { results.push({ task, model: ctx.ai.modelFor!(task), ok: false, error: e instanceof AIError ? e.message : 'failed' }); }
+      }
     }
-    return { results, ai: aiInfo(ctx) };
+    return { level, results, ai: aiInfo(ctx) };
+
   }));
 
   /* ---------------- static client ---------------- */
@@ -212,6 +259,7 @@ export function createApp(rt: Runtime) {
     }
     if (err instanceof CalendarError) return res.status(err.code === 'reauth_required' ? 401 : err.code === 'rate_limited' ? 429 : err.code === 'org_blocked' || err.code === 'denied' ? 403 : err.code === 'not_configured' ? 503 : 502).json({ error: { code: `calendar_${err.code}`, message: err.message } });
     if (err instanceof ZodError) return res.status(400).json({ error: { code: 'invalid', message: `Invalid request: ${err.issues[0]?.path.join('.') || 'body'} ${err.issues[0]?.message ?? ''}`.trim() } });
+    if ((err as any)?.type === 'entity.too.large') return res.status(413).json({ error: { code: 'file_too_large', message: 'That file is too large to upload (the limit is 15 MB for a PDF, 10 MB for an image).' } });
     if (err instanceof SyntaxError) return res.status(400).json({ error: { code: 'invalid_json', message: 'Malformed JSON.' } });
     console.error('[server error]', err instanceof Error ? err.message : err);
     res.status(500).json({ error: { code: 'internal', message: 'Something went wrong on the server. Your data was not changed by this request.' } });

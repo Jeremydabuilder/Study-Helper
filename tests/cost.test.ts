@@ -3,7 +3,7 @@ import { buildProvider } from '../src/ai/factory';
 import { GroqTransport } from '../src/ai/groq';
 import { AnthropicTransport, LLMProvider, LLMRequest, LLMResponse, LLMTransport } from '../src/ai/llm';
 import { AIError } from '../src/ai/provider';
-import { estimateCost, priceFor, projectCost } from '../src/ai/pricing';
+import { estimateCost, priceFor, reservationUsd } from '../src/ai/pricing';
 import { configFromEnv } from '../src/server/config';
 import { baseCfg, NOTES, startServer, TestServer } from './helpers';
 
@@ -38,7 +38,8 @@ describe('pricing (list prices as of docs check; estimates only)', () => {
   it('flags unknown models (conservative fallback) and honours explicit overrides', () => {
     expect(estimateCost('some-groq-model', { inputTokens: 1e6, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }).known).toBe(false);
     expect(estimateCost('some-groq-model', { inputTokens: 1e6, outputTokens: 1e6, cacheReadTokens: 0, cacheWriteTokens: 0 }, { inPerM: 0.1, outPerM: 0.2 })).toEqual({ usd: expect.closeTo(0.3, 6), known: true });
-    expect(projectCost('claude-sonnet-5-5', 7000, 4000)).toBeCloseTo(2000 * 2 / 1e6 + 4000 * 10 / 1e6, 6);
+    // reservation: input ≤ bytes + 300 overhead, output ≤ max_tokens, +10% — a conservative policy, not a ceiling
+    expect(reservationUsd('claude-sonnet-5-5', 7000, 4000)).toBeCloseTo(((7300 * 2 + 4000 * 10) / 1e6) * 1.1, 6);
   });
 });
 
@@ -49,13 +50,13 @@ describe('request accounting', () => {
     expect((await s.call('POST', `/api/sources/${src}/extract`, {})).status).toBe(200);
     const r = rows();
     expect(r.map((x) => [x.purpose, x.attempt, x.outcome])).toEqual([['extract', 1, 'invalid_output'], ['extract', 2, 'ok']]);
-    expect(r[0]).toMatchObject({ model: 'claude-sonnet-5-5', input_tokens: 1200, output_tokens: 80, usage_source: 'provider', provider: 'anthropic' });
+    expect(r[0]).toMatchObject({ model: 'claude-sonnet-5-5', input_tokens: 1200, output_tokens: 80, billing: 'reported', status: 'settled', provider: 'anthropic' });
     expect(r[0].est_cost_usd).toBeCloseTo((1200 * 2 + 80 * 10) / 1e6, 8);
     const usage = (await s.call('GET', '/api/ai/usage')).body;
     expect(usage.billableRequests).toBe(2);
     expect(usage.spentUsd).toBeCloseTo((1200 * 2 + 80 * 10 + 1500 * 2 + 300 * 10) / 1e6, 8);
     expect(usage.byPurpose[0]).toMatchObject({ key: 'extract', requests: 2, retries: 1, failures: 1 });
-    expect(usage.note).toMatch(/billing is authoritative/i);
+    expect(usage.policy).toMatch(/not a guaranteed dollar ceiling/i);
   });
   it('failed requests (429/5xx/timeouts) are logged but not billed', async () => {
     const t = new Scripted(() => new AIError('rate_limited', 'busy', 3000));
@@ -76,7 +77,8 @@ describe('request accounting', () => {
     const t = new Scripted(() => ({ ...resp(CONCEPTS), usage: null }));
     const { src } = await withSource({ llm: new LLMProvider(t) });
     await s.call('POST', `/api/sources/${src}/extract`, {});
-    expect(rows()[0].usage_source).toBe('estimated');
+    expect(rows()[0]).toMatchObject({ billing: 'estimated' });
+    expect(rows()[0].est_cost_usd).toBeGreaterThan(0); // held at the conservative reservation, never zero
     expect((await s.call('GET', '/api/ai/usage')).body.estimatedUsageRequests).toBe(1);
   });
 });
@@ -140,7 +142,7 @@ describe('per-task model, output limits and effort', () => {
     expect(t.reqs[0]).toMatchObject({ model: 'claude-haiku-5-5', maxTokens: 1234, effort: 'low' });
   });
   it('configFromEnv reads models, limits, effort, budget; invalid effort is ignored; groq is never the default', () => {
-    const c = configFromEnv({ ANTHROPIC_API_KEY: 'k', GROQ_API_KEY: 'g', GROQ_MODEL: 'm', AI_MODEL_EXTRACT: 'claude-haiku-5-5', AI_MAX_OUTPUT_GRADE: '800', AI_EFFORT_GRADE: 'bogus', AI_EFFORT_EXTRACT: 'low', AI_DAILY_BUDGET_USD: '0.25' } as never);
+    const c = configFromEnv({ ANTHROPIC_API_KEY: 'k', GROQ_API_KEY: 'g', GROQ_MODEL: 'ignored', AI_MODEL_EXTRACT: 'claude-haiku-5-5', AI_MAX_OUTPUT_GRADE: '800', AI_EFFORT_GRADE: 'bogus', AI_EFFORT_EXTRACT: 'low', AI_DAILY_BUDGET_USD: '0.25' } as never);
     expect(c.aiProvider).toBe('anthropic'); expect(c.model).toBe('claude-sonnet-5-5');
     expect(c.aiTasks.extract).toMatchObject({ model: 'claude-haiku-5-5', effort: 'low' }); expect(c.aiTasks.grade).toMatchObject({ maxOutputTokens: 800 }); expect(c.aiTasks.grade!.effort).toBeUndefined();
     expect(c.aiDailyBudgetUsd).toBe(0.25);
@@ -171,15 +173,17 @@ describe('optional Groq transport (opt-in, unverified against the live API)', ()
     const p = new LLMProvider(mk(200, { choices: [{ message: { content: '{"concepts":[' }, finish_reason: 'length' }], usage: { prompt_tokens: 5, completion_tokens: 50 } }));
     await expect(p.extractConcepts({ subjectName: 'S', chunks: [], maxConcepts: 3 })).rejects.toMatchObject({ code: 'malformed' });
   });
-  it('is never selected implicitly: needs AI_PROVIDER=groq plus key AND model; no silent fallback', () => {
+  it('is never selected implicitly: needs AI_PROVIDER=groq plus a key; one fixed built-in model; no silent fallback', () => {
     expect(buildProvider(baseCfg({ groqKey: 'g', groqModel: 'm' }))).toBeNull(); // provider defaults to anthropic, which has no key
-    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: 'g', groqModel: null, anthropicKey: 'a' }))).toBeNull(); // no model => off, NOT anthropic
-    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: 'g', groqModel: 'm' }))!.name).toBe('groq:m');
+    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: null, anthropicKey: 'a' }))).toBeNull(); // groq selected but no key => off, NOT anthropic
+    expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: 'g', groqModel: null }))!.name).toBe('groq:openai/gpt-oss-120b');
+    const c = configFromEnv({ AI_PROVIDER: 'groq', GROQ_API_KEY: 'g', GROQ_MODEL: 'user-choice' } as any);
+    expect(c.groqModel).toBe('openai/gpt-oss-120b'); // GROQ_MODEL is ignored: there is no model choice
   });
 });
 
 describe('setup states and secrets', () => {
-  it('walks offline → configured-unverified → verified, and verify_failed on rejected credentials', async () => {
+  it('walks offline → configured-unverified → connection-verified, and verify_failed on rejected credentials', async () => {
     s = await startServer();
     expect((await s.call('GET', '/api/status')).body.ai.mode).toBe('offline');
     expect((await s.call('POST', '/api/ai/verify', {})).status).toBe(409);
@@ -190,7 +194,7 @@ describe('setup states and secrets', () => {
     expect((await s.call('GET', '/api/status')).body.ai).toMatchObject({ mode: 'configured_unverified', live: true });
     const v = await s.call('POST', '/api/ai/verify', {});
     expect(v.body.results).toEqual([{ model: 'claude-sonnet-5-5', ok: true, latencyMs: expect.any(Number) }]);
-    expect(v.body.ai.mode).toBe('verified'); expect(v.body.ai.verifiedAt).toBeTruthy();
+    expect(v.body.ai.mode).toBe('connection_verified'); // HTTP works; no study output has been validated
     expect(rows()[0]).toMatchObject({ purpose: 'verify', outcome: 'ok' });
     t.script = () => new AIError('not_configured', 'rejected');
     s.clock.now += 1000;

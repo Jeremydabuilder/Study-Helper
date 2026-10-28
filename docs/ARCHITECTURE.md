@@ -16,4 +16,12 @@ See the README for the overview. Details worth knowing:
 
 **Evaluation.** `eval/dataset/*.json` (draft-labelled) → `src/eval/run.ts` calls an `AIProvider` directly with the same collector/budget gate → `report.ts`. It is deliberately not coupled to the server so it can compare models without touching app data.
 
-**Prompt-injection defence in depth.** `core/sources.ts#isInstructionLike` strips instruction-like lines before text reaches any model (extraction, grading and generation excerpts) and drops concepts supported only by such lines; the model prompt and schema validation are a second layer, not the only one.
+**Prompt-injection defence in depth.** `core/sources.ts#detectInstructionLike` flags (never deletes) wording that looks like orders to an AI; strong flags are masked out of the model-facing view (`sourceSafety.ts#modelChunks`), all flags are stored in `source_flags` with original offsets and are student-overridable. `sources.original_text` is protected by a trigger. The model prompt, schema validation and quote re-verification are the real boundaries.
+
+## Teaching loop, memory and sessions (milestone 4)
+
+- `core/diagnosis.ts` classifies one answer (six kinds); `core/nextAction.ts` maps evidence to the next question's purpose. `services/practice.ts` stores per-session teaching state in `sessions.notes` (consecutive misses, the pending next action) and tags each attempt with `mistake_kind`.
+- Observed mistakes live in `observed_mistakes` (one per attempt); `misconceptions` are *patterns* (≥2 different questions, specific label, 30 days). Notes in `memories` carry provenance JSON (attempts, basis, check state, dismissed) and are written by `services/teachingMemory.ts`.
+- `services/sessionPlan.ts` builds goal sessions (open → core → check slots sized from a soft time budget) and Today's single recommendation. Slots carry a `phase`; follow-ups after a miss are `priority` slots.
+- Questions carry `grounding` (`source`/`weak`/`none`), `question_evidence.support`, `focus`/`contrast_id`, and `retired_at` when their passage changes or the student reports them unclear.
+- Files: `source_files` (original bytes), `source_revisions`, `source_pending` (a replacement under review; the confirmed text stays live until confirmed). PDF text extraction runs in `pdfWorker.mjs` (a worker thread terminated on timeout). Optional vision reading is `services/ocr.ts` (explicit opt-in, consent token, ledger-accounted).

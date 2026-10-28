@@ -18,6 +18,7 @@ export function renderMarkdown(rs: Report[]): string {
   row('Grading agreement when it is confident', (r) => (r.grading ? p(r.grading.agreementWhenConfident) : '—'));
   row('Abstain rate (low confidence → not counted)', (r) => (r.grading ? p(r.grading.abstainRate) : '—'));
   row('False-credit rate (full credit to a wrong/stuffed/injected answer)', (r) => (r.grading ? p(r.grading.falseCreditRate) : '—'));
+  row('Mistake-kind agreement (items with a labelled kind; model runs only)', (r) => (r.grading?.mistakeKindAgreement ? `${r.grading.mistakeKindAgreement.agree}/${r.grading.mistakeKindAgreement.n}` : '— (offline provider gives no mistake kind)'));
   row('False-reject rate (correct answer scored low)', (r) => (r.grading ? p(r.grading.falseRejectRate) : '—'));
   row('Extraction: expected-concept recall', (r) => (r.extraction ? p(r.extraction.recall) : '—'));
   row('Extraction: source fidelity (quotes found in source)', (r) => (r.extraction ? p(r.extraction.sourceFidelity) : '—'));

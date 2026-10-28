@@ -6,9 +6,19 @@ export type MemoryKind = 'student_stated' | 'observed' | 'ai_inferred';
 const KINDS: MemoryKind[] = ['student_stated', 'observed', 'ai_inferred'];
 
 export function listMemory(ctx: Ctx) {
-  const memories = ctx.db.all<any>('SELECT * FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC').map((m) => ({
-    id: m.id, kind: m.kind as MemoryKind, text: m.text, subjectId: m.subject_id, conceptId: m.concept_id, provenance: parse(m.provenance, {}), createdAt: m.created_at, updatedAt: m.updated_at,
-  }));
+  const memories = ctx.db.all<any>('SELECT * FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC').map((m) => {
+    const prov = parse<any>(m.provenance, {});
+    const ids: string[] = Array.isArray(prov.attemptIds) ? prov.attemptIds : [];
+    // what happened and which answers support it, so a note can be checked rather than trusted
+    const evidence = ids.length ? ctx.db.all<any>(`SELECT a.id, a.created_at, a.answer_text, a.correctness, q.prompt, q.kind FROM attempts a JOIN questions q ON q.id = a.question_id WHERE a.id IN (${ids.map(() => '?').join(',')}) ORDER BY a.created_at DESC LIMIT 6`, ...ids)
+      .map((a) => ({ attemptId: a.id, at: a.created_at, prompt: a.prompt, answer: a.kind === 'multiple_choice' ? '(a choice)' : String(a.answer_text).slice(0, 200) })) : [];
+    const concept = m.concept_id ? ctx.db.get<any>('SELECT name FROM concepts WHERE id = ?', m.concept_id)?.name ?? null : null;
+    return {
+      id: m.id, kind: m.kind as MemoryKind, text: m.text, subjectId: m.subject_id, conceptId: m.concept_id, concept, provenance: prov, createdAt: m.created_at, updatedAt: m.updated_at,
+      appMade: prov.origin === 'app', basis: prov.basis ?? null, dismissed: !!prov.dismissed, check: prov.check ?? null, evidence,
+      effect: prov.origin === 'app' && !prov.dismissed ? (prov.mistakeKind === 'concept_confusion' ? 'Used to choose a question that tells the two ideas apart, to word grading checks, and to schedule a later check.' : 'Used to word grading checks and to schedule a later check.') : null,
+    };
+  });
   const misconceptions = ctx.db.all<any>(`SELECT m.*, c.name AS concept FROM misconceptions m JOIN concepts c ON c.id=m.concept_id WHERE m.status != 'dismissed' ORDER BY m.last_seen_at DESC`).map((m) => ({
     id: m.id, label: m.label, description: m.description, concept: m.concept, conceptId: m.concept_id, status: m.status, count: m.count, kind: m.origin === 'ai_inferred' ? 'ai_inferred' : 'observed',
     firstSeenAt: m.first_seen_at, lastSeenAt: m.last_seen_at, repairedAt: m.repaired_at,

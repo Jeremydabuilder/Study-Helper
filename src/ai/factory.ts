@@ -1,5 +1,5 @@
 import type { AppConfig } from '../server/services/common';
-import { GroqTransport } from './groq';
+import { GROQ_DEFAULT_MODEL, GroqTransport } from './groq';
 import { AnthropicTransport, DEFAULT_TASKS, LLMProvider, TaskConfigs } from './llm';
 
 /**
@@ -10,9 +10,9 @@ export function buildProvider(cfg: AppConfig): LLMProvider | null {
   const tasks: Partial<TaskConfigs> = {};
   for (const k of ['extract', 'generate', 'grade'] as const) tasks[k] = { ...DEFAULT_TASKS[k], ...cfg.aiTasks[k] };
   if (cfg.aiProvider === 'groq') {
-    if (!cfg.groqKey || !cfg.groqModel) return null;
-    return new LLMProvider(new GroqTransport(cfg.groqKey, cfg.groqModel), { timeoutMs: cfg.aiTimeoutMs, tasks });
+    if (!cfg.groqKey) return null;
+    return new LLMProvider(new GroqTransport(cfg.groqKey, cfg.groqModel ?? GROQ_DEFAULT_MODEL), { timeoutMs: cfg.aiTimeoutMs, tasks });
   }
   if (!cfg.anthropicKey) return null;
-  return new LLMProvider(new AnthropicTransport(cfg.anthropicKey, cfg.model, fetch, cfg.anthropicBaseUrl), { timeoutMs: cfg.aiTimeoutMs, tasks });
+  return new LLMProvider(new AnthropicTransport(cfg.anthropicKey, cfg.model, fetch, cfg.anthropicBaseUrl), { timeoutMs: cfg.aiTimeoutMs, tasks, ocr: cfg.ocr.enabled ? { model: cfg.ocr.model ?? undefined, maxOutputTokens: cfg.ocr.maxOutputTokens } : undefined });
 }

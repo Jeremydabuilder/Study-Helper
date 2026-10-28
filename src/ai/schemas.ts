@@ -31,6 +31,8 @@ export const GeneratedQuestion = z.object({
   explanation: z.string().max(1200),
   difficulty: z.number().int().min(1).max(3).default(2),
   source_quote: z.string().max(400).optional(),
+  /** true when several answers could be defensible (reading, themes, motives): the app then does not treat the key as the only acceptable answer */
+  interpretive: z.boolean().optional(),
 }).superRefine((q, ctx) => {
   if (q.kind === 'multiple_choice' && (!q.choices || q.correct_choice === undefined || q.correct_choice >= q.choices.length))
     ctx.addIssue({ code: 'custom', message: 'multiple_choice needs choices and a valid correct_choice' });
@@ -48,5 +50,32 @@ export const GradeResult = z.object({
   points: z.array(z.object({ point: z.string().max(300), met: z.boolean(), evidence_quote: z.string().max(300).optional() })).max(10).default([]),
   misconception: z.object({ label: z.string().max(80), description: z.string().max(300) }).nullable().optional(),
   next_step: z.string().max(300).optional(),
+  /** What kind of mistake, if any. The app only trusts this as one input; it never turns a single answer into a 'pattern'. */
+  mistake_kind: z.enum(['missing_knowledge', 'concept_confusion', 'reasoning_error', 'slip', 'partial_explanation', 'none']).nullable().optional(),
+  /** Name of the related concept the answer was really about, when mistake_kind is concept_confusion. */
+  confused_with: z.string().max(90).nullable().optional(),
 });
 export type GradeResult = z.infer<typeof GradeResult>;
+
+export const Clarification = z.object({ answer: z.string().trim().min(3).max(1500) });
+export type Clarification = z.infer<typeof Clarification>;
+
+/** A vision reading of up to a few pages. There is deliberately NO numeric confidence: the model says only what it could and could not read. */
+export const PageReading = z.object({
+  pages: z.array(z.object({
+    page: z.number().int().min(1).max(200),
+    blocks: z.array(z.object({
+      kind: z.enum(['text', 'math', 'table', 'diagram', 'handwriting', 'other']),
+      text: z.string().max(8000),
+      readable: z.boolean(),
+      note: z.string().max(300).optional(),
+    })).max(80),
+  })).min(1).max(8),
+});
+export type PageReading = z.infer<typeof PageReading>;
+
+/** A fallible, structured second opinion on whether a source passage supports each question's key. It never decides alone: contradictions and gaps put a question on hold for the student. */
+export const SupportAssessment = z.object({
+  items: z.array(z.object({ index: z.number().int().min(0).max(100), verdict: z.enum(['supported', 'contradicted', 'insufficient']), note: z.string().max(300).default('') })).min(1).max(24),
+});
+export type SupportAssessment = z.infer<typeof SupportAssessment>;
