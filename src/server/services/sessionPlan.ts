@@ -10,6 +10,7 @@
 import { planToday } from '../../core/priority';
 import { Ctx, HttpError, getProfile } from './common';
 import { buildPlanInputs } from './plan';
+import { readingTask } from './readingPlan';
 import { conceptsWithOpenNotes } from './teachingMemory';
 
 export type Goal = 'test' | 'understand' | 'wrong' | 'review';
@@ -111,7 +112,9 @@ export function buildGoalSession(ctx: Ctx, o: { goal: Goal; minutes: number; sub
 /* ------------------------------ Today's single recommendation ------------------------------ */
 
 export interface Recommendation {
-  kind: 'resume' | 'study' | 'set_up' | 'confirm_concepts' | 'caught_up';
+  kind: 'resume' | 'study' | 'annotate' | 'set_up' | 'confirm_concepts' | 'caught_up';
+  /** annotate only: the reading to open */
+  readingId?: string | null;
   goal: Goal | null; itemId: string | null; subjectId: string | null; subjectName: string | null; sessionId: string | null;
   title: string; reason: string; minutes: number; conceptNames: string[];
   options: { goal: Goal; label: string; available: boolean; detail: string }[];
@@ -137,13 +140,20 @@ export function recommend(ctx: Ctx, minutes: number, active: { id: string } | nu
     ...(dueN ? [{ goal: 'review' as Goal, label: GOAL_LABEL.review, available: true, detail: `${dueN} due` }] : []),
   ];
   const base = { goal: null as Goal | null, itemId: null as string | null, subjectId: null as string | null, subjectName: null as string | null, sessionId: null as string | null, conceptNames: [] as string[], minutes, options };
+  const rt = readingTask(ctx);
+  const annotate = (why: string): Recommendation => ({ ...base, kind: 'annotate', readingId: rt!.sourceId, subjectName: rt!.subjectName, itemId: rt!.itemId, title: `Annotate “${rt!.title}”`, reason: why, minutes: Math.min(minutes, 15), conceptNames: [] });
+  const dueWhen = rt ? (rt.daysLeft === 0 ? 'today' : rt.daysLeft === 1 ? 'tomorrow' : `in ${rt.daysLeft} days`) : '';
+  const rtReason = rt ? `“${rt.itemTitle}” (${rt.subjectName}) is due ${dueWhen}, and this reading in the same subject has ${rt.annotations === 0 ? 'no highlights' : `only ${rt.annotations} highlight${rt.annotations === 1 ? '' : 's'}`} yet. About 15 minutes is an estimate; the app does not know this reading belongs to that assignment.` : '';
   if (active) return { ...base, kind: 'resume', sessionId: active.id, title: 'Pick up where you left off', reason: 'You have a session in progress. Your answers so far are saved.' };
   if (!nSubjects) return { ...base, kind: 'set_up', title: 'Upload your review packet', reason: 'Add a PDF, a screenshot or pasted notes. You will check what was read, then study for about 20 minutes.' };
+  if (!nConfirmed && rt) return annotate(rtReason);
   if (!nConfirmed) return { ...base, kind: 'confirm_concepts', title: nProposed ? 'Confirm what you want to learn' : 'Add some class material', reason: nProposed ? 'Concepts were found in your material. Nothing is assigned until you confirm them.' : 'Add a review packet or notes so there is something to study.' };
+  if (rt && rt.daysLeft <= 3 && !soon) return annotate(rtReason);
   let goal: Goal, reason: string, itemId: string | null = null;
   if (soon) { goal = 'test'; itemId = soon.id; const days = Math.max(0, Math.round((soon.at - now) / day)); reason = `${soon.title} is ${days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`}. This covers its topics and ends with fresh questions.`; }
   else if (wrongN) { goal = 'wrong'; reason = `${wrongN} topic${wrongN === 1 ? '' : 's'} had recent mistakes. Fixing those first is the most useful use of the time.`; }
   else if (dueN) { goal = 'review'; reason = `${dueN} review${dueN === 1 ? ' is' : 's are'} due. A short check on questions you have not seen shows what stuck.`; }
+  else if (rt) return annotate(rtReason);
   else if (unassessed) { goal = 'understand'; reason = `${unassessed} concept${unassessed === 1 ? ' has' : 's have'} not been checked yet. A short check shows where you stand before you practise.`; }
   else return { ...base, kind: 'caught_up', title: 'You’re caught up', reason: 'Nothing is due and nothing needs fixing. You can still practise something you choose, or add material.' };
   const g = buildGoalSession(ctx, { goal, minutes, itemId });

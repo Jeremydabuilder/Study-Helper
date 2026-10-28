@@ -34,6 +34,11 @@ export function RecommendationCard({ t, mins, setMinutes, go, onSample }: { t: a
     <section className="card hero" aria-labelledby="rec-h"><h2 id="rec-h">{r.title}</h2><p className="muted">{r.reason}</p>
       <div className="row"><button className="btn primary big" onClick={() => go(r.kind === 'set_up' ? '/start' : '/subjects')}>{r.kind === 'set_up' ? 'Upload or paste material' : 'Go to subjects'}</button><button className="btn" onClick={onSample}>Explore with sample data</button></div></section>);
 
+  if (r.kind === 'annotate') return (
+    <section className="card hero" aria-labelledby="rec-h"><p className="small muted" style={{ margin: 0 }}>Recommended for you</p><h2 id="rec-h" style={{ marginTop: '.1rem' }}>{r.title}</h2><p>{r.reason}</p>
+      <div className="row mt"><button className="btn primary big" onClick={() => go(`/read/${r.readingId}`)}>Open the reading · about {r.minutes} min</button>
+        <button className="btn" onClick={async () => { await post(`/readings/${r.readingId}/skip-today`); window.dispatchEvent(new Event('workspace-changed')); }}>Not today</button></div></section>);
+
   if (r.kind === 'caught_up') return (
     <section className="card hero" aria-labelledby="rec-h"><h2 id="rec-h">{r.title}</h2><p className="muted">{r.reason}</p>
       <div className="row"><button className="btn primary" onClick={() => go('/start')}>Study new material</button><button className="btn" onClick={() => go('/subjects')}>Practise a topic I choose</button></div></section>);

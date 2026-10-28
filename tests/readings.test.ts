@@ -304,3 +304,51 @@ describe('essay outlines link back to the student’s evidence', () => {
     expect((await s.call('GET', `/api/outlines/${o.id}`)).body.sections[0].evidence[0].stillAnnotated).toBe(false);
   });
 });
+
+describe('“What next” recommends a reading only from records the student made', () => {
+  it('recommends annotating a reading in the same subject as a near deadline, explains the inference, and can be skipped or satisfied', async () => {
+    s = await startServer();
+    expect((await s.call('GET', '/api/today')).body.recommendation.kind).not.toBe('annotate');
+    const id = await reading();
+    const subjectId = db().get<any>('SELECT subject_id FROM sources WHERE id = ?', id).subject_id;
+    expect((await s.call('GET', '/api/today')).body.recommendation.kind).not.toBe('annotate'); // no deadline: nothing is invented
+    const due = new Date(s.clock.now + 2 * 24 * 3600_000).toISOString().slice(0, 10);
+    const it = await s.call('POST', '/api/items', { type: 'homework', title: 'Essay on The Lighthouse', subjectId, dueKind: 'date', dueDate: due });
+    expect(it.status).toBe(200);
+    const rec = (await s.call('GET', '/api/today')).body.recommendation;
+    expect(rec).toMatchObject({ kind: 'annotate', readingId: id });
+    expect(rec.reason).toMatch(/Essay on The Lighthouse/); expect(rec.reason).toMatch(/does not know this reading belongs to that assignment/);
+    await s.call('POST', `/api/readings/${id}/skip-today`);
+    expect((await s.call('GET', '/api/today')).body.recommendation.kind).not.toBe('annotate');
+    s.clock.now += 24 * 3600_000; // skipping lasts for the day
+    expect((await s.call('GET', '/api/today')).body.recommendation.kind).toBe('annotate');
+    for (const n of ['The lighthouse stood alone', 'Mara climbed the stairs', 'did not complain']) await annotate(id, n);
+    expect((await s.call('GET', '/api/today')).body.recommendation.kind).not.toBe('annotate'); // enough highlights: the task is done
+  });
+});
+
+describe('export and import carry highlights only with their text, and only if the quote still matches', () => {
+  it('round-trips annotations, prompt and outline into a fresh workspace; metadata-only exports carry none', async () => {
+    s = await startServer();
+    const id = await reading();
+    const a = await annotate(id, 'did not complain about the cold', 'She endures it quietly', 'characterization');
+    await s.call('PUT', `/api/readings/${id}/prompt`, { kind: 'rubric', text: 'Cite evidence.' });
+    await s.call('POST', `/api/readings/${id}/outlines`, { annotationIds: [a.id] });
+    const full = (await s.call('POST', '/api/export', { sections: ['learning'], includeSourceText: true })).body;
+    const meta = (await s.call('POST', '/api/export', { sections: ['learning'], includeSourceText: false })).body;
+    expect(meta.sections.learning.annotations).toEqual([]);
+    await s.close();
+    s = await startServer();
+    const prev = (await s.call('POST', '/api/import/preview', { file: full })).body;
+    const r = await s.call('POST', '/api/import/commit', { file: full, selection: { subjectIds: [prev.subjects[0].id] } });
+    expect(r.body.imported.annotations).toBe(1);
+    const g = await get(id);
+    expect(g.annotations[0]).toMatchObject({ quote: 'did not complain about the cold', note: 'She endures it quietly', orphaned: false });
+    expect(g.prompt).toMatchObject({ kind: 'rubric' }); expect(g.outlines).toHaveLength(1);
+    // a tampered file whose quote no longer matches its text is not imported
+    const bad = JSON.parse(JSON.stringify(full)); bad.sections.learning.annotations[0].quote = 'something never said in the text';
+    await s.close(); s = await startServer();
+    const r2 = await s.call('POST', '/api/import/commit', { file: bad, selection: { subjectIds: [prev.subjects[0].id] } });
+    expect(r2.body.imported.annotations).toBe(0);
+  });
+});

@@ -18,6 +18,7 @@ import { resolveQuestion } from './services/questions';
 import { firstUse } from './services/firstUse';
 import * as ann from './services/annotations';
 import * as study from './services/studyItems';
+import { skipReadingToday } from './services/readingPlan';
 import * as chat from './services/chat';
 import * as ocr from './services/ocr';
 import * as practice from './services/practice';
@@ -257,7 +258,7 @@ export function createApp(rt: Runtime) {
       if (!b.subjectName?.trim()) throw new HttpError(400, 'invalid', 'Choose a subject or name a new one.');
       subjectId = ctx.db.get<any>('SELECT id FROM subjects WHERE lower(name) = lower(?) AND archived = 0', b.subjectName.trim())?.id ?? content.createSubject(ctx, { name: b.subjectName.trim() }).id;
     }
-    return content.addSource(ctx, subjectId, { title: b.title, kind: 'passage', text: b.text, origin: 'pasted reading' });
+    return content.addSource(ctx, subjectId as string, { title: b.title, kind: 'passage', text: b.text, origin: 'pasted reading' });
   }));
   app.get('/api/readings/:id', h((ctx, req) => ann.getReading(ctx, req.params.id)));
   app.put('/api/readings/:id/prompt', h((ctx, req) => ann.setPrompt(ctx, req.params.id, z.object({ kind: z.enum(['prompt', 'rubric']), text: z.string() }).parse(req.body))));
@@ -271,6 +272,7 @@ export function createApp(rt: Runtime) {
   app.post('/api/readings/:id/study', h((ctx, req) => study.makeStudyItems(ctx, req.params.id, z.object({ annotationIds: z.array(z.string()).max(40), kinds: z.array(z.string()).max(5) }).parse(req.body))));
   app.post('/api/readings/:id/study/start', h((ctx, req) => study.startReadingSession(ctx, req.params.id, z.object({ minutes: z.number().optional(), abandonExisting: z.boolean().optional() }).parse(req.body ?? {}))));
   app.post('/api/readings/:id/outlines', h((ctx, req) => study.makeOutline(ctx, req.params.id, z.object({ annotationIds: z.array(z.string()).max(60), title: z.string().optional() }).parse(req.body))));
+  app.post('/api/readings/:id/skip-today', h((ctx, req) => skipReadingToday(ctx, req.params.id)));
   app.get('/api/outlines/:id', h((ctx, req) => study.getOutline(ctx, req.params.id)));
   app.patch('/api/outlines/:id', h((ctx, req) => study.updateOutline(ctx, req.params.id, z.object({ title: z.string().optional(), thesis: z.string().optional(), claims: z.record(z.string()).optional() }).parse(req.body))));
   app.delete('/api/outlines/:id', h((ctx, req) => study.deleteOutline(ctx, req.params.id)));

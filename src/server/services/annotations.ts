@@ -120,6 +120,7 @@ export function getReading(ctx: Ctx, id: string) {
     ai: { available: live, label: live ? ctx.ai.label : null, note: live ? `Explanations, definitions and feedback use ${ctx.ai.label}. The passage you select and your note are sent to it; nothing else from your account.` : 'No AI provider is set up. Highlighting, notes, flashcards and outlines still work; explanations, definitions and AI feedback need one (Settings → Setup).' },
     outlines: ctx.db.all<any>('SELECT id, title, updated_at FROM outlines WHERE source_id = ? ORDER BY updated_at DESC', id).map((o) => ({ id: o.id, title: o.title, updatedAt: o.updated_at })),
     conceptId: ctx.db.get<any>("SELECT id FROM concepts WHERE source_id = ? AND origin = 'annotation'", id)?.id ?? null,
+    studyItems: ctx.db.get<any>("SELECT COUNT(*) n FROM questions q JOIN concepts c ON c.id = q.concept_id WHERE c.source_id = ? AND c.origin = 'annotation' AND q.retired_at IS NULL AND q.on_hold = 0", id).n as number,
   };
 }
 

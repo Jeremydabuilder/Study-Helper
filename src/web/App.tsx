@@ -12,8 +12,11 @@ import { CalendarPage } from './pages/CalendarPage';
 import { Progress } from './pages/Progress';
 import { Memory } from './pages/Memory';
 import { Settings } from './pages/Settings';
+import { Readings, Outline } from './pages/Readings';
+import { Reader } from './pages/Reader';
+import { Chat } from './pages/Chat';
 
-const NAV: [string, string][] = [['/', 'Today'], ['/subjects', 'Subjects'], ['/plan', 'Plan'], ['/progress', 'Progress'], ['/memory', 'Memory'], ['/settings', 'Settings']];
+const NAV: [string, string][] = [['/', 'Today'], ['/subjects', 'Subjects'], ['/readings', 'Readings'], ['/chat', 'Chat'], ['/plan', 'Plan'], ['/progress', 'Progress'], ['/memory', 'Memory'], ['/settings', 'Settings']];
 
 export function App() {
   const [route, go] = useHashRoute();
@@ -24,6 +27,10 @@ export function App() {
 
   let page;
   if (path.startsWith('/study/')) page = <Study id={path.split('/')[2]} go={go} />;
+  else if (path.startsWith('/read/')) page = <Reader id={path.split('/')[2]} go={go} />;
+  else if (path === '/readings') page = <Readings go={go} />;
+  else if (path.startsWith('/outline/')) page = <Outline id={path.split('/')[2]} go={go} />;
+  else if (path === '/chat') page = <Chat go={go} />;
   else if (path === '/start') page = <StartFlow go={go} />;
   else if (path.startsWith('/prepare/')) page = <Prepare sourceId={path.split('/')[2]} go={go} />;
   else if (path.startsWith('/review/')) page = <ReviewSource id={path.split('/')[2]} go={go} />;
@@ -52,12 +59,12 @@ export function App() {
           <a className="brand" href="#/" aria-label="Study Helper — Today"><span className="brand-mark" aria-hidden>✓</span><span className="name">Study Helper</span></a>
           {!studying && (
             <nav className="nav" aria-label="Main">
-              {NAV.map(([p, label]) => <a key={p} href={`#${p}`} aria-current={path === p || (p !== '/' && path.startsWith(p + '/')) || (p === '/plan' && path === '/calendar') ? 'page' : undefined}>{label}</a>)}
+              {NAV.map(([p, label]) => <a key={p} href={`#${p}`} aria-current={path === p || (p !== '/' && path.startsWith(p + '/')) || (p === '/readings' && (path.startsWith('/read/') || path.startsWith('/outline/'))) || (p === '/plan' && path === '/calendar') ? 'page' : undefined}>{label}</a>)}
             </nav>
           )}
         </div>
       </header>
-      <main id="main" tabIndex={-1}>{page}</main>
+      <main id="main" tabIndex={-1} className={path.startsWith('/read/') ? 'wide' : undefined}>{page}</main>
     </div>
   );
 }
