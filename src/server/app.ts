@@ -47,9 +47,27 @@ const isUploadRoute = (req: Request) => req.method === 'POST' && (/^\/api\/subje
 const cancelOnClose = (res: Response) => { const ac = new AbortController(); res.on('close', () => { if (!res.writableEnded) ac.abort(); }); return ac.signal; };
 const rawUpload = express.raw({ type: UPLOAD_TYPES, limit: '16mb' });
 
-export function createApp(rt: Runtime) {
+/**
+ * Hosted (multi-student) mode plugs in here. Local mode passes nothing and behaves exactly as before.
+ * The hosted layer authenticates every /api request itself and hands each handler a context for ONE student: no handler ever receives a user id from the client.
+ */
+export interface HostedHooks {
+  /** Mounted before body parsing (the authentication library parses its own bodies). */
+  mountFirst(app: express.Express): void;
+  /** Mounted after the standard checks and before every application route: authentication, pilot switch, rate limits, route guards, hosted-only routes and overrides. */
+  mountGuards(app: express.Express): void;
+  /** The context for the signed-in student of this request. `release` must be called when the response is finished. */
+  ctxFor(req: Request, ws: WorkspaceName): Promise<{ ctx: Ctx; release(): void }>;
+  /** The calendar sign-in callback is a browser redirect from Google, so it resolves the student from the session cookie. */
+  calendarCallback(req: Request, res: Response): Promise<void>;
+  resetDemo(req: Request): Promise<void>;
+  meta(req: Request): Record<string, unknown>;
+}
+
+export function createApp(rt: Runtime, hosted?: HostedHooks) {
   const app = express();
   app.disable('x-powered-by');
+  hosted?.mountFirst(app);
   app.use(express.json({ limit: '25mb' }));
 
   // The server stores a student's records. Refuse cross-site writes and DNS-rebinding style requests.
@@ -62,19 +80,25 @@ export function createApp(rt: Runtime) {
   });
 
   const wsOf = (req: Request): WorkspaceName => (req.headers['x-workspace'] === 'demo' ? 'demo' : 'real');
-  const ctxOf = (req: Request): Ctx => rt.ctx(wsOf(req));
+  hosted?.mountGuards(app);
   const h = (fn: (ctx: Ctx, req: Request, res: Response) => unknown | Promise<unknown>) => async (req: Request, res: Response, next: NextFunction) => {
-    try { if (wsOf(req) === 'demo') await rt.ensureDemo(); const out = await fn(ctxOf(req), req, res); if (!res.headersSent) res.json(out ?? { ok: true }); } catch (e) { next(e); }
+    let release = () => {};
+    try {
+      let ctx: Ctx;
+      if (hosted) { const l = await hosted.ctxFor(req, wsOf(req)); ctx = l.ctx; release = l.release; res.on('close', release); }
+      else { if (wsOf(req) === 'demo') await rt.ensureDemo(); ctx = rt.ctx(wsOf(req)); }
+      const out = await fn(ctx, req, res); if (!res.headersSent) res.json(out ?? { ok: true });
+    } catch (e) { release(); next(e); }
   };
   const bool = (v: unknown) => v === true || v === 'true';
 
   /* ---------------- meta / profile / settings ---------------- */
-  app.get('/api/meta', h((ctx) => ({
-    workspace: ctx.workspace, ai: aiInfo(ctx), profile: getProfile(ctx.db), mathSkills: MATH_SKILLS, version: '0.1.0',
+  app.get('/api/meta', h((ctx, req) => ({
+    workspace: ctx.workspace, ai: aiInfo(ctx), profile: getProfile(ctx.db), mathSkills: MATH_SKILLS, version: '0.1.0', hosted: !!hosted, ...(hosted ? hosted.meta(req) : {}),
     calendar: { kind: ctx.calendar.kind, available: ctx.calendar.configured() },
     demoNote: ctx.workspace === 'demo' ? 'Sample data. Nothing here is your real study history, and it is stored separately.' : null,
   })));
-  app.post('/api/demo/reset', async (_req, res, next) => { try { await rt.resetDemo(); res.json({ ok: true }); } catch (e) { next(e); } });
+  app.post('/api/demo/reset', async (req, res, next) => { try { await (hosted ? hosted.resetDemo(req) : rt.resetDemo()); res.json({ ok: true }); } catch (e) { next(e); } });
   app.get('/api/profile', h((ctx) => getProfile(ctx.db)));
   app.put('/api/profile', h((ctx, req) => {
     const b = z.object({ name: z.string().max(60).optional(), grade: z.string().max(30).optional(), timezone: z.string().refine(isValidTimeZone, 'Unknown time zone').optional(), defaultMinutes: z.number().optional(), about: z.string().max(600).optional() }).parse(req.body);
@@ -190,6 +214,7 @@ export function createApp(rt: Runtime) {
     return cal.startConnect(ctx);
   }));
   app.get('/api/calendar/oauth/callback', async (req, res) => {
+    if (hosted) return hosted.calendarCallback(req, res);
     const go = (q: string) => res.redirect(`/#/calendar?${q}`);
     try {
       const { code, state, error } = req.query as Record<string, string>;

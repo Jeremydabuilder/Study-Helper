@@ -35,6 +35,7 @@ const MSG = {
   userRequests: 'You have used today’s study-assistant allowance. Everything else keeps working, and it resets within 24 hours.',
   userBudget: 'You have used today’s study-assistant allowance. Everything else keeps working, and it resets within 24 hours.',
   global: 'The study assistant is paused for everyone for now to keep costs under control. Practice, notes and reviews still work; try again later.',
+  off: 'The study assistant is switched off for now. Practice, notes and reviews still work.',
   busy: 'Your study assistant is already working on other requests. Wait a moment and try again.',
   busyGlobal: 'The study assistant is busy right now. Try again in a minute.',
 };
@@ -53,6 +54,8 @@ export class PgLedger implements RequestLedger {
     const L = this.limits;
     await tx(this.pool, async (c) => {
       await c.query('SELECT pg_advisory_xact_lock($1)', [LOCK_LEDGER]);
+      const on = (await c.query("SELECT value FROM app_settings WHERE key = 'ai_enabled'")).rows[0]?.value;
+      if (on === false) throw new AIError('budget_reached', MSG.off);
       // a reservation that outlived its time-to-live belongs to a request that died: keep its worst case held as unknown billing
       await c.query("UPDATE ai_requests SET status = 'abandoned', unknown_usd = worst_usd, reserved_usd = 0, outcome = 'abandoned', billing = 'unknown' WHERE status = 'reserved' AND created_at < $1", [new Date(now.getTime() - L.reservationTtlMs)]);
       const since = new Date(now.getTime() - DAY_MS);
@@ -121,11 +124,16 @@ export async function consumeQuota(pool: Pool, userId: string, kind: string, o: 
 export class Gate {
   private running = 0; private byKey = new Map<string, number>();
   constructor(private total: number, private perKey: number, private message: string) {}
-  async run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  /** Take a slot or refuse at once. The returned function releases it (idempotent). */
+  enter(key: string): () => void {
     if (this.running >= this.total || (this.byKey.get(key) ?? 0) >= this.perKey) throw new HttpError(429, 'busy', this.message, { retryable: true, retryAfterMs: 5000 });
     this.running++; this.byKey.set(key, (this.byKey.get(key) ?? 0) + 1);
-    try { return await fn(); }
-    finally { this.running--; const n = (this.byKey.get(key) ?? 1) - 1; n <= 0 ? this.byKey.delete(key) : this.byKey.set(key, n); }
+    let done = false;
+    return () => { if (done) return; done = true; this.running--; const n = (this.byKey.get(key) ?? 1) - 1; n <= 0 ? this.byKey.delete(key) : this.byKey.set(key, n); };
+  }
+  async run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const release = this.enter(key);
+    try { return await fn(); } finally { release(); }
   }
   get active() { return this.running; }
 }
@@ -142,4 +150,10 @@ export class RateLimiter {
     if (this.hits.size > 5000) for (const [k, v] of this.hits) if (!v.length || t - v[v.length - 1] > this.windowMs) this.hits.delete(k);
     return { ok: true, retryAfterMs: 0 };
   }
+}
+
+/** Give back one use (an upload that was interrupted or failed on the server must not burn the student's allowance). */
+export async function refundQuota(pool: Pool, userId: string, kind: string, o: { bytes?: number; now: number }) {
+  const day = new Date(o.now).toISOString().slice(0, 10);
+  await pool.query('UPDATE usage_counters SET n = GREATEST(n - 1, 0), bytes = GREATEST(bytes - $4, 0) WHERE user_id = $1 AND day = $2 AND kind = $3', [userId, day, kind, Math.max(0, Math.floor(o.bytes ?? 0))]);
 }

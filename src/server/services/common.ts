@@ -1,4 +1,4 @@
-import { AIProvider, CallOpts, ClarifyInput, ExtractInput, GenerateInput, GradeInput, ReadInput, AssessItem, AssistInput, AnnotationFeedbackInput, ChatInput } from '../../ai/provider';
+import { AIProvider, RequestLedger, CallOpts, ClarifyInput, ExtractInput, GenerateInput, GradeInput, ReadInput, AssessItem, AssistInput, AnnotationFeedbackInput, ChatInput } from '../../ai/provider';
 import { DEFAULT_TASKS, type TaskConfig } from '../../ai/llm';
 import { PRICING_AS_OF } from '../../ai/pricing';
 import { OfflineProvider } from '../../ai/offline';
@@ -26,6 +26,8 @@ export interface Ctx {
   /** provider for the current workspace (demo workspace never uses a paid model) */
   ai: AIProvider; offline: OfflineProvider; cfg: AppConfig;
   /** injectable for tests */ calendar: CalendarGateway;
+  /** Hosted mode only: the authenticated student this context belongs to (derived from the session, never from the request body). */
+  userId?: string; hosted?: boolean;
 }
 
 export class HttpError extends Error {
@@ -65,9 +67,9 @@ export function usageWindow(ctx: { db: Db; now: () => number }) {
  * an atomic reservation BEFORE every request (retries included). See ai/pricing.ts for exactly what the reservation
  * does and does not promise. Offline providers pass through.
  */
-export function metered(ctx: { db: Db; now: () => number; cfg: AppConfig }, inner: AIProvider): AIProvider {
+export function metered(ctx: { db: Db; now: () => number; cfg: AppConfig }, inner: AIProvider, shared?: RequestLedger): AIProvider {
   if (!inner.live) return inner;
-  const ledger = new DbLedger(ctx);
+  const ledger = shared ?? new DbLedger(ctx);
   const o = (extra?: CallOpts): CallOpts => ({ ...extra, ledger });
   return {
     name: inner.name, live: true, label: inner.label, providerId: inner.providerId, credentialFingerprint: inner.credentialFingerprint, modelFor: inner.modelFor?.bind(inner),
