@@ -174,7 +174,7 @@ export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
         } catch (e) { next(e); }
       });
       app.post('/api/report', async (req, res, next) => {
-        try { const s = studentOf(req); const b = z.object({ message: z.string().max(2000), include: z.array(z.string()).max(5).optional(), attach: z.object({ kind: z.string().max(30), text: z.string().max(4000) }).optional(), previewOnly: z.boolean().optional() }).parse(req.body); res.json(await submitReport(pool, s.id, b, now())); } catch (e) { next(e); }
+        try { const s = studentOf(req); const b = z.object({ message: z.string().max(2000), include: z.array(z.string()).max(5).optional(), attach: z.object({ kind: z.string().max(30), text: z.string().max(4000) }).optional(), previewOnly: z.boolean().optional(), confirmed: z.boolean().optional() }).parse(req.body); res.json(await submitReport(pool, s.id, b, now())); } catch (e) { next(e); }
       });
     },
 
