@@ -158,6 +158,7 @@ export function wouldCycle(ctx: Ctx, conceptId: string, prereqId: string): boole
 }
 
 export function addConcept(ctx: Ctx, subjectId: string, b: { name: string; summary?: string; skillTag?: string | null }) {
+  if (!ctx.db.get('SELECT 1 FROM subjects WHERE id = ?', subjectId)) throw new HttpError(404, 'not_found', 'Subject not found.');
   const name = clip(b.name, 90).trim();
   if (!name) throw new HttpError(400, 'invalid', 'Give the concept a name.');
   if (ctx.db.get('SELECT 1 FROM concepts WHERE subject_id=? AND lower(name)=lower(?)', subjectId, name)) throw new HttpError(409, 'duplicate', 'That concept already exists.');

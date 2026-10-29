@@ -60,14 +60,17 @@ export function updateItem(ctx: Ctx, id: string, b: ItemInput) {
 }
 
 /** Homework completion is the student's own statement. A calendar date passing never marks anything done, and completion never changes mastery. */
+const mustExist = (ctx: Ctx, id: string) => { if (!ctx.db.get('SELECT 1 FROM academic_items WHERE id=?', id)) throw new HttpError(404, 'not_found', 'Item not found.'); };
 export function setCompleted(ctx: Ctx, id: string, done: boolean) {
+  mustExist(ctx, id);
   ctx.db.run('UPDATE academic_items SET completed_at=?, updated_at=? WHERE id=?', done ? ctx.now() : null, ctx.now(), id);
 }
 export function logWork(ctx: Ctx, id: string, minutes: number) {
+  mustExist(ctx, id);
   const m = Math.max(0, Math.min(600, Math.round(minutes)));
   ctx.db.run('UPDATE academic_items SET done_min = MIN(done_min + ?, 6000), updated_at=? WHERE id=?', m, ctx.now(), id);
 }
-export function deleteItem(ctx: Ctx, id: string) { ctx.db.run('DELETE FROM academic_items WHERE id=?', id); }
+export function deleteItem(ctx: Ctx, id: string) { mustExist(ctx, id); ctx.db.run('DELETE FROM academic_items WHERE id=?', id); }
 
 /* ------------------------------ proposals ------------------------------ */
 
@@ -78,6 +81,7 @@ export function confirmProposal(ctx: Ctx, id: string, edits: ItemInput = {}) {
   ctx.db.run("UPDATE academic_items SET status='confirmed', updated_at=? WHERE id=?", ctx.now(), id);
 }
 export function dismissProposal(ctx: Ctx, id: string) {
+  mustExist(ctx, id);
   ctx.db.run("UPDATE academic_items SET status='dismissed', updated_at=? WHERE id=? AND status='proposed'", ctx.now(), id);
 }
 export const pendingProposalCount = (ctx: Ctx) => ctx.db.get<any>("SELECT COUNT(*) n FROM academic_items WHERE status='proposed'").n as number;

@@ -794,6 +794,7 @@ export function extendSession(ctx: Ctx, sessionId: string, minutes: number) {
 }
 
 export function abandonSession(ctx: Ctx, sessionId: string) {
+  if (!ctx.db.get('SELECT 1 FROM sessions WHERE id = ?', sessionId)) throw new HttpError(404, 'not_found', 'Session not found.');
   ctx.db.run("UPDATE sessions SET status='abandoned', ended_at=? WHERE id=? AND status='active'", ctx.now(), sessionId);
 }
 

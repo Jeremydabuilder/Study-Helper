@@ -15,7 +15,21 @@ import { hostedConfigFromEnv } from '../src/server/hosted/config';
 import { createInvites } from '../src/server/hosted/invites';
 import { setSettingPg } from '../src/server/hosted/pg';
 import { baseCfg } from './helpers';
+import { CalendarGateway, READONLY_SCOPE, RemoteCalendar, TokenSet } from '../src/server/services/calendarGoogle';
+import type { RawGoogleEvent } from '../src/core/calendar';
 import { TestDb, createTestDb } from './pgHarness';
+
+/** A Google stand-in that behaves like the real gateway interface (kind 'google'): the calendar a student sees depends only on the tokens their own OAuth code produced. */
+export class FakeGoogle implements CalendarGateway {
+  readonly kind = 'google' as const; calls: string[] = [];
+  eventsFor = new Map<string, RawGoogleEvent[]>(); // key: oauth code
+  configured() { return true; }
+  authUrl(state: string) { return `https://accounts.example.test/auth?state=${state}`; }
+  async exchangeCode(code: string): Promise<TokenSet> { this.calls.push(`exchange:${code}`); return { access_token: `at-${code}`, refresh_token: `rt-${code}`, expires_at: Date.now() + 3_600_000, scope: READONLY_SCOPE }; }
+  async listCalendars(t: TokenSet) { const code = t.access_token.replace('at-', ''); const calendars: RemoteCalendar[] = [{ id: `cal-${code}`, name: `Calendar of ${code}`, tz: 'America/New_York', color: null, primary: true }]; return { calendars, tokens: t }; }
+  async listEvents(t: TokenSet, calendarId: string) { const code = t.access_token.replace('at-', ''); return { events: calendarId === `cal-${code}` ? (this.eventsFor.get(code) ?? []) : [], tokens: t }; }
+  async revoke(t: TokenSet) { this.calls.push(`revoke:${t.access_token}`); }
+}
 
 export const freePort = () => new Promise<number>((res) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as AddressInfo).port; s.close(() => res(p)); }); });
 
@@ -106,7 +120,7 @@ export class HostedHarness {
   hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
   now = () => this.clock.now;
   students: Student[] = [];
-  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
+  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
     const h = new HostedHarness();
     h.db = o.db ?? await createTestDb(); h.idp = await new FakeIdp().start();
     h.port = await freePort(); h.url = `http://127.0.0.1:${h.port}`; h.dir = o.dir ?? mkdtempSync(join(tmpdir(), 'sh-hosted-'));
@@ -117,7 +131,7 @@ export class HostedHarness {
     };
     const { cfg: hcfg, problems } = hostedConfigFromEnv(env as never);
     if (problems.length) throw new Error(problems.join('; '));
-    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, now: h.now, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : new LLMProvider(h.llm) as AIProvider });
+    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : new LLMProvider(h.llm) as AIProvider });
     h.server = await new Promise<Server>((res) => { const s = h.hosted.app.listen(h.port, '127.0.0.1', () => res(s)); });
     if (o.pilot !== false) { await setSettingPg(h.db.pool, 'pilot_enabled', true); await setSettingPg(h.db.pool, 'pilot_max_users', o.maxUsers ?? 50); }
     return h;
