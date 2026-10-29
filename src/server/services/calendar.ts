@@ -9,7 +9,7 @@ export const LIMITATION_NOTE = 'Google Calendar only contains what is on your ca
 const SYNC_PAST_DAYS = 2, SYNC_FUTURE_DAYS = 60;
 
 /* ---- OAuth state (short-lived, in memory; the verifier never leaves the server) ---- */
-const pending = new Map<string, { verifier: string; workspace: string; at: number }>();
+const pending = new Map<string, { verifier: string; workspace: string; at: number; userId: string | null }>();
 
 function secret(ctx: Ctx): string {
   if (ctx.calendar.kind === 'memory') return 'demo-memory-gateway-secret'; // demo/test gateway holds no real credentials
@@ -28,13 +28,13 @@ export function startConnect(ctx: Ctx) {
   if (ctx.calendar.kind === 'google') secret(ctx);
   const state = randomToken(24), verifier = randomToken(48);
   for (const [k, v] of pending) if (ctx.now() - v.at > 10 * 60_000) pending.delete(k);
-  pending.set(state, { verifier, workspace: ctx.workspace, at: ctx.now() });
+  pending.set(state, { verifier, workspace: ctx.workspace, at: ctx.now(), userId: ctx.userId ?? null });
   return { url: ctx.calendar.authUrl(state, sha256b64url(verifier)), state };
 }
 
-export function consumeState(state: string): { verifier: string; workspace: string } | null {
+export function consumeState(state: string): { verifier: string; workspace: string; userId: string | null } | null {
   const p = pending.get(state); pending.delete(state);
-  return p ? { verifier: p.verifier, workspace: p.workspace } : null;
+  return p ? { verifier: p.verifier, workspace: p.workspace, userId: p.userId } : null;
 }
 
 export async function finishConnect(ctx: Ctx, code: string, verifier: string) {

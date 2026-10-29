@@ -62,6 +62,8 @@ export interface HostedHooks {
   calendarCallback(req: Request, res: Response): Promise<void>;
   resetDemo(req: Request): Promise<void>;
   meta(req: Request): Record<string, unknown>;
+  /** Unexpected errors: the hosted layer logs only the error class and a request id, never messages (which can contain student content). */
+  onError(err: unknown, req: Request): void;
 }
 
 export function createApp(rt: Runtime, hosted?: HostedHooks) {
@@ -106,10 +108,11 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   }));
   app.get('/api/settings', h((ctx) => ({
     weights: getWeights(ctx.db), defaultWeights: DEFAULT_WEIGHTS, weightHelp: WEIGHT_HELP, availability: getAvailability(ctx.db), defaultAvailability: DEFAULT_AVAILABILITY,
-    aiDailyLimit: callLimit(ctx), aiDailyBudgetUsd: budgetUsd(ctx), ai: aiInfo(ctx),
+    ...(ctx.hosted ? {} : { aiDailyLimit: callLimit(ctx), aiDailyBudgetUsd: budgetUsd(ctx) }), ai: aiInfo(ctx),
   })));
   app.put('/api/settings', h((ctx, req) => {
     const b = z.object({ weights: WeightsSchema.optional(), availability: AvailabilitySchema.optional(), aiDailyLimit: z.number().int().min(0).max(5000).optional(), aiDailyBudgetUsd: z.number().min(0).max(1000).optional() }).parse(req.body);
+    if (ctx.hosted && (b.aiDailyBudgetUsd !== undefined || b.aiDailyLimit !== undefined)) throw new HttpError(403, 'operator_only', 'Spending limits are set by the person who runs this site.');
     if (b.aiDailyBudgetUsd !== undefined) setSetting(ctx.db, 'ai_daily_budget_usd', b.aiDailyBudgetUsd, ctx.now());
     if (b.weights) setSetting(ctx.db, 'priority_weights', b.weights, ctx.now());
     if (b.availability) setSetting(ctx.db, 'availability', b.availability, ctx.now());
@@ -126,7 +129,7 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   app.post('/api/subjects/:id/sources', h((ctx, req) => content.addSource(ctx, req.params.id, z.object({ title: z.string().optional(), kind: z.string().optional(), text: z.string(), origin: z.string().optional() }).parse(req.body))));
   app.post('/api/subjects/:id/files', rawUpload, h((ctx, req, res) => content.noDemoUpload(ctx) ?? files.uploadFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? ''), title: req.query.title as string | undefined, kind: req.query.kind as string | undefined })));
   app.post('/api/sources/:id/replace', rawUpload, h((ctx, req, res) => files.replaceFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? '') })));
-  app.get('/api/files/:id', h((ctx, req, res) => { const f = files.getFile(ctx, req.params.id); res.setHeader('Content-Type', f.mime); res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`); res.setHeader('Cache-Control', 'private, max-age=3600'); res.send(f.data); }));
+  app.get('/api/files/:id', h((ctx, req, res) => { const f = files.getFile(ctx, req.params.id); res.setHeader('Content-Type', f.mime); res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`); res.setHeader('Cache-Control', ctx.hosted ? 'no-store' : 'private, max-age=3600'); res.send(f.data); }));
   app.post('/api/sources/:id/pages/reviewed', h((ctx, req) => files.markReviewed(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(200) }).parse(req.body).pages)));
   app.post('/api/sources/:id/discard-replacement', h((ctx, req) => files.discardPending(ctx, req.params.id)));
   app.post('/api/sources/:id/ocr/preview', h((ctx, req) => ocr.ocrDisclosure(ctx, req.params.id, z.object({ pages: z.array(z.number().int()).max(60).optional() }).parse(req.body ?? {}).pages)));
@@ -238,13 +241,14 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
     const calState = ctx.calendar.kind === 'memory' ? (c.status === 'disconnected' ? 'disconnected' : c.status) : !c.available ? 'not_configured' : c.status;
     return {
       workspace: ctx.workspace, ai: aiInfo(ctx), ocr: ocr.ocrAvailability(ctx),
-      calendar: { state: calState, demo: c.demo, missingEnv: ctx.calendar.kind === 'memory' ? [] : missing, partialConfig: ctx.cfg.googlePartial, redirectUri: ctx.cfg.googleRedirectUri, lastSyncOkAt: c.lastSyncOkAt, lastError: c.lastError },
-      boundary: 'Local single-user app with no login. Do not expose this server to a network until authentication and per-user data isolation exist.',
+      calendar: { state: calState, demo: c.demo, missingEnv: ctx.calendar.kind === 'memory' || ctx.hosted ? [] : missing, partialConfig: ctx.hosted ? false : ctx.cfg.googlePartial, redirectUri: ctx.hosted ? null : ctx.cfg.googleRedirectUri, lastSyncOkAt: c.lastSyncOkAt, lastError: c.lastError },
+      boundary: ctx.hosted ? 'Signed-in student account. Your records are stored privately and are only readable from your account.' : 'Local single-user app with no login. Do not expose this server to a network until authentication and per-user data isolation exist.',
     };
   }));
   app.get('/api/first-use', h((ctx) => firstUse(ctx)));
-  app.get('/api/ai/usage', h((ctx) => usageReport(ctx)));
+  app.get('/api/ai/usage', h((ctx) => { if (ctx.hosted) throw new HttpError(404, 'not_found', 'Not available.'); return usageReport(ctx); }));
   app.post('/api/ai/verify', h(async (ctx, req) => {
+    if (ctx.hosted) throw new HttpError(404, 'not_found', 'Not available.');
     if (ctx.workspace === 'demo') throw new HttpError(409, 'demo_workspace', 'The sample workspace never calls a paid AI model.');
     if (!ctx.ai.live || !ctx.ai.verify) throw new HttpError(409, 'no_ai', 'No AI provider is configured, so there is nothing to verify. See the setup steps in Settings.');
     const level = (req.body as { level?: string } | undefined)?.level === 'output' ? 'output' : 'connection';
@@ -329,7 +333,7 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
     if (err instanceof ZodError) return res.status(400).json({ error: { code: 'invalid', message: `Invalid request: ${err.issues[0]?.path.join('.') || 'body'} ${err.issues[0]?.message ?? ''}`.trim() } });
     if ((err as any)?.type === 'entity.too.large') return res.status(413).json({ error: { code: 'file_too_large', message: 'That file is too large to upload (the limit is 15 MB for a PDF, 10 MB for an image).' } });
     if (err instanceof SyntaxError) return res.status(400).json({ error: { code: 'invalid_json', message: 'Malformed JSON.' } });
-    console.error('[server error]', err instanceof Error ? err.message : err);
+    if (hosted) hosted.onError(err, _req); else console.error('[server error]', err instanceof Error ? err.message : err);
     res.status(500).json({ error: { code: 'internal', message: 'Something went wrong on the server. Your data was not changed by this request.' } });
   });
   return app;

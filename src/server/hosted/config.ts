@@ -7,6 +7,8 @@ export interface HostedConfig {
   databaseUrl: string; publicUrl: string; authSecret: string;
   oidc: OidcConfig | null; passwordSignIn: boolean;
   limits: Limits; trustProxy: boolean; sessionDays: number;
+  /** requests per minute: signed-in student, sign-in endpoints per address, invitation checks per address */
+  rate: { apiPerMin: number; authPerMin: number; invitePerMin: number };
   /** a marker the staging database must carry so a staging server can never open production data (and vice versa) */
   dataLabel: string;
 }
@@ -50,5 +52,5 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
     userDailyChat: num('LIMIT_USER_DAILY_CHAT', DEFAULT_LIMITS.userDailyChat), userDailyExtractions: num('LIMIT_USER_DAILY_EXTRACTIONS', DEFAULT_LIMITS.userDailyExtractions),
     globalConcurrentExtractions: num('LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS', DEFAULT_LIMITS.globalConcurrentExtractions),
   };
-  return { cfg: { environment, databaseUrl: g('DATABASE_URL') ?? '', publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g('TRUST_PROXY') !== '0', sessionDays: num('SESSION_DAYS', 7), dataLabel }, problems };
+  return { cfg: { environment, databaseUrl: g('DATABASE_URL') ?? '', publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g('TRUST_PROXY') !== '0', sessionDays: num('SESSION_DAYS', 7), dataLabel, rate: { apiPerMin: num('RATE_API_PER_MIN', 300), authPerMin: num('RATE_AUTH_PER_MIN', 40), invitePerMin: num('RATE_INVITE_PER_MIN', 20) } }, problems };
 }

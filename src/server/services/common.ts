@@ -121,6 +121,11 @@ export function deriveVerification(db: Db, provider: AIProvider) {
 }
 
 export function aiInfo(ctx: Ctx) {
+  if (ctx.hosted) {
+    // students never see model names, token limits, spend or verification detail: that is operator information
+    const live = ctx.ai.live;
+    return { mode: live ? 'hosted' : 'offline', detail: live ? 'The study assistant is available.' : 'The study assistant is not available right now. Math practice, notes and reviews still work.', provider: 'study assistant', live, label: 'Study assistant', providerName: 'study assistant', tasks: [], verification: [], callsToday: 0, dailyLimit: 0, spentUsd: 0, heldUsd: 0, committedUsd: 0, dailyBudgetUsd: 0, pricingAsOf: '' };
+  }
   const w = usageWindow(ctx);
   const live = ctx.ai.live;
   const tasks = TASKS.map((t) => ({ task: t, model: ctx.ai.modelFor?.(t) ?? null, maxOutputTokens: ctx.cfg.aiTasks[t]?.maxOutputTokens ?? DEFAULT_TASKS[t].maxOutputTokens, effort: ctx.cfg.aiTasks[t]?.effort ?? DEFAULT_TASKS[t].effort ?? null }));

@@ -28,6 +28,8 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
   const plugins = cfg.oidc ? [genericOAuth({ config: [{
     providerId: cfg.oidc.providerId, clientId: cfg.oidc.clientId, clientSecret: cfg.oidc.clientSecret,
     authorizationUrl: cfg.oidc.authorizationUrl, tokenUrl: cfg.oidc.tokenUrl, userInfoUrl: cfg.oidc.userInfoUrl, scopes: cfg.oidc.scopes, pkce: true,
+    // OpenID Connect identifies the person by the stable "sub" claim (never by email, which can change)
+    accountSubject: ({ profile }: { profile: Record<string, any> }) => String(profile.sub ?? profile.id ?? ''),
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p: Record<string, any>) => ({ email: String(p.email ?? '').toLowerCase(), name: 'Student', image: undefined, emailVerified: p.email_verified === true }),
   }] })] : [];
@@ -37,7 +39,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
     account: { accountLinking: { enabled: false } },
     session: { expiresIn: cfg.sessionDays * 86_400, updateAge: 86_400, cookieCache: { enabled: false } },
     advanced: { useSecureCookies: secure, cookiePrefix: 'sh', defaultCookieAttributes: { httpOnly: true, sameSite: 'lax', secure }, ipAddress: { ipAddressHeaders: ['x-forwarded-for'] }, disableCSRFCheck: false },
-    rateLimit: { enabled: true, window: 60, max: 30 },
+    rateLimit: { enabled: true, window: 60, max: cfg.rate.authPerMin, customRules: { '/sign-in/*': { window: 60, max: cfg.rate.authPerMin }, '/sign-up/*': { window: 60, max: cfg.rate.authPerMin } } },
     user: {
       validateUserInfo: async ({ source }: any, ctx: any) => {
         if (source.action === 'link-account') return { error: 'linking_disabled', errorDescription: 'Linking sign-in methods is not supported.' };
