@@ -1,4 +1,9 @@
+import { createRequire } from 'node:module';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { Ctx, HttpError } from '../services/common';
+
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 import * as port from '../services/portability';
 import * as cal from '../services/calendar';
 import { Pool, audit, tx } from './pg';
@@ -50,4 +55,23 @@ export async function deleteAccount(o: { pool: Pool; tenants: Tenants; userId: s
     await c.query('DELETE FROM "user" WHERE id = $1', [o.userId]);
   });
   await audit(o.pool, 'account_deleted', null, {});
+}
+
+/**
+ * Bring a student's pre-hosting local database (the old single-user data/study.db) into their hosted account. Operator-run, on request.
+ * It takes a consistent snapshot of the local file, refuses to overwrite an account that already has study data, and never touches other students.
+ */
+export function importLocalDatabase(o: { tenants: Tenants; userId: string; file: string; replace?: boolean }) {
+  const lease = o.tenants.lease(o.userId, 'real');
+  const has = (lease.db.get<any>('SELECT COUNT(*) n FROM subjects') as { n: number }).n > 0;
+  lease.release();
+  if (has && !o.replace) throw new HttpError(409, 'not_empty', 'This account already has study data. Use --replace to overwrite it.');
+  o.tenants.remove(o.userId);
+  const dir = o.tenants.userDir(o.userId);
+  mkdirSync(dir, { recursive: true });
+  const src = new DatabaseSync(o.file, { readOnly: true });
+  try { src.exec(`VACUUM INTO '${join(dir, 'study.db').replace(/'/g, "''")}'`); } finally { src.close(); }
+  const l2 = o.tenants.lease(o.userId, 'real'); // opening applies any newer migrations
+  const n = (l2.db.get<any>('SELECT COUNT(*) n FROM attempts') as { n: number }).n; l2.release();
+  return { attempts: n };
 }

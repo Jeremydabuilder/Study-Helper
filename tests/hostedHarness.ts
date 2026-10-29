@@ -126,7 +126,7 @@ export class HostedHarness {
   hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
   now = () => this.clock.now;
   students: Student[] = []; idpQueue: Promise<void> = Promise.resolve();
-  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
+  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
     const h = new HostedHarness();
     h.db = o.db ?? await createTestDb(); h.idp = await new FakeIdp().start();
     h.port = await freePort(); h.url = `http://127.0.0.1:${h.port}`; h.dir = o.dir ?? mkdtempSync(join(tmpdir(), 'sh-hosted-'));
@@ -135,6 +135,7 @@ export class HostedHarness {
       ...(o.oidc === false ? {} : { AUTH_OIDC_CLIENT_ID: 'test-client', AUTH_OIDC_CLIENT_SECRET: 'test-secret', AUTH_OIDC_AUTHORIZATION_URL: `${h.idp.base}/authorize`, AUTH_OIDC_TOKEN_URL: `${h.idp.base}/token`, AUTH_OIDC_USERINFO_URL: `${h.idp.base}/userinfo` }),
       ...(o.passwordSignIn ? { AUTH_PASSWORD: '1' } : {}), RATE_AUTH_PER_MIN: '100000', RATE_INVITE_PER_MIN: '100000', RATE_API_PER_MIN: '100000', ...(o.limits ?? {}),
     };
+    if (o.labelOverride) env.DATA_LABEL = o.labelOverride;
     const { cfg: hcfg, problems } = hostedConfigFromEnv(env as never);
     if (problems.length) throw new Error(problems.join('; '));
     h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : new LLMProvider(h.llm) as AIProvider });
