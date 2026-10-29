@@ -13,6 +13,7 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
   const [err, setErr] = useState<ApiError | null>(null);
   const [conflict, setConflict] = useState<any>(null);
   const status = useApi<any>('/status');
+  const assistant = useApi<any>(meta?.hosted ? '/account/assistant' : null);
   const t = today.data;
 
   if (today.loading && !t) return <div className="narrow"><h1>Today</h1><div className="skeleton" style={{ height: 120 }} /><div className="skeleton" /><div className="skeleton" /></div>;
@@ -33,7 +34,8 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
       <p className="muted small" style={{ margin: 0 }}>{new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(t.now))}</p>
       <h1>{meta?.profile?.name ? `Hi ${meta.profile.name.replace(/ \(sample\)/, '')} 👋` : 'Today'}</h1>
 
-      {status.data && status.data.workspace === 'real' && (status.data.ai.mode !== 'output_verified' || ['reauth_required', 'error'].includes(status.data.calendar.state)) && (
+      {status.data && status.data.workspace === 'real' && meta?.hosted && assistant.data && assistant.data.state !== 'available' && <div className="notice info small" role="status">{assistant.data.state === 'paused_global' ? 'The study assistant is paused for everyone for now.' : 'You have used today’s study-assistant allowance.'} Practice, notes and reviews still work; written answers are saved and can be self-graded. <a href="#/settings">Details</a></div>}
+      {status.data && status.data.workspace === 'real' && !meta?.hosted && (status.data.ai.mode !== 'output_verified' || ['reauth_required', 'error'].includes(status.data.calendar.state)) && (
         <div className="notice info small" role="status">
           {status.data.ai.mode === 'offline' && <>Running in <strong>Offline mode</strong> — math is fully supported; other subjects use basic questions. </>}
           {status.data.ai.mode === 'configured_unverified' && <>AI is configured but <strong>not yet verified</strong>. </>}

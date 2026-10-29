@@ -11,6 +11,8 @@ export interface HostedConfig {
   rate: { apiPerMin: number; authPerMin: number; invitePerMin: number };
   /** a marker the staging database must carry so a staging server can never open production data (and vice versa) */
   dataLabel: string;
+  /** who runs this site: shown in the privacy notice. Required in production so students always know who to contact. */
+  operator: { name: string; contact: string };
 }
 
 /** Google's published OpenID Connect endpoints (checked against https://accounts.google.com/.well-known/openid-configuration). Overridable so tests and other identity providers can be used. */
@@ -43,6 +45,8 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
   if (!oidc && !passwordSignIn) problems.push('Configure at least one sign-in method: Google/OIDC credentials, or AUTH_PASSWORD=1.');
   if (environment === 'production' && passwordSignIn && g('AUTH_PASSWORD_ALLOW_IN_PRODUCTION') !== '1') problems.push('AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).');
   const dataLabel = g('DATA_LABEL') ?? environment;
+  const operator = { name: g('OPERATOR_NAME') ?? '', contact: g('OPERATOR_CONTACT') ?? '' };
+  if (environment === 'production' && (!operator.name || !operator.contact)) problems.push('OPERATOR_NAME and OPERATOR_CONTACT are required in production: the privacy notice must say who runs the site and how to reach them.');
   const limits: Limits = {
     ...DEFAULT_LIMITS,
     userDailyRequests: num('LIMIT_USER_DAILY_AI_REQUESTS', DEFAULT_LIMITS.userDailyRequests), userDailyUsd: num('LIMIT_USER_DAILY_USD', DEFAULT_LIMITS.userDailyUsd),
@@ -52,5 +56,5 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
     userDailyChat: num('LIMIT_USER_DAILY_CHAT', DEFAULT_LIMITS.userDailyChat), userDailyExtractions: num('LIMIT_USER_DAILY_EXTRACTIONS', DEFAULT_LIMITS.userDailyExtractions),
     globalConcurrentExtractions: num('LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS', DEFAULT_LIMITS.globalConcurrentExtractions),
   };
-  return { cfg: { environment, databaseUrl: g('DATABASE_URL') ?? '', publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g('TRUST_PROXY') !== '0', sessionDays: num('SESSION_DAYS', 7), dataLabel, rate: { apiPerMin: num('RATE_API_PER_MIN', 300), authPerMin: num('RATE_AUTH_PER_MIN', 40), invitePerMin: num('RATE_INVITE_PER_MIN', 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g('DATABASE_URL') ?? '', publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g('TRUST_PROXY') !== '0', operator, sessionDays: num('SESSION_DAYS', 7), dataLabel, rate: { apiPerMin: num('RATE_API_PER_MIN', 300), authPerMin: num('RATE_AUTH_PER_MIN', 40), invitePerMin: num('RATE_INVITE_PER_MIN', 20) } }, problems };
 }

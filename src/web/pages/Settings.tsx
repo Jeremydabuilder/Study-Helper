@@ -5,19 +5,20 @@ import { Chip, ErrorBox, Field, Spinner, Toggle, download } from '../ui';
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WLABEL: Record<string, string> = { urgency: 'Deadline pressure', weakness: 'Needs work', overdue: 'Review overdue', prereq: 'Underpins other topics', unassessed: 'Not assessed yet', repair: 'Unresolved mistake' };
 
-export function Settings({ go, meta }: { go: (p: string) => void; meta: any }) {
-  const [tab, setTab] = useState<'setup' | 'profile' | 'priorities' | 'availability' | 'data'>(() => (window.location.hash.includes('tab=') ? (window.location.hash.split('tab=')[1] as never) : 'setup'));
+export function Settings({ go, meta, hosted, onSignOut }: { go: (p: string) => void; meta: any; hosted?: any; onSignOut?: () => void }) {
+  const [tab, setTab] = useState<'setup' | 'profile' | 'priorities' | 'availability' | 'data' | 'account'>(() => (window.location.hash.includes('tab=') ? (window.location.hash.split('tab=')[1] as never) : 'setup'));
   return (
     <div className="narrow">
       <h1>Settings</h1>
       <div className="tabs" role="tablist">
-        {([['setup', 'Setup & usage'], ['profile', 'Profile'], ['priorities', 'Priorities'], ['availability', 'Availability'], ['data', 'Data']] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>)}
+        {([[ 'setup', hosted ? 'Status' : 'Setup & usage'], ['profile', 'Profile'], ['priorities', 'Priorities'], ['availability', 'Availability'], ['data', 'Data'], ...(hosted ? [['account', 'Account']] : [])] as [string, string][]).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k as never)}>{l}</button>)}
       </div>
-      {tab === 'setup' && <SetupTab />}
+      {tab === 'setup' && (hosted ? <HostedStatus /> : <SetupTab />)}
+      {tab === 'account' && hosted && <AccountTab hosted={hosted} onSignOut={onSignOut} />}
       {tab === 'profile' && <Profile meta={meta} />}
       {tab === 'priorities' && <Priorities />}
       {tab === 'availability' && <Availability />}
-      {tab === 'data' && <DataTab go={go} />}
+      {tab === 'data' && <DataTab go={go} hosted={!!hosted} />}
     </div>
   );
 }
@@ -221,7 +222,7 @@ function SetupTab() {
   </>);
 }
 
-function DataTab({ go }: { go: (p: string) => void }) {
+function DataTab({ go, hosted }: { go: (p: string) => void; hosted?: boolean }) {
   const ws = getWorkspace();
   const [secs, setSecs] = useState<Record<string, boolean>>({ profile: true, settings: true, memories: true, learning: true, items: true });
   const [withText, setWithText] = useState(true);
@@ -243,7 +244,7 @@ function DataTab({ go }: { go: (p: string) => void }) {
 
   return (<>
     <section className="card"><h2>Which data are you using?</h2>
-      <p>{ws === 'demo' ? <><Chip tone="warn">Sample data</Chip> You’re looking at made-up records.</> : <><Chip tone="good">Your data</Chip> Stored in the <code>data/</code> folder on this computer.</>}</p>
+      <p>{ws === 'demo' ? <><Chip tone="warn">Sample data</Chip> You’re looking at made-up records.</> : <><Chip tone="good">Your data</Chip> {hosted ? 'Stored privately for your account on the server.' : <>Stored in the <code>data/</code> folder on this computer.</>}</>}</p>
       <div className="row"><button className="btn" onClick={() => { setWorkspace(ws === 'demo' ? 'real' : 'demo'); go('/'); }}>{ws === 'demo' ? 'Switch to my data' : 'Explore with sample data'}</button>
         {ws === 'demo' && <button className="btn" onClick={async () => { await post('/demo/reset'); window.dispatchEvent(new Event('workspace-changed')); }}>Reset sample data</button>}</div>
       <p className="small muted mt-s">Sample and real records live in separate database files and never mix.</p></section>
@@ -272,6 +273,63 @@ function DataTab({ go }: { go: (p: string) => void }) {
         {ws === 'demo' && <div className="notice warn small">You’re in the sample workspace. Switch to your data to import.</div>}
         <div className="row mt"><button className="btn primary" disabled={ws === 'demo'} onClick={commit}>Import selected</button><button className="btn" onClick={() => { setPrev(null); setFile(null); }}>Cancel</button></div>
       </div>)}
+    </section>
+  </>);
+}
+
+const ASSISTANT: Record<string, { tone: 'good' | 'warn' | 'bad'; text: string; more: string }> = {
+  available: { tone: 'good', text: 'Study assistant available', more: 'Question writing, grading of written answers, explanations and chat can use it. It can be wrong: explanations and checks are labelled.' },
+  paused_user: { tone: 'warn', text: 'You have used today’s assistant allowance', more: 'It resets within 24 hours. Practice, notes and reviews keep working, and written answers are saved to be graded or self-graded.' },
+  paused_global: { tone: 'warn', text: 'Study assistant paused for everyone', more: 'It is paused to keep costs under control. Practice, notes and reviews still work. Try again later.' },
+};
+/** What a student needs to know about the app's status: no model names, keys, tokens or dollar amounts. Those are operator settings. */
+function HostedStatus() {
+  const a = useApi<any>('/account/assistant'); const st = useApi<any>('/status');
+  const cal = st.data?.calendar; const c = cal ? CAL_STATE[cal.state] : null;
+  const as = a.data ? ASSISTANT[a.data.state] : null;
+  return (<>
+    <FirstUse />
+    <section className="card" aria-labelledby="as-h"><h2 id="as-h">Study assistant</h2>
+      {a.error ? <ErrorBox error={a.error} onRetry={a.reload} /> : !as ? <Spinner /> : <><p><Chip tone={as.tone}>{as.text}</Chip>{a.data.state === 'available' && <span className="muted small"> {a.data.usedRequests} of {a.data.dailyRequests} requests used today</span>}</p><p className="small muted">{as.more}</p></>}
+      <p className="small muted">When you use it, the text needed for that task is sent to the operator’s AI provider. <a href="#/privacy">Read exactly what is sent and kept</a>.</p>
+    </section>
+    <section className="card" aria-labelledby="cal-h"><h2 id="cal-h">Google Calendar (optional)</h2>
+      {st.error ? <ErrorBox error={st.error} onRetry={st.reload} /> : !c ? <Spinner /> : <p><Chip tone={c.tone}>{c.text}</Chip></p>}
+      <p className="small">You do not need it. Connecting lets you <strong>review and import tests and homework found on your calendar</strong> and plan around busy times. It is <strong>read-only</strong>: the app never changes your calendar, and it cannot see Google Classroom or school-portal assignments (add those by hand). You approve each imported item before it is used, and you can disconnect and delete everything imported at any time.</p>
+      <p className="small"><a href="#/calendar">Open calendar settings</a></p>
+    </section>
+  </>);
+}
+
+function AccountTab({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }) {
+  const acct = useApi<any>('/account');
+  const [busy, setBusy] = useState<string | null>(null); const [err, setErr] = useState<ApiError | null>(null);
+  const [withFiles, setWithFiles] = useState(false); const [confirm, setConfirm] = useState('');
+  const exportAll = async () => {
+    setBusy('export'); setErr(null);
+    try { const r = await fetch(`/api/account/export${withFiles ? '?files=1' : ''}`, { headers: { 'x-workspace': 'real' } }); if (!r.ok) { const j = await r.json().catch(() => null); throw new ApiError(r.status, j?.error?.code ?? 'error', j?.error?.message ?? 'The export failed.'); } download(`study-helper-my-data-${new Date().toISOString().slice(0, 10)}.json`, await r.json()); }
+    catch (e) { setErr(e as ApiError); } finally { setBusy(null); }
+  };
+  const del = async () => {
+    setBusy('delete'); setErr(null);
+    try { await post('/account/delete', { confirm }); window.location.href = '/'; } catch (e) { setErr(e as ApiError); setBusy(null); }
+  };
+  return (<>
+    <section className="card"><h2>Your account</h2>
+      <p>Signed in as <strong>{acct.data?.email ?? hosted.email}</strong>.</p>
+      {acct.data && <p className="small muted">Storage used: {acct.data.storageMb} MB of {acct.data.storageLimitMb} MB.</p>}
+      <div className="row"><button className="btn" onClick={onSignOut}>Sign out</button></div>
+    </section>
+    <section className="card"><h2>Download my data</h2>
+      <p className="small muted">Everything you made: materials, notes, answers, memory, chats and assignments, as one file. Calendar tokens and other secrets are never included.</p>
+      <Toggle checked={withFiles} onChange={setWithFiles} label="Include my uploaded original files" hint="Can be large. If it is too big, download files one by one from each material." />
+      <div className="row mt-s"><button className="btn primary" disabled={busy === 'export'} onClick={exportAll}>{busy === 'export' ? 'Preparing…' : 'Download'}</button></div>
+    </section>
+    <section className="card"><h2>Delete my account</h2>
+      <p className="small">This permanently deletes your account, files, notes, answers, memory, conversations and calendar connection, and signs you out everywhere. It cannot be undone, and you would need a new invitation to come back. Download your data first if you want a copy.</p>
+      <Field label="Type DELETE MY ACCOUNT to confirm"><input type="text" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" /></Field>
+      {err && <ErrorBox error={err} />}
+      <div className="row mt-s"><button className="btn danger" disabled={confirm !== 'DELETE MY ACCOUNT' || busy === 'delete'} onClick={del}>{busy === 'delete' ? 'Deleting…' : 'Delete everything'}</button></div>
     </section>
   </>);
 }

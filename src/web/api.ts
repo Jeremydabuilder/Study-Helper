@@ -17,8 +17,13 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
   } catch { throw new ApiError(0, 'network', 'Could not reach the Study Helper server. Check that it is running, then try again.'); }
   let data: any = null;
   try { data = await res.json(); } catch { /* empty */ }
-  if (!res.ok) { const e = data?.error ?? {}; throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Request failed (${res.status}).`, e); }
+  if (!res.ok) { const e = data?.error ?? {}; announce(res.status, e.code); throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Request failed (${res.status}).`, e); }
   return data as T;
+}
+/** Tell the shell when the session has ended or the pilot is paused, so it can show the right screen instead of a broken page. */
+function announce(status: number, code?: string) {
+  if (status === 401 && code === 'signed_out') window.dispatchEvent(new Event('signed-out'));
+  if (status === 503 && code === 'pilot_paused') window.dispatchEvent(new Event('pilot-paused'));
 }
 /** Upload a file's raw bytes (not JSON). The server checks the real type from the contents. */
 export async function upload<T = any>(path: string, file: File): Promise<T> {
@@ -27,7 +32,7 @@ export async function upload<T = any>(path: string, file: File): Promise<T> {
   catch { throw new ApiError(0, 'network', 'Could not reach the Study Helper server. Check that it is running, then try again.'); }
   let data: any = null;
   try { data = await res.json(); } catch { /* empty */ }
-  if (!res.ok) { const e = data?.error ?? {}; throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Upload failed (${res.status}).`, e); }
+  if (!res.ok) { const e = data?.error ?? {}; announce(res.status, e.code); throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Upload failed (${res.status}).`, e); }
   return data as T;
 }
 export const get = <T = any>(p: string) => api<T>('GET', p);

@@ -14,7 +14,10 @@ export function firstUse(ctx: Ctx) {
   const customEndpoint = ctx.cfg.aiProvider === 'anthropic' && ctx.cfg.anthropicBaseUrl !== 'https://api.anthropic.com';
 
   // 1-2. AI (optional: math and basic templates work offline)
-  if (!ai.live) {
+  if (ctx.hosted) {
+    // hosted: the assistant is operated for you; there is nothing for a student to set up or verify
+    steps.push({ id: 'ai', title: 'Study assistant', state: ai.live ? 'done' : 'skipped', detail: ai.live ? 'The study assistant is available. It can be wrong: its explanations and checks are labelled.' : 'The study assistant is not available right now. Math practice, notes and reviews still work.', action: null });
+  } else if (!ai.live) {
     steps.push({ id: 'ai', title: 'Choose how questions are written', state: 'skipped', detail: 'No API key is set, so the app runs offline: math is fully supported, other subjects get basic template questions. Add a key in .env (never in this app or in chat) to get better questions and grading.', action: 'settings' });
     steps.push({ id: 'ai_output', title: 'Check that the AI returns usable study output', state: 'skipped', detail: 'Not applicable offline.', action: null });
   } else {
@@ -63,5 +66,5 @@ export function firstUse(ctx: Ctx) {
   });
 
   const done = steps.filter((s) => s.state === 'done').length, skipped = steps.filter((s) => s.state === 'skipped').length;
-  return { steps, done, skipped, total: steps.length, complete: steps.every((s) => s.state === 'done' || s.state === 'skipped'), liveVerified: ai.mode === 'output_verified', note: 'This list reflects what is recorded in this database. It does not test any outside service; use “Verify study output” in Setup for that.' };
+  return { steps, done, skipped, total: steps.length, complete: steps.every((s) => s.state === 'done' || s.state === 'skipped'), liveVerified: ai.mode === 'output_verified', note: ctx.hosted ? 'This list reflects what is saved in your account.' : 'This list reflects what is recorded in this database. It does not test any outside service; use “Verify study output” in Setup for that.' };
 }

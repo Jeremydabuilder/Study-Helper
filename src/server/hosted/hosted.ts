@@ -114,7 +114,7 @@ export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg<boolean>(pool, 'pilot_enabled', false);
-          res.json({ signedIn: !!s, email: s?.email ?? null, pilotOpen: open, environment: hcfg.environment, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn } });
+          res.json({ signedIn: !!s, email: s?.email ?? null, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90 }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn } });
         } catch (e) { next(e); }
       });
       app.post('/api/invite/check', async (req, res, next) => {
