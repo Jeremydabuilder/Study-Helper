@@ -105,9 +105,9 @@ export interface PreRequest {
  */
 export interface RequestLedger {
   /** Returns a unique request id, or throws AIError('budget_reached' | 'limit_reached') without sending anything. */
-  reserve(p: PreRequest): string;
-  settle(id: string, r: RequestRecord): void;
-  fail(id: string, f: { outcome: string; billing: BillingKind; latencyMs: number }): void;
+  reserve(p: PreRequest): string | Promise<string>;
+  settle(id: string, r: RequestRecord): void | Promise<void>;
+  fail(id: string, f: { outcome: string; billing: BillingKind; latencyMs: number }): void | Promise<void>;
 }
 export interface CallOpts { ledger?: RequestLedger }
 

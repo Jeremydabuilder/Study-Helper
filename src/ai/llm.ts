@@ -90,7 +90,7 @@ export class LLMProvider implements AIProvider {
    */
   private async sendOnce(a: { purpose: string; model: string; system: string; user: string; maxTokens: number; effort?: Effort; attempt: number; allowEmpty?: boolean; attachments?: Attachment[] }, opts: CallOpts) {
     const ledger = opts.ledger;
-    const id = ledger?.reserve({
+    const id = await ledger?.reserve({
       purpose: a.purpose, provider: this.t.provider, model: a.model, attempt: a.attempt, maxOutputTokens: a.maxTokens,
       inputBytes: Buffer.byteLength(a.system) + Buffer.byteLength(a.user) + attachmentAllowance(a.attachments), credFp: this.t.credentialFingerprint ?? null,
     });
@@ -101,14 +101,14 @@ export class LLMProvider implements AIProvider {
       resp = typeof raw === 'string' ? { text: raw, model: a.model, stopReason: 'end_turn', requestId: null, usage: null } : raw;
     } catch (e) {
       const billing: BillingHint = e instanceof AIError ? e.billing ?? 'unknown' : 'unknown';
-      if (id) ledger!.fail(id, { outcome: e instanceof AIError ? e.code : 'error', billing, latencyMs: Date.now() - t0 });
+      if (id) await ledger!.fail(id, { outcome: e instanceof AIError ? e.code : 'error', billing, latencyMs: Date.now() - t0 });
       throw e;
     }
     let settled = false;
-    const settle = (outcome: string) => {
+    const settle = async (outcome: string) => {
       if (settled || !id) return;
       settled = true;
-      ledger!.settle(id, {
+      await ledger!.settle(id, {
         purpose: a.purpose, provider: this.t.provider, model: resp.model || a.model, attempt: a.attempt, outcome, latencyMs: Date.now() - t0,
         inputTokens: resp.usage ? resp.usage.input : null, outputTokens: resp.usage ? resp.usage.output : null,
         cacheReadTokens: resp.usage?.cacheRead ?? 0, cacheWriteTokens: resp.usage?.cacheWrite ?? 0,
@@ -141,7 +141,7 @@ export class LLMProvider implements AIProvider {
           lastErr = parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
         } catch (e) { lastErr = e instanceof Error ? e.message : 'unparseable'; }
         outcome = 'invalid_output';
-      } finally { settle(outcome); }
+      } finally { await settle(outcome); }
     }
     throw new AIError('malformed', `The model returned an invalid response (${lastErr}).`);
   }
@@ -151,7 +151,7 @@ export class LLMProvider implements AIProvider {
     const model = modelOverride ?? this.modelFor('grade');
     const t0 = Date.now();
     const { resp, settle } = await this.sendOnce({ purpose: 'verify', model, system: 'Reply with the single word OK.', user: 'Connection check.', maxTokens: 256, effort: 'low', attempt: 1, allowEmpty: true }, opts);
-    settle('ok'); // HTTP 200 with usage: the connection works. Study-output validity is verified separately.
+    await settle('ok'); // HTTP 200 with usage: the connection works. Study-output validity is verified separately.
     return { model: resp.model, latencyMs: Date.now() - t0 };
   }
 
