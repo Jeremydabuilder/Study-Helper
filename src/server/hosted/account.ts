@@ -6,6 +6,7 @@ import { Ctx, HttpError } from '../services/common';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 import * as port from '../services/portability';
 import * as cal from '../services/calendar';
+import { exportHomework } from '../services/homework';
 import { Pool, audit, tx } from './pg';
 import { Tenants } from './tenants';
 
@@ -28,9 +29,9 @@ export function exportAccount(ctx: Ctx, o: { email: string; withFiles: boolean }
   return {
     format: 'study-helper-account-export', version: 1, exportedAt: ctx.now(),
     account: { email: o.email },
-    study, conversations, uploadedFiles: files,
+    study, conversations, homework: exportHomework(ctx), uploadedFiles: files,
     calendar: { connected: conn.status === 'connected', calendars: conn.calendars.filter((c: any) => c.selected).map((c: any) => ({ name: c.label || c.name })), note: 'Imported calendar events and connection tokens are not exported. Assignments you confirmed are in "study.sections.items".' },
-    notes: ['The "study" section can be imported again in Settings → Data.', 'Chat conversations are included here only; they are not part of the importable study file.'],
+    notes: ['The "study" section can be imported again in Settings → Data.', 'Chat conversations and homework (every version of your working, the help you asked for and each check) are included here only; they are not part of the importable study file.'],
   };
 }
 

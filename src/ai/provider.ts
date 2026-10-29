@@ -75,6 +75,25 @@ export interface ChatInput {
   message: string; gradeLevel?: string;
 }
 
+/** Help with one homework question. Instructions, the question, the student's work and any rubric are DATA; only `rules` in the prompt are instructions. */
+export interface HomeworkHelpInput {
+  action: 'explain_instructions' | 'start' | 'hint' | 'concept' | 'worked_solution' | 'draft_help';
+  /** hint strength: 1 a nudge, 2 a stronger hint, 3 the next step spelled out */
+  level: 1 | 2 | 3;
+  kind: 'math' | 'science' | 'history' | 'english' | 'other';
+  subjectName: string; gradeLevel?: string; label: string; instructions: string; question: string; working: string;
+  /** labelled context retrieved for this question (the student's own materials); empty when none matched */
+  context: string; rubric: string | null; ask: string | null;
+  /** what the app's own deterministic check found about the working (math), already verified */
+  verifiedNote: string | null;
+  priorHelp: { action: string; text: string }[];
+}
+export interface HomeworkCheckInput {
+  kind: 'math' | 'science' | 'history' | 'english' | 'other';
+  subjectName: string; gradeLevel?: string; label: string; instructions: string; question: string; working: string;
+  context: string; rubric: string | null; quotations: { quote: string; inSource: boolean | null }[]; verifiedNote: string | null;
+}
+
 export type AITask = 'extract' | 'generate' | 'grade';
 
 /** How a request's cost is known. 'estimated' and 'unknown' are held at the conservative reservation, never at zero. */
@@ -126,6 +145,8 @@ export interface AIProvider {
   assist?(i: AssistInput, opts?: CallOpts): Promise<{ text: string }>;
   annotationFeedback?(i: AnnotationFeedbackInput, opts?: CallOpts): Promise<import('./schemas').AnnotationFeedback>;
   chat?(i: ChatInput, opts?: CallOpts): Promise<{ reply: string }>;
+  homeworkHelp?(i: HomeworkHelpInput, opts?: CallOpts): Promise<import('./schemas').HomeworkReply>;
+  homeworkCheck?(i: HomeworkCheckInput, opts?: CallOpts): Promise<import('./schemas').HomeworkCheck>;
   assessSupport?(items: AssessItem[], opts?: CallOpts): Promise<AssessResult>;
   readPages?(i: ReadInput, opts?: CallOpts): Promise<ReadResult>;
   ocrModel?(): string;

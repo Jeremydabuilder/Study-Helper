@@ -61,6 +61,8 @@ export class ScriptedLlm implements LLMTransport {
     const u = r.user, j = (o: unknown) => JSON.stringify(o);
     const usage = { input: 400, output: 120, cacheRead: 0, cacheWrite: 0 };
     const wrap = (text: string) => ({ text, model: r.model, stopReason: 'end_turn', requestId: 'req_test', usage });
+    if (u.includes('JSON shape: {"text":"","clarifying_question"')) return wrap(j(this.replies.homeworkHelp ?? { text: 'Look at what is being done to x, and undo it one step at a time.', clarifying_question: null, basis: 'general', uncertain: null, final_answer: null }));
+    if (u.includes('JSON shape: {"parts":[{"label":""')) return wrap(j(this.replies.homeworkCheck ?? { parts: [], not_checked: ['Nothing in this answer could be tied to a source'], overall: '', suggested_edits: [] }));
     if (u.includes('JSON shape: {"reply":""}')) return wrap(j(this.replies.chat ?? { reply: 'Here is a hint.' }));
     if (u.includes('JSON shape: {"answer":""}')) return wrap(j({ answer: 'It is explained in your notes.' }));
     if (u.includes('"concepts":[{')) return wrap(j(this.replies.extract ?? { concepts: [

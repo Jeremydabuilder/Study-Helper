@@ -100,7 +100,9 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts)
   const memories = ctx.db.all<any>('SELECT id, kind, text, subject_id AS subjectId, concept_id AS conceptId FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 30');
   const mis = ctx.db.all<any>("SELECT description, count FROM misconceptions WHERE concept_id = ? AND status = 'active' ORDER BY count DESC", conceptId);
   const context = buildContext({ concept: { id: c.id, name: c.name, summary: c.summary, subjectId: c.subject_id }, chunks: modelChunks(ctx, chunkRows), refChunkIds, memories, misconceptions: mis });
-  const existing = ctx.db.all<any>('SELECT prompt FROM questions WHERE concept_id = ?', conceptId).map((r) => r.prompt);
+  // homework questions on this topic are never reused as practice: a later check must not repeat what the student just worked on or was shown
+  const homeworkSeen = ctx.db.all<any>('SELECT q.prompt FROM homework_questions q JOIN homework_concepts hc ON hc.question_id = q.id WHERE hc.concept_id = ?', conceptId).map((r) => r.prompt as string);
+  const existing = [...ctx.db.all<any>('SELECT prompt FROM questions WHERE concept_id = ?', conceptId).map((r) => r.prompt as string), ...homeworkSeen];
   const others = ctx.db.all<any>("SELECT name, summary FROM concepts WHERE subject_id = ? AND status = 'confirmed' AND id != ?", c.subject_id, conceptId);
   const contrast = o.contrastConceptId ? ctx.db.get<any>('SELECT name, summary FROM concepts WHERE id = ?', o.contrastConceptId) : null;
   const batch = await provider.generateQuestions({

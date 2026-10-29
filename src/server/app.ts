@@ -27,6 +27,7 @@ import * as mem from './services/memory';
 import * as port from './services/portability';
 import * as items from './services/items';
 import * as cal from './services/calendar';
+import * as hw from './services/homework';
 import { CalendarError } from './services/calendarGoogle';
 
 const hhmm = z.string().regex(/^\d{2}:\d{2}$/);
@@ -314,6 +315,37 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   app.get('/api/conversations/:id', h((ctx, req) => chat.getConversation(ctx, req.params.id)));
   app.delete('/api/conversations/:id', h((ctx, req) => chat.deleteConversation(ctx, req.params.id)));
   app.post('/api/conversations/:id/messages', h((ctx, req) => chat.sendMessage(ctx, req.params.id, z.object({ text: z.string(), direct: z.boolean().optional() }).parse(req.body))));
+
+
+  /* ---------------- homework ---------------- */
+  app.get('/api/homework', h((ctx) => ({ homework: hw.listHomework(ctx) })));
+  app.get('/api/homework/next', h((ctx) => hw.nextHomeworkTask(ctx)));
+  app.post('/api/homework', h((ctx, req) => hw.createDraft(ctx, z.object({ sourceId: z.string(), title: z.string().optional() }).parse(req.body))));
+  app.get('/api/homework/:id', h((ctx, req) => hw.getHomework(ctx, req.params.id)));
+  app.post('/api/homework/:id/confirm', h((ctx, req) => hw.confirmHomework(ctx, req.params.id, z.object({
+    title: z.string().optional(), subjectId: z.string().optional(), kind: z.string().optional(), dueDate: z.string().nullable().optional(), dueTime: z.string().nullable().optional(), estMin: z.number().nullable().optional(),
+    plan: z.string().optional(), acknowledgeUnsplit: z.boolean().optional(), assessment: z.boolean().optional(),
+    questions: z.array(z.object({ id: z.string().optional(), label: z.string().optional(), prompt: z.string().optional(), remove: z.boolean().optional() })).max(60).optional(),
+  }).parse(req.body))));
+  app.patch('/api/homework/:id', h((ctx, req) => hw.updateHomework(ctx, req.params.id, z.object({ title: z.string().optional(), estMin: z.number().nullable().optional(), prioritize: z.boolean().optional(), kind: z.string().optional() }).parse(req.body))));
+  app.post('/api/homework/:id/complete', h((ctx, req) => hw.completeHomework(ctx, req.params.id, { force: bool(req.body?.force) })));
+  app.post('/api/homework/:id/reopen', h((ctx, req) => hw.reopenHomework(ctx, req.params.id)));
+  app.post('/api/homework/:id/assessment', h((ctx, req) => hw.setAssessmentMode(ctx, req.params.id, z.object({ on: z.boolean() }).parse(req.body).on)));
+  app.put('/api/homework/:id/rubric', h((ctx, req) => hw.setRubric(ctx, req.params.id, z.object({ sourceId: z.string().nullable() }).parse(req.body).sourceId)));
+  app.post('/api/homework/:id/time', h((ctx, req) => hw.logTime(ctx, req.params.id, z.object({ minutes: z.number(), questionId: z.string().optional() }).parse(req.body))));
+  app.delete('/api/homework/:id', h((ctx, req) => hw.deleteHomework(ctx, req.params.id)));
+  app.patch('/api/homework/questions/:id', h((ctx, req) => hw.updateQuestion(ctx, req.params.id, z.object({ prompt: z.string().optional(), label: z.string().optional(), acknowledge: z.boolean().optional(), estMin: z.number().nullable().optional(), kind: z.string().optional() }).parse(req.body))));
+  app.put('/api/homework/questions/:id/work', h((ctx, req) => hw.saveWork(ctx, req.params.id, z.object({ text: z.string(), baseVersion: z.number().int().optional(), origin: z.enum(['typed', 'pasted']).optional() }).parse(req.body))));
+  app.post('/api/homework/questions/:id/work/photo', h((ctx, req) => hw.useTranscribedWork(ctx, req.params.id, z.object({ sourceId: z.string() }).parse(req.body).sourceId)));
+  app.post('/api/homework/questions/:id/status', h((ctx, req) => hw.setQuestionStatus(ctx, req.params.id, z.object({ status: z.string(), note: z.string().optional() }).parse(req.body).status, req.body?.note)));
+  app.post('/api/homework/questions/:id/help', h((ctx, req) => hw.help(ctx, req.params.id, z.object({ action: z.string(), level: z.number().optional(), ask: z.string().optional(), confirm: z.boolean().optional() }).parse(req.body))));
+  app.get('/api/homework/questions/:id/help', h((ctx, req) => ({ help: hw.helpHistory(ctx, req.params.id) })));
+  app.post('/api/homework/questions/:id/check', h((ctx, req) => hw.check(ctx, req.params.id, { recheck: bool(req.body?.recheck) })));
+  app.get('/api/homework/questions/:id/checks', h((ctx, req) => ({ checks: hw.checkHistory(ctx, req.params.id) })));
+  app.get('/api/homework/questions/:id/topics', h((ctx, req) => ({ suggestions: hw.suggestConcepts(ctx, req.params.id) })));
+  app.put('/api/homework/questions/:id/topics', h((ctx, req) => hw.setQuestionConcepts(ctx, req.params.id, z.object({ conceptIds: z.array(z.string()).max(10).optional(), newTopic: z.string().optional() }).parse(req.body))));
+  app.post('/api/homework/questions/:id/fresh-check', h((ctx, req) => hw.requestFreshCheck(ctx, req.params.id)));
+  app.post('/api/homework/checks/:id/challenge', h((ctx, req) => hw.challengeCheck(ctx, req.params.id, z.object({ reason: z.string(), note: z.string().optional() }).parse(req.body))));
 
   /* ---------------- static client ---------------- */
   const dist = resolve(process.cwd(), 'dist');

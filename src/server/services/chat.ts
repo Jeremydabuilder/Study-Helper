@@ -35,20 +35,20 @@ const REL = (n: string) => n.replace(/\s+/g, ' ').trim();
 interface Piece { type: string; label: string; text: string; detail?: string }
 
 /** Retrieve only what is relevant to this message. With nothing relevant the context is small (or empty) and the reply says so. */
-export function buildStudyContext(ctx: Ctx, o: { query: string; subjectId?: string | null; sourceId?: string | null }) {
+export function buildStudyContext(ctx: Ctx, o: { query: string; subjectId?: string | null; sourceId?: string | null; /** homework help: the assignment sheet itself is not study material, and deadlines are not relevant to a question */ homework?: boolean }) {
   const pieces: Piece[] = [];
   const profile = getProfile(ctx.db);
   if ((profile.grade ?? '').trim() || (profile.about ?? '').trim()) pieces.push({ type: 'profile', label: 'Your profile (what you told the app)', text: `Student-stated: grade/course "${REL(profile.grade ?? '')}"; about: "${REL(profile.about ?? '')}"` });
 
   // deadlines the student entered or confirmed (not invented, not read from the calendar by chat)
-  const upcoming = upcomingItems(ctx, 30).slice(0, 12);
+  const upcoming = o.homework ? [] : upcomingItems(ctx, 30).slice(0, 12);
   const relItems = new Set(rank(o.query, upcoming, (i) => `${i.title} ${i.subjectName ?? ''} ${i.typeLabel}`, 3).map((x) => x.item.id));
   for (const i of upcoming.filter((i) => relItems.has(i.id) || (i.daysLeft !== null && i.daysLeft <= 7)).slice(0, 3))
     pieces.push({ type: 'deadline', label: `${i.typeLabel}: ${i.title}`, text: `${i.typeLabel} "${i.title}"${i.subjectName ? ` (${i.subjectName})` : ''}, due: ${i.dueLabel}` });
 
   // the reading the conversation is about, or readings that match the question
   const reading = o.sourceId ? ctx.db.get<any>("SELECT s.id, s.title, s.text, s.ocr FROM sources s WHERE s.id = ? AND s.status = 'confirmed'", o.sourceId) : null;
-  const sources = ctx.db.all<any>("SELECT s.id, s.title, s.text, s.ocr FROM sources s JOIN subjects sub ON sub.id = s.subject_id WHERE s.status = 'confirmed' AND sub.archived = 0 AND (? IS NULL OR s.subject_id = ?)", o.subjectId ?? null, o.subjectId ?? null);
+  const sources = ctx.db.all<any>(`SELECT s.id, s.title, s.text, s.ocr FROM sources s JOIN subjects sub ON sub.id = s.subject_id WHERE s.status = 'confirmed' AND sub.archived = 0 AND (? IS NULL OR s.subject_id = ?)${o.homework ? " AND s.kind NOT IN ('teacher_instructions','rubric')" : ''}`, o.subjectId ?? null, o.subjectId ?? null);
   const annRows = ctx.db.all<any>(`SELECT a.*, s.title AS reading_title FROM annotations a JOIN sources s ON s.id = a.source_id WHERE s.status = 'confirmed' ${reading ? 'AND a.source_id = ?' : ''}`, ...(reading ? [reading.id] : []));
   const pickAnn = reading && !tokens(o.query).length ? annRows.slice(0, 5) : rank(o.query, annRows, (a) => `${a.quote} ${a.note} ${a.category}`, reading ? 5 : 3).map((x) => x.item);
   if (reading) {

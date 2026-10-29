@@ -93,3 +93,34 @@ export const AnnotationFeedback = z.object({
 });
 export type AnnotationFeedback = z.infer<typeof AnnotationFeedback>;
 export const ChatReply = z.object({ reply: z.string().trim().min(1).max(8000) });
+
+/** Homework help. `basis` says what the reply rests on, so the student can tell the assignment's own material from general background. */
+export const HomeworkReply = z.object({
+  text: z.string().trim().min(3).max(4000),
+  /** Only when a missing detail would change the help (for example an unreadable part of the question). Otherwise null. */
+  clarifying_question: z.string().max(300).nullable().default(null),
+  basis: z.enum(['source', 'general', 'mixed', 'none']).default('general'),
+  uncertain: z.string().max(400).nullable().default(null),
+  /** worked solutions of math questions: the final answer on its own line, so the app can verify it */
+  final_answer: z.string().max(200).nullable().default(null),
+});
+export type HomeworkReply = z.infer<typeof HomeworkReply>;
+
+export const HomeworkCheck = z.object({
+  parts: z.array(z.object({
+    label: z.string().max(60),
+    /** words copied from the student's own work that this judgement is about */
+    excerpt: z.string().max(400),
+    verdict: z.enum(['correct', 'needs_revision', 'uncertain']),
+    why: z.string().max(500),
+    next_action: z.string().max(300).default(''),
+    basis: z.enum(['source', 'general', 'rubric', 'student_work']).default('general'),
+    /** words copied from the provided source that support the judgement, when it rests on the source */
+    evidence_quote: z.string().max(400).optional(),
+    kind: z.enum(['quotation', 'paraphrase', 'interpretation', 'claim', 'other']).default('other'),
+  })).max(12),
+  not_checked: z.array(z.string().max(200)).max(8).default([]),
+  overall: z.string().max(500).default(''),
+  suggested_edits: z.array(z.object({ original: z.string().max(300), suggestion: z.string().max(400), reason: z.string().max(200) })).max(5).default([]),
+});
+export type HomeworkCheck = z.infer<typeof HomeworkCheck>;
