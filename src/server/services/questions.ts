@@ -95,7 +95,7 @@ export async function generateQuestions(ctx: Ctx, conceptId: string, o: GenOpts)
   const math = isMathSkill(c.skill_tag);
   // Math skills use verified deterministic generators: no model call, unlimited fresh variants.
   const provider = math || o.useOffline ? ctx.offline : ctx.ai;
-  const chunkRows = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id = ch.source_id WHERE s.subject_id = ? AND s.status = \'confirmed\' ORDER BY ch.source_id, ch.idx', c.subject_id);
+  const chunkRows = ctx.db.all<any>('SELECT ch.id, ch.label, ch.text, ch.source_id, ch.char_start FROM source_chunks ch JOIN sources s ON s.id = ch.source_id WHERE s.subject_id = ? AND s.status = \'confirmed\' AND s.kind != \'student_work\' ORDER BY ch.source_id, ch.idx', c.subject_id);
   const refChunkIds = ctx.db.all<any>('SELECT chunk_id FROM concept_refs WHERE concept_id = ? AND chunk_id IS NOT NULL AND stale = 0', conceptId).map((r) => r.chunk_id);
   const memories = ctx.db.all<any>('SELECT id, kind, text, subject_id AS subjectId, concept_id AS conceptId FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 30');
   const mis = ctx.db.all<any>("SELECT description, count FROM misconceptions WHERE concept_id = ? AND status = 'active' ORDER BY count DESC", conceptId);

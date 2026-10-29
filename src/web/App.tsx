@@ -17,11 +17,12 @@ import { HostedContext } from './hosted';
 import { Readings, Outline } from './pages/Readings';
 import { Reader } from './pages/Reader';
 import { Chat } from './pages/Chat';
+import { HomeworkDetail, HomeworkFrom, HomeworkList, NewHomework, WorkPhoto } from './pages/Homework';
 import { Join } from './pages/Join';
 import { Privacy } from './pages/Privacy';
 import { ReportProblem } from './pages/Report';
 
-const NAV: [string, string][] = [['/', 'Today'], ['/subjects', 'Subjects'], ['/readings', 'Readings'], ['/chat', 'Chat'], ['/plan', 'Plan'], ['/progress', 'Progress'], ['/memory', 'Memory'], ['/settings', 'Settings']];
+const NAV: [string, string][] = [['/', 'Today'], ['/homework', 'Homework'], ['/subjects', 'Subjects'], ['/readings', 'Readings'], ['/chat', 'Chat'], ['/plan', 'Plan'], ['/progress', 'Progress'], ['/memory', 'Memory'], ['/settings', 'Settings']];
 
 /**
  * Local mode has no /api/session and goes straight to the app. Hosted mode asks who is signed in first and shows the invitation / sign-in page otherwise.
@@ -54,6 +55,11 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
   else if (path.startsWith('/read/')) page = <Reader id={path.split('/')[2]} go={go} />;
   else if (path === '/readings') page = <Readings go={go} />;
   else if (path.startsWith('/outline/')) page = <Outline id={path.split('/')[2]} go={go} />;
+  else if (path === '/homework') page = <HomeworkList go={go} />;
+  else if (path === '/homework/new') page = <NewHomework go={go} />;
+  else if (path.startsWith('/homework/from/')) page = <HomeworkFrom sourceId={path.split('/')[3]} go={go} />;
+  else if (path.startsWith('/homework/photo/')) page = <WorkPhoto hwId={path.split('/')[3]} qid={path.split('/')[4]} go={go} />;
+  else if (path.startsWith('/homework/')) page = <HomeworkDetail id={path.split('/')[2]} go={go} />;
   else if (path === '/chat') page = <Chat go={go} />;
   else if (path === '/start') page = <StartFlow go={go} />;
   else if (path.startsWith('/prepare/')) page = <Prepare sourceId={path.split('/')[2]} go={go} />;
@@ -91,7 +97,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
           {hosted && onSignOut && <button className="btn ghost small signout" onClick={onSignOut}>Sign out</button>}
         </div>
       </header>
-      <main id="main" tabIndex={-1} className={path.startsWith('/read/') ? 'wide' : undefined}>{page}</main>
+      <main id="main" tabIndex={-1} className={path.startsWith('/read/') || /^\/homework\/[^/]+$/.test(path) && path !== '/homework/new' ? 'wide' : undefined}>{page}</main>
       {hosted && <footer className="foot small muted"><a href="#/privacy">Privacy</a> · <ReportProblem /></footer>}
     </div>
     </HostedContext.Provider>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ApiError, post, setWorkspace, useApi } from '../api';
 import { Chip, ErrorBox, Modal, Spinner } from '../ui';
 import { RecommendationCard } from './Recommendation';
+import { NextCard as HomeworkNext } from './Homework';
 
 const WEIGHT_LABEL: Record<string, string> = { urgency: 'Deadline pressure', weakness: 'Needs work', overdue: 'Review overdue', prereq: 'Underpins other topics', unassessed: 'Not assessed yet', repair: 'Unresolved mistake' };
 
@@ -13,6 +14,7 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
   const [err, setErr] = useState<ApiError | null>(null);
   const [conflict, setConflict] = useState<any>(null);
   const status = useApi<any>('/status');
+  const hwNext = useApi<any>('/homework/next');
   const assistant = useApi<any>(meta?.hosted ? '/account/assistant' : null);
   const t = today.data;
 
@@ -48,6 +50,7 @@ export function Today({ go, meta }: { go: (p: string) => void; meta: any }) {
       {t.welcomeBack && <div className="notice info" role="status">{t.welcomeBack.message}</div>}
       {err && <ErrorBox error={err} onRetry={() => start()} />}
 
+      {hwNext.data?.task && <HomeworkNext next={hwNext.data} go={go} onChange={hwNext.reload} />}
       <RecommendationCard t={t} mins={mins} setMinutes={(m: number) => { setMinutes(m); setCustom(''); }} go={go} onSample={() => setWorkspace('demo')} />
 
       {!t.empty && t.plan.tasks.length > 0 && (

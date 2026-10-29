@@ -51,7 +51,7 @@ export function addSource(ctx: Ctx, subjectId: string, b: { title?: string; kind
   const hash = createHash('sha256').update(text.trim()).digest('hex');
   const dup = ctx.db.get<{ id: string }>('SELECT id FROM sources WHERE subject_id = ? AND content_hash = ?', subjectId, hash);
   if (dup) return { id: dup.id, duplicate: true };
-  const kinds = ['notes', 'review_packet', 'rubric', 'teacher_instructions', 'passage', 'textbook', 'other'];
+  const kinds = ['notes', 'review_packet', 'rubric', 'teacher_instructions', 'passage', 'textbook', 'student_work', 'other'];
   const id = uid();
   const chunks = chunkText(text, { ocr: !!b.ocr });
   ctx.db.tx(() => {

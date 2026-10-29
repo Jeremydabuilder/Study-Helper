@@ -167,3 +167,9 @@ main.wide { max-width: 1180px; }
 .linklike { background: none; border: none; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
 .join .seg { width: 100%; } .join .seg button { flex: 1; }
 @media (max-width: 640px) { .topbar-in .signout { margin-left: auto; } .nav { order: 3; } }
+
+/* homework workspace */
+.wide-page { max-width: 1180px; margin: 0 auto; }
+.wide-page textarea, .wide-page input[type=text], .wide-page input:not([type]) { width: 100%; }
+.wide-page pre { font-family: inherit; }
+.save-status { min-height: 2.6rem; align-content: center; } /* the status text changes while someone is tapping the buttons below: it must not move them */

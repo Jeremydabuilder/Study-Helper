@@ -7,7 +7,7 @@ import { ensureFlags } from './sourceSafety';
 
 const MAX_PAGE_CHARS = 40_000;
 const NO_TEXT_BELOW = 15;
-const KINDS = ['notes', 'review_packet', 'rubric', 'teacher_instructions', 'passage', 'textbook', 'other'];
+const KINDS = ['notes', 'review_packet', 'rubric', 'teacher_instructions', 'passage', 'textbook', 'student_work', 'other'];
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 
 interface Extracted { kind: FileKind; pages: PdfPage[]; method: 'pdf_text' | 'none' }

@@ -58,6 +58,8 @@ export function ReviewSource({ id, go }: { id: string; go: (p: string) => void }
   const markChecked = (p: number) => run('Saving…', async () => { await post(`/sources/${id}/pages/reviewed`, { pages: [p] }); await rv.reload(); });
   const afterConfirm = async (r: any) => {
     if (r?.replaced) { await rv.reload(); setNote(`The new file is now in use. ${r.reconcile ? `${r.reconcile.refsRelinked} concept quote${r.reconcile.refsRelinked === 1 ? '' : 's'} re-linked, ${r.reconcile.refsStale} no longer found, ${r.reconcile.questionsRetired} question${r.reconcile.questionsRetired === 1 ? '' : 's'} retired (past answers kept).` : ''}`); return; }
+    if (flow.get('hw')) { go(`/homework/from/${id}`); return; }
+    if (flow.get('work')) { try { await post(`/homework/questions/${flow.get('work')}/work/photo`, { sourceId: id }); go(`/homework/${flow.get('hwid')}`); } catch (e) { await rv.reload(); setErr(e as ApiError); } return; }
     if (inFlow) { go(`/prepare/${id}?goal=${flow.get('goal')}&min=${flow.get('min') ?? 20}`); return; }
     try { const x = await post(`/sources/${id}/extract`, {}); try { sessionStorage.setItem('sh.flash', `Read ${d.pages.length} page${d.pages.length === 1 ? '' : 's'} and found ${x.created} proposed concept${x.created === 1 ? '' : 's'}. Check them below — nothing is practised until you confirm.`); } catch { /* no flash */ } go(`/subjects/${d.subjectId}`); }
     catch (e) { await rv.reload(); setErr(e as ApiError); }

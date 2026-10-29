@@ -186,3 +186,7 @@ Key decisions: concept state is a **replay of the attempt log** (correcting a gr
 4. **You:** if you want automatic reading of scans, enable `AI_OCR=anthropic` and try one page; check the result against the original before trusting it. Classroom import with its own explicit read scopes.
 5. "Add study sessions to Calendar" with separate write consent and an exact-event preview.
 6. Authentication + per-user isolation before any hosting.
+
+
+## Homework helper
+Add an assignment, work on it with graduated help, check your answers, and review later. See [docs/HOMEWORK.md](docs/HOMEWORK.md).

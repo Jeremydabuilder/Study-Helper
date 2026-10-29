@@ -48,7 +48,7 @@ export function buildStudyContext(ctx: Ctx, o: { query: string; subjectId?: stri
 
   // the reading the conversation is about, or readings that match the question
   const reading = o.sourceId ? ctx.db.get<any>("SELECT s.id, s.title, s.text, s.ocr FROM sources s WHERE s.id = ? AND s.status = 'confirmed'", o.sourceId) : null;
-  const sources = ctx.db.all<any>(`SELECT s.id, s.title, s.text, s.ocr FROM sources s JOIN subjects sub ON sub.id = s.subject_id WHERE s.status = 'confirmed' AND sub.archived = 0 AND (? IS NULL OR s.subject_id = ?)${o.homework ? " AND s.kind NOT IN ('teacher_instructions','rubric')" : ''}`, o.subjectId ?? null, o.subjectId ?? null);
+  const sources = ctx.db.all<any>(`SELECT s.id, s.title, s.text, s.ocr FROM sources s JOIN subjects sub ON sub.id = s.subject_id WHERE s.status = 'confirmed' AND sub.archived = 0 AND (? IS NULL OR s.subject_id = ?)${o.homework ? " AND s.kind NOT IN ('teacher_instructions','rubric','student_work')" : " AND s.kind != 'student_work'"}`, o.subjectId ?? null, o.subjectId ?? null);
   const annRows = ctx.db.all<any>(`SELECT a.*, s.title AS reading_title FROM annotations a JOIN sources s ON s.id = a.source_id WHERE s.status = 'confirmed' ${reading ? 'AND a.source_id = ?' : ''}`, ...(reading ? [reading.id] : []));
   const pickAnn = reading && !tokens(o.query).length ? annRows.slice(0, 5) : rank(o.query, annRows, (a) => `${a.quote} ${a.note} ${a.category}`, reading ? 5 : 3).map((x) => x.item);
   if (reading) {
