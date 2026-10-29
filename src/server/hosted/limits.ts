@@ -29,6 +29,7 @@ export const DEFAULT_LIMITS: Limits = {
 
 const DAY_MS = 86_400_000;
 const LOCK_LEDGER = 727_002;
+const MIN_REQUEST_USD = 0.01; // about what one ordinary request reserves
 
 /** Shown to students. It never names operators, models, keys or other students. */
 const MSG = {
@@ -94,8 +95,9 @@ export async function assistantState(pool: Pool, userId: string, limits: Limits,
   const since = new Date(now - DAY_MS);
   const mine = (await pool.query('SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held FROM ai_requests WHERE user_id = $1 AND created_at > $2', [userId, since])).rows[0];
   const all = (await pool.query('SELECT COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held FROM ai_requests WHERE created_at > $1', [since])).rows[0];
-  const globalPaused = all.held >= limits.globalDailyUsd;
-  const userPaused = mine.n >= limits.userDailyRequests || mine.held >= limits.userDailyUsd;
+  // "paused" when not even one more typical request would fit
+  const globalPaused = limits.globalDailyUsd - all.held < MIN_REQUEST_USD;
+  const userPaused = mine.n >= limits.userDailyRequests || limits.userDailyUsd - mine.held < MIN_REQUEST_USD;
   return { state: globalPaused ? 'paused_global' : userPaused ? 'paused_user' : 'available', usedRequests: mine.n, dailyRequests: limits.userDailyRequests } as const;
 }
 

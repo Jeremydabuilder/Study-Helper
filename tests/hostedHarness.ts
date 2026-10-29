@@ -97,6 +97,12 @@ export class Student {
 
   /** Full sign-up/sign-in through the fake identity provider, exactly as a browser would do it. */
   async signInWithIdp(code?: string): Promise<{ ok: boolean; location: string | null }> {
+    // the fake identity provider decides who signs in from one shared variable, so sign-ins through it are taken one at a time
+    const prev = this.h.idpQueue; let done!: () => void; this.h.idpQueue = new Promise<void>((r) => (done = r));
+    await prev;
+    try { return await this.signInWithIdpNow(code); } finally { done(); }
+  }
+  private async signInWithIdpNow(code?: string): Promise<{ ok: boolean; location: string | null }> {
     if (code) { const s = await this.post('/api/invite/start', { code }); if (s.status !== 200) return { ok: false, location: `invite:${s.body?.error?.code}` }; }
     this.h.idp.nextEmail = this.email;
     const start = await this.post('/api/auth/sign-in/social', { provider: 'google', callbackURL: '/', errorCallbackURL: '/?signin=failed', newUserCallbackURL: '/' });
@@ -119,7 +125,7 @@ export class Student {
 export class HostedHarness {
   hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
   now = () => this.clock.now;
-  students: Student[] = [];
+  students: Student[] = []; idpQueue: Promise<void> = Promise.resolve();
   static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
     const h = new HostedHarness();
     h.db = o.db ?? await createTestDb(); h.idp = await new FakeIdp().start();

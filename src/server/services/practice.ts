@@ -374,7 +374,22 @@ function alternativeExplanation(ctx: Ctx, q: QuestionRow) {
   return parts.join(' ');
 }
 
-export async function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput) {
+const inflightAnswers = new Map<string, Promise<any>>();
+/**
+ * Submissions with the same token that arrive while the first is still being graded (a double click, a retry after a dropped connection) share that one grading:
+ * the answer is recorded once and the provider is called once. Later duplicates are answered from the saved attempt.
+ */
+export function submitAnswer(ctx: Ctx, sessionId: string, inp: AnswerInput) {
+  if (!inp.clientToken) return submitAnswerOnce(ctx, sessionId, inp);
+  const key = `${ctx.db.path}|${inp.clientToken}`;
+  const running = inflightAnswers.get(key);
+  if (running) return running.then((r) => ({ ...r, duplicate: true }));
+  const p = submitAnswerOnce(ctx, sessionId, inp).finally(() => inflightAnswers.delete(key));
+  inflightAnswers.set(key, p);
+  return p;
+}
+
+async function submitAnswerOnce(ctx: Ctx, sessionId: string, inp: AnswerInput) {
   if (!inp.clientToken) throw new HttpError(400, 'invalid', 'Missing submission token.');
   // duplicate submission (double click / retry after network error): return the original result
   const dup = ctx.db.get<any>('SELECT * FROM attempts WHERE client_token = ?', inp.clientToken);
