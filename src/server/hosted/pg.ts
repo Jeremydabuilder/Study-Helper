@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -37,7 +37,8 @@ export async function migrateControl(pool: Pool): Promise<string[]> {
     await c.query('SELECT pg_advisory_lock(727001)');
     await c.query('CREATE TABLE IF NOT EXISTS control_migrations (version INT PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())');
     const done = new Set((await c.query('SELECT version FROM control_migrations')).rows.map((r) => r.version as number));
-    const dir = join(here, '..', 'control-migrations');
+    // next to this file in the source tree's sibling folder, or next to the bundle in production
+    const dir = [join(here, '..', 'control-migrations'), join(here, 'control-migrations')].find((d) => existsSync(d))!;
     for (const f of readdirSync(dir).filter((x) => /^\d+_.+\.sql$/.test(x)).sort()) {
       const version = parseInt(f, 10);
       if (done.has(version)) continue;

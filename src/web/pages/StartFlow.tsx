@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useHosted } from '../hosted';
 import { ApiError, post, upload, useApi } from '../api';
 import { Chip, ErrorBox, Field, Spinner } from '../ui';
 
@@ -10,6 +11,7 @@ const GOALS: [string, string, string][] = [
 
 /** Upload or select material → choose goal and time → review only what needs a look → start. One path. */
 export function StartFlow({ go }: { go: (p: string) => void }) {
+  const hosted = useHosted();
   const subjects = useApi<any[]>('/subjects');
   const [goal, setGoal] = useState('understand');
   const [minutes, setMinutes] = useState(20);
@@ -35,8 +37,8 @@ export function StartFlow({ go }: { go: (p: string) => void }) {
     try {
       if (goal === 'wrong') { const r = await post('/sessions', { goal: 'wrong', minutes }); go(`/study/${r.id}`); return; }
       let sid = subjectId;
-      if (!sid) { setBusy('Creating the subject…'); sid = (await post('/subjects', { name: newName.trim() })).id; }
-      if (how === 'upload' && file) { setBusy('Reading the file on this computer…'); const r = await upload(`/subjects/${sid}/files?title=${encodeURIComponent(title)}`, file); go(`/review/${r.id}?${q}`); return; }
+      if (!sid) { setBusy('Creating the subject…'); sid = (await post('/subjects', { name: newName.trim() })).id; setSubjectId(sid); setNewName(''); } // kept, so a retry after a failed upload does not create a second subject
+      if (how === 'upload' && file) { setBusy('Reading the file…'); const r = await upload(`/subjects/${sid}/files?title=${encodeURIComponent(title)}`, file); go(`/review/${r.id}?${q}`); return; }
       if (how === 'paste') { setBusy('Saving…'); const r = await post(`/subjects/${sid}/sources`, { title, text, origin: 'pasted' }); go(`/prepare/${r.id}?${q}`); return; }
       go(`/prepare/${existing}?${q}`);
     } catch (e) { setErr(e as ApiError); } finally { setBusy(null); }
@@ -68,7 +70,7 @@ export function StartFlow({ go }: { go: (p: string) => void }) {
           {how === 'upload' && <div className="mt-s">
             <label className="btn">Choose a PDF, PNG, JPEG or WebP<input type="file" hidden accept="application/pdf,image/png,image/jpeg,image/webp,.pdf,.png,.jpg,.jpeg,.webp" onChange={(e) => { const f = e.target.files?.[0] ?? null; setFile(f); if (f && !title) setTitle(f.name.replace(/\.[^.]+$/, '')); }} /></label>
             {file && <span className="small"> {file.name} · {(file.size / 1024).toFixed(0)} KB</span>}
-            <p className="small muted mt-s"><strong>Files stay on this computer.</strong> Text PDFs are read locally. Scanned pages and screenshots can be read automatically only if you turn that on in Settings; you would see exactly what is sent first. Otherwise you type them beside the original.</p></div>}
+            <p className="small muted mt-s">{hosted ? <><strong>Your files are stored privately in your account.</strong> Text PDFs are read on the server and are not sent to the study assistant just to be read. Scanned pages and screenshots are only read automatically if the site has that turned on, and you approve what is sent each time; otherwise you type them beside the original.</> : <><strong>Files stay on this computer.</strong> Text PDFs are read locally. Scanned pages and screenshots can be read automatically only if you turn that on in Settings; you would see exactly what is sent first. Otherwise you type them beside the original.</>}</p></div>}
           {how === 'paste' && <div className="mt-s"><Field label="Title (optional)"><input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} /></Field>
             <Field label="Paste text"><textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste your notes, packet, passage, or rubric…" /></Field></div>}
           {how === 'existing' && <div className="mt-s">{sources.loading && !sources.data ? <Spinner /> :

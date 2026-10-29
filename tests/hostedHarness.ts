@@ -63,13 +63,37 @@ export class ScriptedLlm implements LLMTransport {
     const wrap = (text: string) => ({ text, model: r.model, stopReason: 'end_turn', requestId: 'req_test', usage });
     if (u.includes('JSON shape: {"reply":""}')) return wrap(j(this.replies.chat ?? { reply: 'Here is a hint.' }));
     if (u.includes('JSON shape: {"answer":""}')) return wrap(j({ answer: 'It is explained in your notes.' }));
-    if (u.includes('"concepts":[{')) return wrap(j(this.replies.extract ?? { concepts: [{ name: 'Photosynthesis', summary: 'Plants turn light, water and carbon dioxide into glucose and oxygen.', quotes: ['turn light, water and carbon dioxide into glucose and oxygen'] }] }));
-    if (u.includes('"questions":[{')) return wrap(j(this.replies.generate ?? { questions: [{ kind: 'short_answer', prompt: 'What do plants make from light, water and carbon dioxide?', rubric: { key_points: [{ point: 'Glucose and oxygen', keywords: ['glucose', 'oxygen'] }] }, hints: ['Think about what plants produce.'], worked_example: 'w', explanation: 'Plants make glucose and oxygen.', difficulty: 1, source_quote: 'turn light, water and carbon dioxide into glucose and oxygen' }] }));
-    if (u.includes('"items":[{"index"')) return wrap(j({ items: [{ index: 0, verdict: 'supported', note: 'ok' }] }));
-    if (u.includes('"correctness":0.0-1.0')) return wrap(j(this.replies.grade ?? { correctness: 1, confidence: 'high', feedback: 'Correct: glucose and oxygen.', points: [{ point: 'Glucose and oxygen', met: true }], mistake_kind: 'none' }));
+    if (u.includes('"concepts":[{')) return wrap(j(this.replies.extract ?? { concepts: [
+      { name: 'Photosynthesis', summary: 'Plants turn light, water and carbon dioxide into glucose and oxygen.', quotes: ['turn light, water and carbon dioxide into glucose and oxygen'] },
+      { name: 'Chlorophyll', summary: 'The green pigment in chloroplasts that absorbs light energy.', quotes: ['Chlorophyll is the green pigment in chloroplasts that absorbs light energy'] }] }));
+    if (u.includes('"questions":[{')) {
+      if (this.replies.generate) return wrap(j(this.replies.generate));
+      const fresh = BANK.filter((q) => !u.includes(q.prompt)).slice(0, 3);
+      return wrap(j({ questions: fresh.length ? fresh : BANK.slice(0, 1) }));
+    }
+    if (u.includes('"items":[{"index"')) return wrap(j({ items: [{ index: 0, verdict: 'supported', note: 'ok' }, { index: 1, verdict: 'supported', note: 'ok' }, { index: 2, verdict: 'supported', note: 'ok' }] }));
+    if (u.includes('"correctness":0.0-1.0')) {
+      if (this.replies.grade) return wrap(j(this.replies.grade));
+      const ans = (u.match(/<student_answer>([\s\S]*?)<\/student_answer>/)?.[1] ?? '').toLowerCase();
+      const good = /glucose|oxygen|chlorophyll|chloroplast|absorb|light|water|carbon/.test(ans) && !/wrong|nothing|dunno/.test(ans);
+      return wrap(j(good ? { correctness: 1, confidence: 'high', feedback: 'Correct: that matches the key idea in your notes.', points: [{ point: 'Key idea', met: true }], mistake_kind: 'none' }
+        : { correctness: 0.1, confidence: 'high', feedback: 'Not quite: the notes say the answer involves the key terms of photosynthesis.', points: [{ point: 'Key idea', met: false }], mistake_kind: 'missing_knowledge' }));
+    }
     return wrap(j({}));
   }
 }
+
+const Q = (prompt: string, keys: string[], quote: string, extra: object = {}) => ({ kind: 'short_answer', prompt, rubric: { key_points: [{ point: keys.join(' and '), keywords: keys }] }, hints: ['Look back at your notes.', 'It is one of the key terms.'], worked_example: 'See the notes.', explanation: `The notes say: ${quote}.`, difficulty: 1, source_quote: quote, ...extra });
+export const BANK = [
+  Q('What do plants make from light, water and carbon dioxide?', ['glucose', 'oxygen'], 'turn light, water and carbon dioxide into glucose and oxygen'),
+  Q('Which pigment in chloroplasts absorbs light energy?', ['chlorophyll'], 'Chlorophyll is the green pigment in chloroplasts that absorbs light energy'),
+  Q('Name the three things plants take in for photosynthesis.', ['light', 'water', 'carbon dioxide'], 'turn light, water and carbon dioxide into glucose and oxygen'),
+  Q('What gas do plants give off during photosynthesis?', ['oxygen'], 'into glucose and oxygen'),
+  Q('Where in a plant cell does chlorophyll sit?', ['chloroplasts'], 'green pigment in chloroplasts'),
+  Q('Why is chlorophyll needed for photosynthesis?', ['absorbs light energy'], 'absorbs light energy'),
+  Q('What sugar do plants produce in photosynthesis?', ['glucose'], 'into glucose and oxygen'),
+  Q('What colour is chlorophyll?', ['green'], 'Chlorophyll is the green pigment'),
+];
 
 export interface Resp { status: number; body: any; headers: Headers }
 export class Student {
@@ -126,10 +150,10 @@ export class HostedHarness {
   hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
   now = () => this.clock.now;
   students: Student[] = []; idpQueue: Promise<void> = Promise.resolve();
-  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
+  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; port?: number; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
     const h = new HostedHarness();
     h.db = o.db ?? await createTestDb(); h.idp = await new FakeIdp().start();
-    h.port = await freePort(); h.url = `http://127.0.0.1:${h.port}`; h.dir = o.dir ?? mkdtempSync(join(tmpdir(), 'sh-hosted-'));
+    h.port = o.port ?? await freePort(); h.url = `http://127.0.0.1:${h.port}`; h.dir = o.dir ?? mkdtempSync(join(tmpdir(), 'sh-hosted-'));
     const env: Record<string, string> = {
       APP_ENV: 'test', DATABASE_URL: h.db.url, PUBLIC_URL: h.url, BETTER_AUTH_SECRET: 'a'.repeat(20) + 'B'.repeat(20), APP_SECRET: 'c'.repeat(20) + 'D'.repeat(20),
       ...(o.oidc === false ? {} : { AUTH_OIDC_CLIENT_ID: 'test-client', AUTH_OIDC_CLIENT_SECRET: 'test-secret', AUTH_OIDC_AUTHORIZATION_URL: `${h.idp.base}/authorize`, AUTH_OIDC_TOKEN_URL: `${h.idp.base}/token`, AUTH_OIDC_USERINFO_URL: `${h.idp.base}/userinfo` }),

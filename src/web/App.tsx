@@ -13,6 +13,7 @@ import { Progress } from './pages/Progress';
 import { Memory } from './pages/Memory';
 import { Settings } from './pages/Settings';
 import { ErrorBox } from './ui';
+import { HostedContext } from './hosted';
 import { Readings, Outline } from './pages/Readings';
 import { Reader } from './pages/Reader';
 import { Chat } from './pages/Chat';
@@ -68,6 +69,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
 
   const studying = path.startsWith('/study/');
   return (
+    <HostedContext.Provider value={!!hosted}>
     <div className="shell">
       <a className="skip" href="#main">Skip to content</a>
       {ws === 'demo' && (
@@ -92,5 +94,6 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
       <main id="main" tabIndex={-1} className={path.startsWith('/read/') ? 'wide' : undefined}>{page}</main>
       {hosted && <footer className="foot small muted"><a href="#/privacy">Privacy</a> · <ReportProblem /></footer>}
     </div>
+    </HostedContext.Provider>
   );
 }

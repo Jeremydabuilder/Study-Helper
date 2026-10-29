@@ -50,7 +50,7 @@ export function CalendarPage({ go, query }: { go: (p: string) => void; query: st
         {c.demo && <div className="notice warn small">This is a <strong>sample calendar</strong> with made-up events. It never contacts Google.</div>}
         <p className="muted">I can read events from calendars you choose, find possible tests, quizzes, homework and projects, and plan study time around your classes and tennis.</p>
         <div className="notice info small"><strong>What Calendar can’t tell me:</strong> {c.limitation}</div>
-        <ul className="small"><li><strong>Permission requested:</strong> {c.permissions}</li><li>Your Google sign-in tokens stay on this computer’s server, encrypted. They are never sent to your browser.</li><li>Your study schedule stays inside this app. Nothing is added to Google Calendar.</li></ul>
+        <ul className="small"><li><strong>Permission requested:</strong> {c.permissions}</li><li>Your Google access is stored encrypted on the server and is tied to your account only. It is never sent to your browser.</li><li>Your study schedule stays inside this app. Nothing is added to Google Calendar.</li></ul>
 
         {c.status === 'reauth_required' && <div className="notice bad" role="alert"><strong>Google needs you to reconnect.</strong> {c.lastError} Your imported events and items are still here.</div>}
         {c.status === 'error' && c.lastError && <div className="notice warn" role="alert">{c.lastError}</div>}

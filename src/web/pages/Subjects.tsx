@@ -1,3 +1,4 @@
+import { useHosted } from '../hosted';
 import { useState } from 'react';
 import { ApiError, del, patch, post, put, upload, useApi, fmtDate } from '../api';
 import { Chip, Empty, ErrorBox, Field, LevelChip, Modal, Spinner, SUPPORT_TEXT } from '../ui';
@@ -38,6 +39,7 @@ export function Subjects({ go }: { go: (p: string) => void }) {
 const KINDS: [string, string][] = [['notes', 'Class notes'], ['review_packet', 'Review packet'], ['passage', 'Reading passage'], ['rubric', 'Rubric / grading criteria'], ['teacher_instructions', 'Teacher instructions'], ['textbook', 'Textbook excerpt'], ['other', 'Other']];
 
 export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void }) {
+  const hosted = useHosted();
   const ov = useApi<any>(`/subjects/${id}`);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -90,7 +92,7 @@ export function SubjectDetail({ id, go }: { id: string; go: (p: string) => void 
             ))}
           </ul>
         )}
-        <p className="small muted mt-s">You can paste text, add a .txt/.md file, upload a <strong>PDF</strong> (text is read on this computer, page by page, and you check it first), or upload a <strong>PNG/JPEG/WebP screenshot</strong> or a scanned PDF to type out beside the original. Automatic reading of scans is off unless you turn it on in <code>.env</code> (Anthropic only, and you approve what is sent each time); by default nothing is sent to an outside service to read your files.</p>
+        <p className="small muted mt-s">You can paste text, add a .txt/.md file, upload a <strong>PDF</strong> (text is read {hosted ? 'on the server' : 'on this computer'}, page by page, and you check it first), or upload a <strong>PNG/JPEG/WebP screenshot</strong> or a scanned PDF to type out beside the original. {hosted ? 'Scans are only read automatically if the site has that turned on, and you approve what is sent each time; otherwise nothing is sent to an outside service to read your files.' : <>Automatic reading of scans is off unless you turn it on in <code>.env</code> (Anthropic only, and you approve what is sent each time); by default nothing is sent to an outside service to read your files.</>}</p>
       </section>
 
       {d.heldQuestions?.length > 0 && <HeldQuestions items={d.heldQuestions} reload={ov.reload} />}
@@ -180,6 +182,7 @@ function ConceptRow({ c, all, selectable, sel, setSel, reload, onPractice }: any
 }
 
 function AddMaterial({ subjectId, onClose, onAdded, onUploaded }: { subjectId: string; onClose: () => void; onAdded: (sourceId: string, dup: boolean) => void; onUploaded: (sourceId: string, dup: boolean) => void }) {
+  const hosted = useHosted();
   const [title, setTitle] = useState(''), [kind, setKind] = useState('notes'), [text, setText] = useState('');
   const [err, setErr] = useState<ApiError | null>(null);
   const [saving, setSaving] = useState(false);
@@ -206,7 +209,7 @@ function AddMaterial({ subjectId, onClose, onAdded, onUploaded }: { subjectId: s
       <Field label="Paste text" hint="Tip: lines like “Term: definition”, headings, and “Page 2” markers help me find concepts and keep page references."><textarea value={text} onChange={(e) => setText(e.target.value)} rows={10} placeholder="Paste your notes, packet, passage, or rubric here…" /></Field>
       <div className="row gap-s mt-s"><label className="btn small">Choose a .txt / .md file<input type="file" accept=".txt,.md,.markdown,text/plain" hidden onChange={(e) => onFile(e.target.files?.[0])} /></label>
         <label className="btn small">Upload a PDF or screenshot<input type="file" accept="application/pdf,image/png,image/jpeg,image/webp,.pdf,.png,.jpg,.jpeg,.webp" hidden onChange={(e) => { onBinary(e.target.files?.[0]); e.target.value = ''; }} /></label></div>
-      <p className="small muted mt-s"><strong>PDFs and images stay on this computer.</strong> Text PDFs are read locally (up to 15 MB and 60 pages); scanned pages and screenshots can’t be read automatically, so you type them beside the original. You review everything before it’s used.</p>
+      <p className="small muted mt-s"><strong>{hosted ? 'PDFs and images are stored privately in your account.' : 'PDFs and images stay on this computer.'}</strong> Text PDFs are read {hosted ? 'on the server' : 'locally'} (up to 15 MB and 60 pages); scanned pages and screenshots can’t be read automatically, so you type them beside the original. You review everything before it’s used.</p>
       <p className="small muted mt-s">Text you add is treated as <em>content</em>, never as instructions to this app. Only the passages needed for a task are sent to an AI model, and only if you have configured one.</p>
       {err && <ErrorBox error={err} />}
       <div className="row mt"><button className="btn primary" disabled={saving || text.trim().length < 20} onClick={submit}>{saving ? 'Saving…' : 'Add and find concepts'}</button><button className="btn" onClick={onClose}>Cancel</button></div>

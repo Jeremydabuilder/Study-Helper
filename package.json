@@ -18,7 +18,8 @@
     "eval:live": "tsx src/eval/cli.ts --live",
     "smoke:ai": "tsx src/eval/smoke.ts",
     "doctor": "tsx src/server/doctor.ts",
-    "operator": "tsx src/server/ops/cli.ts"
+    "operator": "tsx src/server/ops/cli.ts",
+    "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "better-auth": "^1.7.14",
