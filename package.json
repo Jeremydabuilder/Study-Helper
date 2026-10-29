@@ -19,7 +19,17 @@
     "smoke:ai": "tsx src/eval/smoke.ts",
     "doctor": "tsx src/server/doctor.ts",
     "operator": "tsx src/server/ops/cli.ts",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "build:server": "node scripts/build-server.mjs",
+    "build:hosted": "npm run build && npm run build:server",
+    "start:hosted": "APP_MODE=hosted NODE_ENV=production node dist-server/main.mjs",
+    "operator:prod": "node dist-server/operator.mjs",
+    "prune:prod": "node scripts/prune-dev-only.mjs",
+    "audit:prod": "npm audit --omit=dev --omit=peer --audit-level=high || true",
+    "test:hosted": "REQUIRE_PG=1 vitest run tests/hosted",
+    "loadtest": "tsx scripts/loadtest.ts",
+    "seed:staging": "tsx scripts/seed-staging.ts",
+    "scan:secrets": "node scripts/scan-secrets.mjs"
   },
   "dependencies": {
     "better-auth": "^1.7.14",
@@ -30,7 +40,7 @@
     "react-dom": "^18.3.1",
     "tsx": "^4.19.2",
     "unpdf": "^1.9.1",
-    "zod": "^3.24.1"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

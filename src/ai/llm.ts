@@ -119,7 +119,7 @@ export class LLMProvider implements AIProvider {
   }
 
   /** One logical call = up to 2 billable requests (the second is a repair retry, accounted separately). */
-  private async call<T>(task: AITask | 'ocr', purpose: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, user: string, opts: CallOpts = {}, extra: { attachments?: Attachment[]; system?: string } = {}): Promise<T> {
+  private async call<T>(task: AITask | 'ocr', purpose: string, schema: z.ZodType<T>, user: string, opts: CallOpts = {}, extra: { attachments?: Attachment[]; system?: string } = {}): Promise<T> {
     const cfg = task === 'ocr' ? { model: this.ocrModel(), maxOutputTokens: this.o.ocr?.maxOutputTokens ?? OCR_DEFAULTS.maxOutputTokens, effort: OCR_DEFAULTS.effort } : this.taskConfig(task);
     const maxAttempts = extra.attachments?.length ? 1 : 2; // never re-send page images for a repair retry: that would bill the images twice
     let lastErr = '';

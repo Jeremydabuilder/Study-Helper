@@ -17,13 +17,14 @@ export function readCookie(header: string | null | undefined, name: string): str
 const cookieOf = (ctx: any): string | null => ctx?.request?.headers?.get?.('cookie') ?? ctx?.headers?.get?.('cookie') ?? null;
 
 /**
- * Authentication with Better Auth (maintained, TypeScript, Postgres-backed sessions). Settings that matter for a school pilot:
+ * `authPool` is Better Auth's own connection pool: it holds one connection per sign-up while our invitation hooks need a second one from `pool`.
+ * Sharing one pool deadlocks under a burst of sign-ups (found by the load test). Authentication with Better Auth (maintained, TypeScript, Postgres-backed sessions). Settings that matter for a school pilot:
  *  - closed by default: an account is created only with a valid single-use invitation AND while the pilot is switched on and not full
  *  - no account linking, so one sign-in method can never take over another identity
  *  - only the email address is stored (no name, no profile photo): the app needs an identifier, nothing else
  *  - secure, HttpOnly, SameSite=Lax cookies; sessions live in the database and are revoked by sign-out immediately (no cookie cache)
  */
-export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Date.now) {
+export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Date.now, authPool: Pool = pool) {
   const secure = cfg.publicUrl.startsWith('https://');
   const plugins = cfg.oidc ? [genericOAuth({ config: [{
     providerId: cfg.oidc.providerId, clientId: cfg.oidc.clientId, clientSecret: cfg.oidc.clientSecret,
@@ -34,7 +35,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
     mapProfileToUser: (p: Record<string, any>) => ({ email: String(p.email ?? '').toLowerCase(), name: 'Student', image: undefined, emailVerified: p.email_verified === true }),
   }] })] : [];
   return betterAuth({
-    database: pool, secret: cfg.authSecret, baseURL: cfg.publicUrl, basePath: '/api/auth', trustedOrigins: [cfg.publicUrl],
+    database: authPool, secret: cfg.authSecret, baseURL: cfg.publicUrl, basePath: '/api/auth', trustedOrigins: [cfg.publicUrl],
     emailAndPassword: { enabled: cfg.passwordSignIn, minPasswordLength: 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
     account: { accountLinking: { enabled: false } },
     session: { expiresIn: cfg.sessionDays * 86_400, updateAge: 86_400, cookieCache: { enabled: false } },

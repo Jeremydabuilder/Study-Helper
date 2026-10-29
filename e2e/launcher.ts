@@ -5,6 +5,7 @@
  * NOTHING here is a live service. It checks plumbing, not AI quality.
  */
 import { createServer } from 'node:http';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { HostedHarness } from '../tests/hostedHarness';
 import { setSettingPg } from '../src/server/hosted/pg';
 import { AIError } from '../src/ai/provider';
@@ -13,6 +14,7 @@ const APP_PORT = Number(process.env.E2E_APP_PORT ?? 4180), CONTROL_PORT = Number
 const limits = process.env.E2E_LIMITS ? JSON.parse(process.env.E2E_LIMITS) : {};
 const h = await HostedHarness.start({ port: APP_PORT, passwordSignIn: true, limits });
 
+const loop = monitorEventLoopDelay({ resolution: 10 }); loop.enable();
 const json = (res: import('node:http').ServerResponse, body: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
 createServer((req, res) => {
   let raw = ''; req.on('data', (c) => (raw += c));
@@ -31,6 +33,7 @@ createServer((req, res) => {
         const q = async (sql: string) => (await h.db.pool.query(sql)).rows[0];
         return json(res, { users: (await q('SELECT COUNT(*)::int n FROM "user"')).n, aiRequests: (await q('SELECT COUNT(*)::int n FROM ai_requests')).n, llmCalls: h.llm.calls.length, now: h.clock.now });
       }
+      if (path === '/control/stats') { const m = process.memoryUsage(); return json(res, { rssMb: Math.round(m.rss / 1048576), heapMb: Math.round(m.heapUsed / 1048576), loopDelayP50ms: loop.percentile(50) / 1e6, loopDelayP99ms: loop.percentile(99) / 1e6, loopDelayMaxMs: loop.max / 1e6, openDatabases: h.hosted.tenants.openCount, llmCalls: h.llm.calls.length, cpu: process.cpuUsage() }); }
       json(res, { error: 'unknown' }, 404);
     } catch (e) { json(res, { error: e instanceof Error ? e.message : 'failed' }, 500); }
   });

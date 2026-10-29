@@ -17,7 +17,7 @@ export const GradingItem = z.object({
 });
 export const ExtractionItem = z.object({
   id: z.string(), subject: z.string(), text: z.string(), expectedConcepts: z.array(z.string()), forbiddenPatterns: z.array(z.string()),
-  expectedSkillTags: z.record(z.string()), note: z.string(), review: Review,
+  expectedSkillTags: z.record(z.string(), z.string()), note: z.string(), review: Review,
 });
 export const GenerationItem = z.object({
   id: z.string(), subject: z.string(), concept: z.object({ name: z.string(), summary: z.string(), skillTag: z.string().nullable() }),
@@ -38,7 +38,7 @@ export type MathItem = z.infer<typeof MathItem>;
 export interface Dataset { grading: GradingItem[]; extraction: ExtractionItem[]; generation: GenerationItem[]; math: MathItem[] }
 
 export function loadDataset(dir = join(process.cwd(), 'eval', 'dataset')): Dataset {
-  const read = <T>(name: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>) => z.array(schema).parse(JSON.parse(readFileSync(join(dir, name), 'utf8')));
+  const read = <T>(name: string, schema: z.ZodType<T>) => z.array(schema).parse(JSON.parse(readFileSync(join(dir, name), 'utf8')));
   return { grading: read('grading.json', GradingItem), extraction: read('extraction.json', ExtractionItem), generation: read('generation.json', GenerationItem), math: read('math.json', MathItem) };
 }
 

@@ -54,8 +54,9 @@ export function requestObserver(metrics: Metrics, logger: Logger) {
     res.on('finish', () => {
       if (!req.path.startsWith('/api')) return;
       const ms = Date.now() - t0, route = routeTemplate(req);
-      metrics.record(`${req.method} ${route}`, res.statusCode, ms);
-      if (res.statusCode >= 500) logger.error('request_failed', { route, method: req.method, status: res.statusCode, ms, reqId });
+      const expected = res.locals.expected === true; // a deliberate pause is not an error
+      metrics.record(`${req.method} ${route}`, expected ? 429 : res.statusCode, ms);
+      if (res.statusCode >= 500 && !expected) logger.error('request_failed', { route, method: req.method, status: res.statusCode, ms, reqId });
     });
     next();
   };

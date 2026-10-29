@@ -303,7 +303,7 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   app.post('/api/readings/:id/outlines', h((ctx, req) => study.makeOutline(ctx, req.params.id, z.object({ annotationIds: z.array(z.string()).max(60), title: z.string().optional() }).parse(req.body))));
   app.post('/api/readings/:id/skip-today', h((ctx, req) => skipReadingToday(ctx, req.params.id)));
   app.get('/api/outlines/:id', h((ctx, req) => study.getOutline(ctx, req.params.id)));
-  app.patch('/api/outlines/:id', h((ctx, req) => study.updateOutline(ctx, req.params.id, z.object({ title: z.string().optional(), thesis: z.string().optional(), claims: z.record(z.string()).optional() }).parse(req.body))));
+  app.patch('/api/outlines/:id', h((ctx, req) => study.updateOutline(ctx, req.params.id, z.object({ title: z.string().optional(), thesis: z.string().optional(), claims: z.record(z.string(), z.string()).optional() }).parse(req.body))));
   app.delete('/api/outlines/:id', h((ctx, req) => study.deleteOutline(ctx, req.params.id)));
 
   /* ---------------- chat (study / general) ---------------- */

@@ -1,0 +1,60 @@
+# Render Blueprint for Study Helper: a STAGING site (fictional data only) and the PRODUCTION pilot, each with its own database and disk.
+# Nothing here deploys itself: autoDeploy is off, secrets (sync: false) are entered by you in the Render dashboard, and the production service
+# should only be created after docs/LAUNCH_CHECKLIST.md is complete. Validate before use:  render blueprints validate render.yaml
+# One instance per service by design (each student's private database lives on that service's disk); see docs/DEPLOYMENT.md.
+services:
+  - type: web
+    name: study-helper-staging
+    runtime: node
+    plan: starter
+    region: oregon
+    autoDeploy: false
+    buildCommand: npm ci && npm run build:hosted && npm run prune:prod
+    startCommand: npm run start:hosted
+    healthCheckPath: /readyz
+    disk: { name: staging-data, mountPath: /var/data, sizeGB: 2 }
+    envVars:
+      - { key: NODE_VERSION, value: "22.13.0" }
+      - { key: APP_ENV, value: staging }
+      - { key: DATA_LABEL, value: staging }          # a staging server refuses to open production data, and the reverse
+      - { key: DATA_DIR, value: /var/data }
+      - { key: AUTH_PASSWORD, value: "1" }           # staging only: email+password sign-in (still invitation-gated) so no real Google accounts are needed
+      - { key: DATABASE_URL, fromDatabase: { name: study-helper-staging-db, property: connectionString } }
+      - { key: PUBLIC_URL, sync: false }             # https://<your staging address>
+      - { key: BETTER_AUTH_SECRET, generateValue: true }
+      - { key: APP_SECRET, generateValue: true }
+      - { key: OPERATOR_TOKEN, generateValue: true }
+      - { key: LIMIT_GLOBAL_DAILY_USD, value: "0.5" }  # staging spend ceiling; leave AI keys unset for an offline staging site
+      - { key: ANTHROPIC_API_KEY, sync: false }
+  - type: web
+    name: study-helper-pilot
+    runtime: node
+    plan: starter
+    region: oregon
+    autoDeploy: false
+    buildCommand: npm ci && npm run build:hosted && npm run prune:prod
+    startCommand: npm run start:hosted
+    healthCheckPath: /readyz
+    disk: { name: pilot-data, mountPath: /var/data, sizeGB: 5 }
+    envVars:
+      - { key: NODE_VERSION, value: "22.13.0" }
+      - { key: APP_ENV, value: production }
+      - { key: DATA_LABEL, value: production }
+      - { key: DATA_DIR, value: /var/data }
+      - { key: DATABASE_URL, fromDatabase: { name: study-helper-pilot-db, property: connectionString } }
+      - { key: PUBLIC_URL, sync: false }
+      - { key: BETTER_AUTH_SECRET, generateValue: true }
+      - { key: APP_SECRET, generateValue: true }
+      - { key: OPERATOR_TOKEN, generateValue: true }
+      - { key: OPERATOR_NAME, sync: false }            # required: shown in the privacy notice
+      - { key: OPERATOR_CONTACT, sync: false }         # required: how students reach you
+      - { key: GOOGLE_CLIENT_ID, sync: false }
+      - { key: GOOGLE_CLIENT_SECRET, sync: false }
+      - { key: GOOGLE_REDIRECT_URI, sync: false }      # https://<address>/api/calendar/oauth/callback
+      - { key: ANTHROPIC_API_KEY, sync: false }
+      - { key: LIMIT_USER_DAILY_AI_REQUESTS, value: "60" }
+      - { key: LIMIT_USER_DAILY_USD, value: "0.30" }
+      - { key: LIMIT_GLOBAL_DAILY_USD, value: "5" }    # your hard daily ceiling for the whole pilot: raise it only on purpose
+databases:
+  - { name: study-helper-staging-db, plan: basic-256mb, region: oregon, databaseName: study_helper_staging, user: study_helper }
+  - { name: study-helper-pilot-db, plan: basic-256mb, region: oregon, databaseName: study_helper_pilot, user: study_helper }

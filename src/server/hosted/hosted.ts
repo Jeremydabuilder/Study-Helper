@@ -46,7 +46,8 @@ export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
   const metrics = new Metrics();
   const pool = d.pool ?? createPool(hcfg.databaseUrl, { ssl: /sslmode=require/.test(hcfg.databaseUrl) });
   await migrateControl(pool);
-  const auth = createAuth(pool, hcfg, now);
+  const authPool = createPool(hcfg.databaseUrl, { max: 10, ssl: /sslmode=require/.test(hcfg.databaseUrl) });
+  const auth = createAuth(pool, hcfg, now, authPool);
   await migrateAuth(auth);
   await bindEnvironment(pool, hcfg, d.dataDir);
 
@@ -140,7 +141,7 @@ export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
       app.use('/api', async (req: Request, res: Response, next: NextFunction) => {
         try {
           if (req.path === '/session' || req.path.startsWith('/invite/') || req.path.startsWith('/auth/')) return next();
-          if (!(await getSettingPg<boolean>(pool, 'pilot_enabled', false))) throw new HttpError(503, 'pilot_paused', 'Study Helper is paused right now. Your work is safe. Please try again later.');
+          if (!(await getSettingPg<boolean>(pool, 'pilot_enabled', false))) { res.locals.expected = true; throw new HttpError(503, 'pilot_paused', 'Study Helper is paused right now. Your work is safe. Please try again later.'); }
           const s = await sessionOf(req);
           if (!s) throw new HttpError(401, 'signed_out', 'Please sign in to continue.');
           (req as any).student = s;
@@ -246,7 +247,7 @@ export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
   }
 
   const app = createApp({ cfg, now, llm: d.llm ?? null, offline, ctx: () => { throw new Error('hosted mode never uses the shared runtime context'); }, ensureDemo: async () => {}, resetDemo: async () => {}, workspaces: undefined as never, googleGw, demoGw: new MemoryGateway() } as never, hooks);
-  return { app, pool, auth, tenants, metrics, async close() { tenants.closeAll(); if (!d.pool) await pool.end(); } };
+  return { app, pool, auth, tenants, metrics, async close() { tenants.closeAll(); await authPool.end(); if (!d.pool) await pool.end(); } };
 }
 
 const inviteMessage = (r: string) => ({ unknown: 'That invitation code was not recognised. Check it and try again.', used: 'That invitation has already been used.', expired: 'That invitation has expired. Ask for a new one.', revoked: 'That invitation is no longer valid.', in_use: 'That invitation is being used right now. Try again in a few minutes.' } as Record<string, string>)[r] ?? 'That invitation does not work.';

@@ -12,7 +12,7 @@ export const FORMAT = 'study-helper-export';
 export const VERSION = 1;
 const SETTING_KEYS = ['priority_weights', 'availability', 'scheduler_params'];
 
-const Row = z.record(z.any());
+const Row = z.record(z.string(), z.any());
 const Learning = z.object({
   subjects: z.array(Row).default([]), sources: z.array(Row).default([]), concepts: z.array(Row).default([]), concept_refs: z.array(Row).default([]),
   concept_prereqs: z.array(Row).default([]), questions: z.array(Row).default([]), attempts: z.array(Row).default([]),
@@ -23,7 +23,7 @@ export const ExportFile = z.object({
   format: z.literal(FORMAT), version: z.number().int().max(VERSION), exportedAt: z.number(), workspace: z.enum(['real', 'demo']).optional(),
   sections: z.object({
     profile: z.object({ name: z.string().max(60), grade: z.string().max(30), timezone: z.string().max(60), default_minutes: z.number(), about: z.string().max(600) }).optional(),
-    settings: z.record(z.any()).optional(),
+    settings: z.record(z.string(), z.any()).optional(),
     memories: z.array(z.object({ id: z.string(), kind: z.enum(['student_stated', 'observed', 'ai_inferred']), text: z.string().max(400), subject_id: z.string().nullable().optional(), concept_id: z.string().nullable().optional(), provenance: z.any().optional() })).optional(),
     learning: Learning.optional(),
     items: z.array(Row).optional(),

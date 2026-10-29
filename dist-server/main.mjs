@@ -7647,7 +7647,7 @@ var init_portability = __esm({
     FORMAT = "study-helper-export";
     VERSION = 1;
     SETTING_KEYS = ["priority_weights", "availability", "scheduler_params"];
-    Row = z2.record(z2.any());
+    Row = z2.record(z2.string(), z2.any());
     Learning = z2.object({
       subjects: z2.array(Row).default([]),
       sources: z2.array(Row).default([]),
@@ -7669,7 +7669,7 @@ var init_portability = __esm({
       workspace: z2.enum(["real", "demo"]).optional(),
       sections: z2.object({
         profile: z2.object({ name: z2.string().max(60), grade: z2.string().max(30), timezone: z2.string().max(60), default_minutes: z2.number(), about: z2.string().max(600) }).optional(),
-        settings: z2.record(z2.any()).optional(),
+        settings: z2.record(z2.string(), z2.any()).optional(),
         memories: z2.array(z2.object({ id: z2.string(), kind: z2.enum(["student_stated", "observed", "ai_inferred"]), text: z2.string().max(400), subject_id: z2.string().nullable().optional(), concept_id: z2.string().nullable().optional(), provenance: z2.any().optional() })).optional(),
         learning: Learning.optional(),
         items: z2.array(Row).optional()
@@ -8005,7 +8005,7 @@ function createApp(rt, hosted) {
   app.post("/api/readings/:id/outlines", h((ctx, req) => makeOutline(ctx, req.params.id, z3.object({ annotationIds: z3.array(z3.string()).max(60), title: z3.string().optional() }).parse(req.body))));
   app.post("/api/readings/:id/skip-today", h((ctx, req) => skipReadingToday(ctx, req.params.id)));
   app.get("/api/outlines/:id", h((ctx, req) => getOutline(ctx, req.params.id)));
-  app.patch("/api/outlines/:id", h((ctx, req) => updateOutline(ctx, req.params.id, z3.object({ title: z3.string().optional(), thesis: z3.string().optional(), claims: z3.record(z3.string()).optional() }).parse(req.body))));
+  app.patch("/api/outlines/:id", h((ctx, req) => updateOutline(ctx, req.params.id, z3.object({ title: z3.string().optional(), thesis: z3.string().optional(), claims: z3.record(z3.string(), z3.string()).optional() }).parse(req.body))));
   app.delete("/api/outlines/:id", h((ctx, req) => deleteOutline(ctx, req.params.id)));
   app.get("/api/chat/status", h((ctx) => chatStatus(ctx)));
   app.get("/api/chat/context", h((ctx, req) => contextPreview(ctx, { mode: String(req.query.mode ?? ""), q: String(req.query.q ?? ""), subjectId: req.query.subjectId, sourceId: req.query.sourceId })));
@@ -9566,7 +9566,7 @@ async function createHostedApp(d) {
       app2.post("/api/report", async (req, res, next) => {
         try {
           const s = studentOf(req);
-          const b = z4.object({ message: z4.string().max(2e3), include: z4.array(z4.string()).max(5).optional(), attach: z4.object({ kind: z4.string().max(30), text: z4.string().max(4e3) }).optional(), previewOnly: z4.boolean().optional() }).parse(req.body);
+          const b = z4.object({ message: z4.string().max(2e3), include: z4.array(z4.string()).max(5).optional(), attach: z4.object({ kind: z4.string().max(30), text: z4.string().max(4e3) }).optional(), previewOnly: z4.boolean().optional(), confirmed: z4.boolean().optional() }).parse(req.body);
           res.json(await submitReport(pool, s.id, b, now()));
         } catch (e) {
           next(e);

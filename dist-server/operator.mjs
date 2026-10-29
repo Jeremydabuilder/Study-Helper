@@ -671,7 +671,7 @@ var DAY2 = 24 * 36e5;
 // src/server/services/portability.ts
 var FORMAT = "study-helper-export";
 var VERSION = 1;
-var Row = z2.record(z2.any());
+var Row = z2.record(z2.string(), z2.any());
 var Learning = z2.object({
   subjects: z2.array(Row).default([]),
   sources: z2.array(Row).default([]),
@@ -693,7 +693,7 @@ var ExportFile = z2.object({
   workspace: z2.enum(["real", "demo"]).optional(),
   sections: z2.object({
     profile: z2.object({ name: z2.string().max(60), grade: z2.string().max(30), timezone: z2.string().max(60), default_minutes: z2.number(), about: z2.string().max(600) }).optional(),
-    settings: z2.record(z2.any()).optional(),
+    settings: z2.record(z2.string(), z2.any()).optional(),
     memories: z2.array(z2.object({ id: z2.string(), kind: z2.enum(["student_stated", "observed", "ai_inferred"]), text: z2.string().max(400), subject_id: z2.string().nullable().optional(), concept_id: z2.string().nullable().optional(), provenance: z2.any().optional() })).optional(),
     learning: Learning.optional(),
     items: z2.array(Row).optional()
