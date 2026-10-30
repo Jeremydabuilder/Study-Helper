@@ -19,7 +19,7 @@ All commands run in the service shell: `npm run operator -- <command>` (see `hel
 `backup --to /var/data/backups/<date> --passphrase-env BACKUP_PASSPHRASE` writes a JSON dump of the control database, a consistent snapshot of every student database, and a sha256 manifest, AES-256-GCM encrypted if a passphrase is given. `verify --from <folder>` checks integrity. Render's own database backups (plan dependent) and disk snapshots are additional — confirm what your plan includes. **Keep at least one copy off the same disk.** A backup that has never been restored is unproven: do a restore rehearsal on staging (checklist item 6).
 
 ## Restore / outage recovery
-1. `pilot off`. 2. Provision an empty database and disk with the same `DATA_LABEL`. 3. `restore --from <folder>`. 4. `status` shows the expected account count. 5. `pilot on`. Tell students what was lost (everything after the backup time).
+1. `pilot off` (if the old site is still up). 2. Provision an empty database and disk with the same `DATA_LABEL`. 3. In the new service's shell: `restore --from <folder> --passphrase-env BACKUP_PASSPHRASE` (it creates the sign-in tables itself; the app does not need to have started first). 4. Start the app and check `/readyz`; sign in with an existing browser session or account and open a few records and files (not only `status`). 5. `pilot on`. Tell students what was lost (everything after the backup time).
 
 ## Incidents
 - Unexpected spend: `ai off`, then check `status`; limits are enforced in the database, but the provider's own dashboard is the source of truth — set a provider-side spending cap too.

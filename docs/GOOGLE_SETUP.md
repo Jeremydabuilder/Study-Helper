@@ -1,3 +1,5 @@
+> **Hosted mode:** sign-in needs only the redirect URI `https://<address>/api/auth/callback/google` and scopes `openid email`; see DEPLOYMENT.md. This document is about the optional, read-only **Calendar** connection, which in hosted mode is off unless `CALENDAR_ENABLED=1` (then also add `https://<address>/api/calendar/oauth/callback`).
+
 # Google Calendar setup (read-only)
 
 > **Status of this guide.** Written from Google's documented OAuth flow. Google's developer docs were not reachable from the environment where this was written, and no real Google credentials were available, so **the live Google flow has not been run**. The app's OAuth, refresh, revocation and read-only behaviour is covered by tests against a fake Google server (see README → What was tested). Google renames console screens from time to time; if a label below differs, follow the intent and check Google's current OAuth documentation.

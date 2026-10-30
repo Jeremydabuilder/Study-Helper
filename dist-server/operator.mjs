@@ -442,7 +442,7 @@ function hostedConfigFromEnv(env = process.env) {
   };
   const environment = g("APP_ENV") ?? (env.NODE_ENV === "production" ? "production" : "test");
   const problems = [];
-  const publicUrl = (g("PUBLIC_URL") ?? "").replace(/\/+$/, "");
+  const publicUrl = (g("PUBLIC_URL") ?? g("RENDER_EXTERNAL_URL") ?? "").replace(/\/+$/, "");
   const authSecret = g("BETTER_AUTH_SECRET") ?? "";
   if (!["production", "staging", "test"].includes(environment)) problems.push("APP_ENV must be production, staging or test.");
   if (!g("DATABASE_URL")) problems.push("DATABASE_URL is required in hosted mode.");
@@ -767,7 +767,7 @@ async function verifyBackup(dir, passphrase) {
     try {
       dec(readFileSync4(join4(dir, m.control.file)), passphrase);
     } catch {
-      throw new Error("The passphrase does not open this backup.");
+      throw new Error("Wrong passphrase, or the backup file was modified.");
     }
   }
   return m;

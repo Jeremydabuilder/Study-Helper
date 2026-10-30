@@ -10405,7 +10405,7 @@ function hostedConfigFromEnv(env = process.env) {
   };
   const environment = g("APP_ENV") ?? (env.NODE_ENV === "production" ? "production" : "test");
   const problems = [];
-  const publicUrl = (g("PUBLIC_URL") ?? "").replace(/\/+$/, "");
+  const publicUrl = (g("PUBLIC_URL") ?? g("RENDER_EXTERNAL_URL") ?? "").replace(/\/+$/, "");
   const authSecret = g("BETTER_AUTH_SECRET") ?? "";
   if (!["production", "staging", "test"].includes(environment)) problems.push("APP_ENV must be production, staging or test.");
   if (!g("DATABASE_URL")) problems.push("DATABASE_URL is required in hosted mode.");
@@ -11373,7 +11373,8 @@ async function main() {
     }
     const host2 = process.env.HOST || "0.0.0.0";
     const logger = makeLogger2();
-    const h = await createHostedApp2({ cfg, hcfg, dataDir: cfg.dataDir, logger, llm: (await Promise.resolve().then(() => (init_factory(), factory_exports))).buildProvider(cfg) });
+    const hostedCfg = { ...cfg, google: process.env.CALENDAR_ENABLED === "1" && cfg.google ? { ...cfg.google, redirectUri: process.env.GOOGLE_REDIRECT_URI?.trim() || `${hcfg.publicUrl}/api/calendar/oauth/callback` } : null };
+    const h = await createHostedApp2({ cfg: hostedCfg, hcfg, dataDir: cfg.dataDir, logger, llm: (await Promise.resolve().then(() => (init_factory(), factory_exports))).buildProvider(cfg) });
     const server = h.app.listen(port, host2, () => logger.info("listening", { detail: `${hcfg.environment} on ${host2}:${port}` }));
     const stop = async () => {
       logger.info("shutting_down");
