@@ -17,7 +17,9 @@ async function main() {
     if (problems.length) { console.error(`Cannot start in hosted mode:\n - ${problems.join('\n - ')}`); process.exit(1); }
     const host = process.env.HOST || '0.0.0.0';
     const logger = makeLogger();
-    const h = await createHostedApp({ cfg, hcfg, dataDir: cfg.dataDir, logger, llm: (await import('../ai/factory')).buildProvider(cfg) });
+    // Google Calendar is optional and OFF unless CALENDAR_ENABLED=1: signing in with Google must never switch it on, and its failure must never block homework or studying
+    const hostedCfg = { ...cfg, google: process.env.CALENDAR_ENABLED === '1' && cfg.google ? { ...cfg.google, redirectUri: process.env.GOOGLE_REDIRECT_URI?.trim() || `${hcfg.publicUrl}/api/calendar/oauth/callback` } : null };
+    const h = await createHostedApp({ cfg: hostedCfg, hcfg, dataDir: cfg.dataDir, logger, llm: (await import('../ai/factory')).buildProvider(cfg) });
     const server = h.app.listen(port, host, () => logger.info('listening', { detail: `${hcfg.environment} on ${host}:${port}` }));
     const stop = async () => { logger.info('shutting_down'); server.close(); await h.close(); process.exit(0); };
     process.on('SIGTERM', stop); process.on('SIGINT', stop);

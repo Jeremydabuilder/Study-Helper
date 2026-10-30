@@ -1,0 +1,31 @@
+# Render Blueprint for the STAGING site only (made-up data, no real students). It creates ONE web service, ONE disk and ONE database, and nothing for production.
+# Nothing deploys itself: autoDeploy is off and secrets (sync: false) are entered by you in the Render dashboard. Validate first:  render blueprints validate render.staging.yaml
+# Create it from the dashboard with "Blueprint file path" = render.staging.yaml. One instance only: each student's private database lives on the service's disk.
+# UNVERIFIED against Render's current documentation (docs.render.com was not reachable from the build environment): see docs/DEPLOYMENT.md "Before the first sync".
+services:
+  - type: web
+    name: study-helper-staging
+    runtime: node
+    plan: starter
+    region: oregon
+    autoDeploy: false
+    buildCommand: npm ci --include=dev && npm run build:hosted && npm run prune:prod
+    startCommand: npm run start:hosted
+    healthCheckPath: /readyz
+    numInstances: 1                                   # student files live on this service's disk: never more than one
+    disk: { name: staging-data, mountPath: /var/data, sizeGB: 2 }
+    envVars:
+      - { key: NODE_VERSION, value: "22.13.0" }
+      - { key: APP_ENV, value: staging }
+      - { key: DATA_LABEL, value: staging }          # a staging server refuses to open production data, and the reverse
+      - { key: DATA_DIR, value: /var/data }
+      - { key: AUTH_PASSWORD, value: "1" }           # staging only: email+password sign-in (still invitation-gated) so no real Google accounts are needed
+      - { key: DATABASE_URL, fromDatabase: { name: study-helper-staging-db, property: connectionString } }
+      - { key: PUBLIC_URL, sync: false }             # optional: defaults to this service's own https://….onrender.com address
+      - { key: BETTER_AUTH_SECRET, generateValue: true }
+      - { key: APP_SECRET, generateValue: true }
+      - { key: OPERATOR_TOKEN, generateValue: true }
+      - { key: LIMIT_GLOBAL_DAILY_USD, value: "0.5" }  # staging spend ceiling; leave AI keys unset for an offline staging site
+      - { key: ANTHROPIC_API_KEY, sync: false }
+databases:
+  - { name: study-helper-staging-db, plan: basic-256mb, region: oregon, databaseName: study_helper_staging, user: study_helper, ipAllowList: [] }

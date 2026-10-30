@@ -23,7 +23,7 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
   const num = (k: string, d: number) => { const v = g(k); const n = v === null ? NaN : Number(v); return Number.isFinite(n) && n >= 0 ? n : d; };
   const environment = (g('APP_ENV') as Environment | null) ?? (env.NODE_ENV === 'production' ? 'production' : 'test');
   const problems: string[] = [];
-  const publicUrl = (g('PUBLIC_URL') ?? '').replace(/\/+$/, '');
+  const publicUrl = (g('PUBLIC_URL') ?? g('RENDER_EXTERNAL_URL') ?? '').replace(/\/+$/, '');
   const authSecret = g('BETTER_AUTH_SECRET') ?? '';
   if (!['production', 'staging', 'test'].includes(environment)) problems.push('APP_ENV must be production, staging or test.');
   if (!g('DATABASE_URL')) problems.push('DATABASE_URL is required in hosted mode.');
