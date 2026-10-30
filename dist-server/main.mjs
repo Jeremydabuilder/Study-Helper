@@ -10889,12 +10889,39 @@ import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync, 
 import { join as join5 } from "node:path";
 import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
 import { z as z4 } from "zod";
+async function acquireInstanceLock(pool, waitMs) {
+  const c = await pool.connect();
+  const deadline = Date.now() + waitMs;
+  for (; ; ) {
+    const r = await c.query("SELECT pg_try_advisory_lock(727003) AS ok");
+    if (r.rows[0].ok) return { release: () => c.release(true) };
+    if (Date.now() >= deadline) {
+      c.release();
+      throw new Error("Another Study Helper process is already using this database. Run exactly one instance per service (student files live on one disk). Stop the other process and try again.");
+    }
+    await new Promise((r2) => setTimeout(r2, 1e3));
+  }
+}
 async function createHostedApp(d) {
+  const pool = d.pool ?? createPool(d.hcfg.databaseUrl, { ssl: /sslmode=require/.test(d.hcfg.databaseUrl) });
+  const instance = await acquireInstanceLock(pool, d.instanceLockWaitMs ?? Number(process.env.INSTANCE_LOCK_WAIT_MS ?? 3e4)).catch(async (e) => {
+    if (!d.pool) await pool.end();
+    throw e;
+  });
+  try {
+    return await buildHostedApp(d, pool, instance);
+  } catch (e) {
+    instance.release();
+    if (!d.pool) await pool.end().catch(() => {
+    });
+    throw e;
+  }
+}
+async function buildHostedApp(d, pool, instance) {
   const { cfg: cfg2, hcfg } = d;
   const now = d.now ?? Date.now;
   const logger = d.logger ?? makeLogger(void 0, now);
   const metrics = new Metrics();
-  const pool = d.pool ?? createPool(hcfg.databaseUrl, { ssl: /sslmode=require/.test(hcfg.databaseUrl) });
   await migrateControl(pool);
   const authPool = createPool(hcfg.databaseUrl, { max: 10, ssl: /sslmode=require/.test(hcfg.databaseUrl) });
   const auth = createAuth(pool, hcfg, now, authPool);
@@ -11175,6 +11202,7 @@ async function createHostedApp(d) {
   }, workspaces: void 0, googleGw, demoGw: new MemoryGateway() }, hooks);
   return { app, pool, auth, tenants, metrics, async close() {
     tenants.closeAll();
+    instance.release();
     await authPool.end();
     if (!d.pool) await pool.end();
   } };

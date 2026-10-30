@@ -73,6 +73,8 @@ async function main() {
       console.log(`Backup written to ${to}: ${m.users.length} student database(s), ${m.tables.reduce((a, t) => a + t.rows, 0)} shared rows, ${m.encrypted ? 'encrypted' : 'NOT encrypted (keep it private)'}.`);
     } else if (cmd === 'verify') { const m = await verifyBackup(flag('from')!, pass(flag('passphrase-env'))); console.log(`Backup OK: made ${m.createdAt}, ${m.users.length} student database(s).`); }
     else if (cmd === 'restore') {
+      // a brand-new database has no sign-in tables yet (the app creates them when it first starts)
+      const { createAuth, migrateAuth } = await import('../hosted/auth'); await migrateAuth(createAuth(pool, cfg));
       const r = await restore({ pool, dataDir, bundleDir: flag('from')!, dataLabel: cfg.dataLabel, passphrase: pass(flag('passphrase-env')) });
       console.log(`Restored ${r.users} student database(s) and ${r.rows} shared rows. Restart the app, then check /readyz.`);
     } else if (cmd === 'retention') {

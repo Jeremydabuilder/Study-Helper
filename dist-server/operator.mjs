@@ -1,3 +1,264 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/server/hosted/pg.ts
+import { existsSync as existsSync2, readFileSync as readFileSync2, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import pg from "pg";
+function createPool(url, o = {}) {
+  const pool = new pg.Pool({ connectionString: url, max: o.max ?? 10, idleTimeoutMillis: 3e4, connectionTimeoutMillis: 5e3, statement_timeout: 15e3, ssl: o.ssl ? { rejectUnauthorized: true } : void 0 });
+  pool.on("error", () => {
+  });
+  return pool;
+}
+async function tx(pool, fn) {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const r = await fn(c);
+    await c.query("COMMIT");
+    return r;
+  } catch (e) {
+    try {
+      await c.query("ROLLBACK");
+    } catch {
+    }
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+async function migrateControl(pool) {
+  const c = await pool.connect();
+  const applied = [];
+  try {
+    await c.query("SELECT pg_advisory_lock(727001)");
+    await c.query("CREATE TABLE IF NOT EXISTS control_migrations (version INT PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+    const done = new Set((await c.query("SELECT version FROM control_migrations")).rows.map((r) => r.version));
+    const dir = [join(here, "..", "control-migrations"), join(here, "control-migrations")].find((d) => existsSync2(d));
+    for (const f of readdirSync(dir).filter((x) => /^\d+_.+\.sql$/.test(x)).sort()) {
+      const version = parseInt(f, 10);
+      if (done.has(version)) continue;
+      await c.query("BEGIN");
+      try {
+        await c.query(readFileSync2(join(dir, f), "utf8"));
+        await c.query("INSERT INTO control_migrations (version, name) VALUES ($1,$2)", [version, f]);
+        await c.query("COMMIT");
+      } catch (e) {
+        await c.query("ROLLBACK");
+        throw e;
+      }
+      applied.push(f);
+    }
+  } finally {
+    try {
+      await c.query("SELECT pg_advisory_unlock(727001)");
+    } catch {
+    }
+    c.release();
+  }
+  return applied;
+}
+async function audit(pool, event, userId, detail = {}) {
+  await pool.query("INSERT INTO audit_log (event, user_id, detail) VALUES ($1,$2,$3)", [event, userId, JSON.stringify(detail)]);
+}
+async function getSettingPg(pool, key, fallback) {
+  const r = await pool.query("SELECT value FROM app_settings WHERE key = $1", [key]);
+  return r.rows.length ? r.rows[0].value : fallback;
+}
+async function setSettingPg(pool, key, value) {
+  await pool.query("INSERT INTO app_settings (key, value, updated_at) VALUES ($1,$2,now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()", [key, JSON.stringify(value)]);
+}
+var here;
+var init_pg = __esm({
+  "src/server/hosted/pg.ts"() {
+    "use strict";
+    here = dirname(fileURLToPath(import.meta.url));
+    pg.types.setTypeParser(1700, (v) => Number(v));
+    pg.types.setTypeParser(20, (v) => Number(v));
+  }
+});
+
+// src/server/hosted/invites.ts
+import { createHash, randomInt } from "node:crypto";
+function newCode() {
+  const c = Array.from({ length: 16 }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
+  return `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8, 12)}-${c.slice(12)}`;
+}
+async function createInvites(pool, o) {
+  const count = Math.max(1, Math.min(200, Math.floor(o.count)));
+  const ttl = Math.max(1, Math.min(60, Math.floor(o.ttlDays ?? 7)));
+  const codes = [];
+  await tx(pool, async (c) => {
+    for (let i = 0; i < count; i++) {
+      const code = newCode();
+      codes.push(code);
+      await c.query("INSERT INTO invites (code_hash, label, created_at, expires_at) VALUES ($1,$2,$3,$4)", [hashCode(code), (o.label ?? "").slice(0, 60), new Date(o.now), new Date(o.now + ttl * 864e5)]);
+    }
+  });
+  await audit(pool, "invites_created", null, { count, ttlDays: ttl, label: (o.label ?? "").slice(0, 60) });
+  return codes;
+}
+async function claimInvite(pool, code, now) {
+  if (!looksLikeCode(code)) return null;
+  const r = await pool.query(
+    `UPDATE invites SET claimed_at = $2 WHERE code_hash = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > $2
+       AND (claimed_at IS NULL OR claimed_at < $3) RETURNING id`,
+    [hashCode(code), new Date(now), new Date(now - CLAIM_TTL_MS)]
+  );
+  return r.rows[0]?.id ?? null;
+}
+async function finishInvite(pool, inviteId, userId, now) {
+  await pool.query("UPDATE invites SET used_at = $2, used_by = $3 WHERE id = $1", [inviteId, new Date(now), userId]);
+  await audit(pool, "invite_used", userId, { inviteId });
+}
+async function listInvites(pool, now) {
+  return (await pool.query("SELECT id, label, created_at, expires_at, used_at, revoked_at, claimed_at FROM invites ORDER BY created_at DESC LIMIT 500")).rows.map((r) => ({
+    id: String(r.id).slice(0, 8),
+    label: r.label,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+    status: r.revoked_at ? "revoked" : r.used_at ? "used" : r.expires_at.getTime() <= now ? "expired" : "open"
+  }));
+}
+async function revokeInvites(pool, o) {
+  const r = await pool.query("UPDATE invites SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL AND (($1::text IS NOT NULL AND id::text LIKE $1 || '%') OR ($2::text IS NOT NULL AND label = $2))", [o.idPrefix ?? null, o.label ?? null]);
+  await audit(pool, "invites_revoked", null, { count: r.rowCount });
+  return r.rowCount ?? 0;
+}
+async function admissionOpen(pool) {
+  if (!await getSettingPg(pool, "pilot_enabled", false) || !await getSettingPg(pool, "signups_open", true)) return { open: false, reason: "paused" };
+  const max = await getSettingPg(pool, "pilot_max_users", 30);
+  const n = (await pool.query('SELECT COUNT(*)::int n FROM "user"')).rows[0].n;
+  return n >= max ? { open: false, reason: "full" } : { open: true };
+}
+var ALPHABET, CLAIM_TTL_MS, normalizeCode, hashCode, looksLikeCode;
+var init_invites = __esm({
+  "src/server/hosted/invites.ts"() {
+    "use strict";
+    init_pg();
+    ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    CLAIM_TTL_MS = 3 * 6e4;
+    normalizeCode = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    hashCode = (s) => createHash("sha256").update(`study-helper-invite:${normalizeCode(s)}`).digest("hex");
+    looksLikeCode = (s) => /^[A-HJ-NP-Z2-9]{16}$/.test(normalizeCode(s));
+  }
+});
+
+// src/server/hosted/auth.ts
+var auth_exports = {};
+__export(auth_exports, {
+  INVITE_COOKIE: () => INVITE_COOKIE,
+  createAuth: () => createAuth,
+  migrateAuth: () => migrateAuth,
+  normalizeCode: () => normalizeCode,
+  readCookie: () => readCookie
+});
+import { betterAuth } from "better-auth";
+import { getMigrations } from "better-auth/db/migration";
+import { genericOAuth } from "better-auth/plugins";
+function readCookie(header, name) {
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(i + 1).trim());
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+function createAuth(pool, cfg, now = Date.now, authPool = pool) {
+  const secure = cfg.publicUrl.startsWith("https://");
+  const plugins = cfg.oidc ? [genericOAuth({ config: [{
+    providerId: cfg.oidc.providerId,
+    clientId: cfg.oidc.clientId,
+    clientSecret: cfg.oidc.clientSecret,
+    authorizationUrl: cfg.oidc.authorizationUrl,
+    tokenUrl: cfg.oidc.tokenUrl,
+    userInfoUrl: cfg.oidc.userInfoUrl,
+    scopes: cfg.oidc.scopes,
+    pkce: true,
+    // OpenID Connect identifies the person by the stable "sub" claim (never by email, which can change)
+    accountSubject: ({ profile }) => String(profile.sub ?? profile.id ?? ""),
+    // keep only what the app needs: an email address. No display name or photo is stored.
+    mapProfileToUser: (p) => ({ email: String(p.email ?? "").toLowerCase(), name: "Student", image: void 0, emailVerified: p.email_verified === true })
+  }] })] : [];
+  return betterAuth({
+    database: authPool,
+    secret: cfg.authSecret,
+    baseURL: cfg.publicUrl,
+    basePath: "/api/auth",
+    trustedOrigins: [cfg.publicUrl],
+    emailAndPassword: { enabled: cfg.passwordSignIn, minPasswordLength: 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
+    account: { accountLinking: { enabled: false } },
+    session: { expiresIn: cfg.sessionDays * 86400, updateAge: 86400, cookieCache: { enabled: false } },
+    advanced: { useSecureCookies: secure, cookiePrefix: "sh", defaultCookieAttributes: { httpOnly: true, sameSite: "lax", secure }, ipAddress: { ipAddressHeaders: ["x-forwarded-for"] }, disableCSRFCheck: false },
+    rateLimit: { enabled: true, window: 60, max: cfg.rate.authPerMin, customRules: { "/sign-in/*": { window: 60, max: cfg.rate.authPerMin }, "/sign-up/*": { window: 60, max: cfg.rate.authPerMin } } },
+    user: {
+      validateUserInfo: async ({ source }, ctx) => {
+        if (source.action === "link-account") return { error: "linking_disabled", errorDescription: "Linking sign-in methods is not supported." };
+        if (source.action !== "create-user") return;
+        const adm = await admissionOpen(pool);
+        if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
+        const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
+        const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
+        if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
+        claimed.set(hashCode(code), inviteId);
+        return;
+      }
+    },
+    databaseHooks: {
+      user: { create: { after: async (user, ctx) => {
+        const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
+        const key = code ? hashCode(code) : null;
+        const inviteId = key ? claimed.get(key) : null;
+        if (inviteId) {
+          claimed.delete(key);
+          await finishInvite(pool, inviteId, user.id, now());
+        }
+        await audit(pool, "user_created", user.id, { method: ctx?.path ?? "unknown" });
+      } } },
+      session: { create: { before: async () => {
+        if (!await getSettingPg(pool, "pilot_enabled", false)) return false;
+      } } }
+    },
+    plugins
+  });
+}
+async function migrateAuth(auth) {
+  const { runMigrations } = await getMigrations(auth.options);
+  await runMigrations();
+}
+var INVITE_COOKIE, cookieOf, claimed;
+var init_auth = __esm({
+  "src/server/hosted/auth.ts"() {
+    "use strict";
+    init_pg();
+    init_invites();
+    init_pg();
+    INVITE_COOKIE = "sh_invite";
+    cookieOf = (ctx) => ctx?.request?.headers?.get?.("cookie") ?? ctx?.headers?.get?.("cookie") ?? null;
+    claimed = /* @__PURE__ */ new Map();
+  }
+});
+
 // src/server/ops/cli.ts
 import { mkdirSync as mkdirSync5 } from "node:fs";
 
@@ -145,80 +406,8 @@ var HttpError = class extends Error {
   extra;
 };
 
-// src/server/hosted/pg.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import pg from "pg";
-var here = dirname(fileURLToPath(import.meta.url));
-pg.types.setTypeParser(1700, (v) => Number(v));
-pg.types.setTypeParser(20, (v) => Number(v));
-function createPool(url, o = {}) {
-  const pool = new pg.Pool({ connectionString: url, max: o.max ?? 10, idleTimeoutMillis: 3e4, connectionTimeoutMillis: 5e3, statement_timeout: 15e3, ssl: o.ssl ? { rejectUnauthorized: true } : void 0 });
-  pool.on("error", () => {
-  });
-  return pool;
-}
-async function tx(pool, fn) {
-  const c = await pool.connect();
-  try {
-    await c.query("BEGIN");
-    const r = await fn(c);
-    await c.query("COMMIT");
-    return r;
-  } catch (e) {
-    try {
-      await c.query("ROLLBACK");
-    } catch {
-    }
-    throw e;
-  } finally {
-    c.release();
-  }
-}
-async function migrateControl(pool) {
-  const c = await pool.connect();
-  const applied = [];
-  try {
-    await c.query("SELECT pg_advisory_lock(727001)");
-    await c.query("CREATE TABLE IF NOT EXISTS control_migrations (version INT PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
-    const done = new Set((await c.query("SELECT version FROM control_migrations")).rows.map((r) => r.version));
-    const dir = [join(here, "..", "control-migrations"), join(here, "control-migrations")].find((d) => existsSync2(d));
-    for (const f of readdirSync(dir).filter((x) => /^\d+_.+\.sql$/.test(x)).sort()) {
-      const version = parseInt(f, 10);
-      if (done.has(version)) continue;
-      await c.query("BEGIN");
-      try {
-        await c.query(readFileSync2(join(dir, f), "utf8"));
-        await c.query("INSERT INTO control_migrations (version, name) VALUES ($1,$2)", [version, f]);
-        await c.query("COMMIT");
-      } catch (e) {
-        await c.query("ROLLBACK");
-        throw e;
-      }
-      applied.push(f);
-    }
-  } finally {
-    try {
-      await c.query("SELECT pg_advisory_unlock(727001)");
-    } catch {
-    }
-    c.release();
-  }
-  return applied;
-}
-async function audit(pool, event, userId, detail = {}) {
-  await pool.query("INSERT INTO audit_log (event, user_id, detail) VALUES ($1,$2,$3)", [event, userId, JSON.stringify(detail)]);
-}
-async function getSettingPg(pool, key, fallback) {
-  const r = await pool.query("SELECT value FROM app_settings WHERE key = $1", [key]);
-  return r.rows.length ? r.rows[0].value : fallback;
-}
-async function setSettingPg(pool, key, value) {
-  await pool.query("INSERT INTO app_settings (key, value, updated_at) VALUES ($1,$2,now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()", [key, JSON.stringify(value)]);
-}
-
 // src/server/hosted/limits.ts
+init_pg();
 var DEFAULT_LIMITS = {
   userDailyRequests: 60,
   userDailyUsd: 0.3,
@@ -300,44 +489,9 @@ function hostedConfigFromEnv(env = process.env) {
   return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num("RATE_API_PER_MIN", 300), authPerMin: num("RATE_AUTH_PER_MIN", 40), invitePerMin: num("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 
-// src/server/hosted/invites.ts
-import { createHash, randomInt } from "node:crypto";
-var ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-var CLAIM_TTL_MS = 3 * 6e4;
-var normalizeCode = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
-var hashCode = (s) => createHash("sha256").update(`study-helper-invite:${normalizeCode(s)}`).digest("hex");
-function newCode() {
-  const c = Array.from({ length: 16 }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
-  return `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8, 12)}-${c.slice(12)}`;
-}
-async function createInvites(pool, o) {
-  const count = Math.max(1, Math.min(200, Math.floor(o.count)));
-  const ttl = Math.max(1, Math.min(60, Math.floor(o.ttlDays ?? 7)));
-  const codes = [];
-  await tx(pool, async (c) => {
-    for (let i = 0; i < count; i++) {
-      const code = newCode();
-      codes.push(code);
-      await c.query("INSERT INTO invites (code_hash, label, created_at, expires_at) VALUES ($1,$2,$3,$4)", [hashCode(code), (o.label ?? "").slice(0, 60), new Date(o.now), new Date(o.now + ttl * 864e5)]);
-    }
-  });
-  await audit(pool, "invites_created", null, { count, ttlDays: ttl, label: (o.label ?? "").slice(0, 60) });
-  return codes;
-}
-async function listInvites(pool, now) {
-  return (await pool.query("SELECT id, label, created_at, expires_at, used_at, revoked_at, claimed_at FROM invites ORDER BY created_at DESC LIMIT 500")).rows.map((r) => ({
-    id: String(r.id).slice(0, 8),
-    label: r.label,
-    createdAt: r.created_at,
-    expiresAt: r.expires_at,
-    status: r.revoked_at ? "revoked" : r.used_at ? "used" : r.expires_at.getTime() <= now ? "expired" : "open"
-  }));
-}
-async function revokeInvites(pool, o) {
-  const r = await pool.query("UPDATE invites SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL AND (($1::text IS NOT NULL AND id::text LIKE $1 || '%') OR ($2::text IS NOT NULL AND label = $2))", [o.idPrefix ?? null, o.label ?? null]);
-  await audit(pool, "invites_revoked", null, { count: r.rowCount });
-  return r.rowCount ?? 0;
-}
+// src/server/ops/cli.ts
+init_pg();
+init_invites();
 
 // src/server/hosted/tenants.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readdirSync as readdirSync3, rmSync, statSync } from "node:fs";
@@ -536,6 +690,7 @@ var Tenants = class {
 };
 
 // src/server/hosted/backup.ts
+init_pg();
 import { createCipheriv, createDecipheriv, createHash as createHash2, randomBytes, scryptSync } from "node:crypto";
 import { copyFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync as readdirSync4, renameSync, rmSync as rmSync2, writeFileSync } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
@@ -608,6 +763,13 @@ async function verifyBackup(dir, passphrase) {
   if (m.format !== "study-helper-backup" || m.version !== 1) throw new Error("Not a Study Helper backup.");
   if (m.encrypted && !passphrase) throw new Error("This backup is encrypted: a passphrase is required.");
   for (const f of [m.control, ...m.users]) if (sha(readFileSync4(join4(dir, f.file))) !== f.sha256) throw new Error(`Backup file ${f.file} is damaged or was modified.`);
+  if (m.encrypted) {
+    try {
+      dec(readFileSync4(join4(dir, m.control.file)), passphrase);
+    } catch {
+      throw new Error("The passphrase does not open this backup.");
+    }
+  }
   return m;
 }
 async function restore(o) {
@@ -730,6 +892,7 @@ var ExportFile = z2.object({
 var LIMITS = { maxPdfBytes: 15 * 1024 * 1024, maxImageBytes: 10 * 1024 * 1024, maxPages: 60, maxChars: 15e4, timeoutMs: 3e4 };
 
 // src/server/hosted/account.ts
+init_pg();
 var { DatabaseSync: DatabaseSync2 } = createRequire2(import.meta.url)("node:sqlite");
 var MB = 1024 * 1024;
 async function deleteAccount(o) {
@@ -857,6 +1020,8 @@ They expire in ${flag("days", "7")} days. The sign-up page is ${cfg.publicUrl ||
       const m = await verifyBackup(flag("from"), pass(flag("passphrase-env")));
       console.log(`Backup OK: made ${m.createdAt}, ${m.users.length} student database(s).`);
     } else if (cmd === "restore") {
+      const { createAuth: createAuth2, migrateAuth: migrateAuth2 } = await Promise.resolve().then(() => (init_auth(), auth_exports));
+      await migrateAuth2(createAuth2(pool, cfg));
       const r = await restore({ pool, dataDir, bundleDir: flag("from"), dataLabel: cfg.dataLabel, passphrase: pass(flag("passphrase-env")) });
       console.log(`Restored ${r.users} student database(s) and ${r.rows} shared rows. Restart the app, then check /readyz.`);
     } else if (cmd === "retention") {

@@ -28,6 +28,7 @@
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "test:hosted": "REQUIRE_PG=1 vitest run tests/hosted",
     "loadtest": "tsx scripts/loadtest.ts",
+    "rehearse:prod": "tsx scripts/rehearse-production.ts",
     "seed:staging": "tsx scripts/seed-staging.ts",
     "scan:secrets": "node scripts/scan-secrets.mjs"
   },

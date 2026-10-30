@@ -52,6 +52,7 @@ export async function verifyBackup(dir: string, passphrase?: string): Promise<Ma
   if (m.format !== 'study-helper-backup' || m.version !== 1) throw new Error('Not a Study Helper backup.');
   if (m.encrypted && !passphrase) throw new Error('This backup is encrypted: a passphrase is required.');
   for (const f of [m.control, ...m.users]) if (sha(readFileSync(join(dir, f.file))) !== f.sha256) throw new Error(`Backup file ${f.file} is damaged or was modified.`);
+  if (m.encrypted) { try { dec(readFileSync(join(dir, m.control.file)), passphrase!); } catch { throw new Error('The passphrase does not open this backup.'); } } // prove the passphrase, not just the file hashes
   return m;
 }
 
