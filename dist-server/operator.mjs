@@ -455,16 +455,17 @@ var Tenants = class {
       recoverOrphans(db);
       e = { db, leases: 0, lastUsed: this.now() };
       this.open.set(k, e);
-      this.evict();
     }
     e.leases++;
     e.lastUsed = this.now();
+    this.evict();
     let released = false;
     return { db: e.db, release: () => {
       if (released) return;
       released = true;
       e.leases--;
       e.lastUsed = this.now();
+      this.evict();
     } };
   }
   /** Close idle handles beyond the cap, least recently used first. A handle with an in-flight request is never closed. */
