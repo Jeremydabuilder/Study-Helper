@@ -12,7 +12,7 @@ Upload or pick material → choose goal + time → check only what needs a look 
 
 AI generates and explains. **Application code** owns scheduling, persistence, math checking, evidence counting, budgets and progress.
 
-> **Security boundary — read this.** This is a **local, single-user app with no login**. It binds to `127.0.0.1` and rejects cross-origin writes. Student records and Google tokens are protected only by that boundary (plus token encryption at rest). **Do not expose it to a network.** Before any public hosting you must add authentication and per-user data isolation; neither exists yet. `npm run doctor` flags a non-local `HOST`.
+> **Two modes — read this.** **Local mode** (default, `npm start`) is a single-user app with **no login**: it binds to `127.0.0.1`, refuses any other `HOST`, and rejects cross-origin writes; do not expose it to a network. **Hosted mode** (`APP_MODE=hosted`, built by `npm run build:hosted`) is the invite-only multi-student pilot: sign-in (Google, or email+password on staging only), single-use invitations, PostgreSQL for accounts and limits, one private database file per student, spend limits, account export/delete. Hosted mode has **never been deployed or tested against live Google, AI or OCR services**; see `docs/LAUNCH_CHECKLIST.md` for what has and has not been verified, and `docs/DEPLOYMENT.md`.
 
 ## Start it
 
@@ -154,9 +154,9 @@ Text PDFs are read locally. For scanned PDFs and PNG/JPEG/WebP screenshots you c
 - Calendar can't see **Google Classroom** or school-portal assignments; the app says so and supports manual entry. "Add study sessions to Calendar" (write permission + preview) is **not built** (button labelled unavailable). Original events are never modified.
 - **Uploads:** *text PDFs* (≤15 MB, ≤60 pages) are read locally into per-page text in a worker thread that is terminated on timeout; *scanned PDFs and PNG/JPEG/WebP screenshots* can be read automatically **only if you enable the optional Anthropic vision reading** (unverified live); otherwise you type them beside the original. Word/Pages/other formats are rejected (export to PDF). The in-page PDF viewer needs a browser with a PDF plugin (headless Chromium has none; a link opens the original in a new tab). Reading order, line breaks and math are reconstructed from glyph positions: superscripts become `^`, flagged "check math", but fractions/roots in unusual fonts may be wrong — that is why you review each page first.
 - Offline concept extraction is rough on real packets (it proposed some headings as concepts and mis-tagged a few math skills); you reject the junk. An AI key gives better proposals, unmeasured here.
-- No accounts or authentication (see the security boundary above).
+- Local mode has no accounts or authentication (hosted mode does; see `docs/ARCHITECTURE.md`).
 - Offline mode: non-math questions are templates (a few per concept); open answers are keyword-checked and always need your confirmation. Offline discrimination and gap questions are templates built from your concept summaries; clarification without AI only returns what is already known.
-- **Cross-device use is a separate future milestone.** It needs authentication, per-user isolation and hosting; the app stays local-only until then.
+- **Cross-device use** exists only through hosted mode, which is a release candidate for a few invited friends and has not been deployed yet (`docs/LAUNCH_CHECKLIST.md`).
 - The time budget assumes about two minutes per question (answering plus reading feedback); that is a planning estimate, not a measurement of you.
 - Grounding: keyword/rule checks catch only some contradictions; correct terminology attached to a wrong relationship passes them. The semantic assessment is a single fallible model call and has never run against a live model. An unflagged question is not a verified one.
 - Diagnosis from a single answer is a hypothesis (“likely”), shown as such; a MC distractor label shows what the choice *represents*, not why you chose it.
@@ -185,7 +185,7 @@ Key decisions: concept state is a **replay of the attempt log** (correcting a gr
 3. Tune effort/output ceilings from measured token use; add prompt caching for repeated source excerpts.
 4. **You:** if you want automatic reading of scans, enable `AI_OCR=anthropic` and try one page; check the result against the original before trusting it. Classroom import with its own explicit read scopes.
 5. "Add study sessions to Calendar" with separate write consent and an exact-event preview.
-6. Authentication + per-user isolation before any hosting.
+6. Hosted mode (authentication, per-user isolation) is implemented; remaining work is staging validation and live checks (`docs/LAUNCH_CHECKLIST.md`).
 
 
 ## Homework helper

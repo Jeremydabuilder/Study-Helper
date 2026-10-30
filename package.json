@@ -25,7 +25,7 @@
     "start:hosted": "APP_MODE=hosted NODE_ENV=production node dist-server/main.mjs",
     "operator:prod": "node dist-server/operator.mjs",
     "prune:prod": "node scripts/prune-dev-only.mjs",
-    "audit:prod": "npm audit --omit=dev --omit=peer --audit-level=high || true",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
     "test:hosted": "REQUIRE_PG=1 vitest run tests/hosted",
     "loadtest": "tsx scripts/loadtest.ts",
     "seed:staging": "tsx scripts/seed-staging.ts",
@@ -49,10 +49,10 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^5.2.0",
     "concurrently": "^9.1.0",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11",
-    "vitest": "^2.1.8"
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
   }
 }
