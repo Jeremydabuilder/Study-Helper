@@ -164,7 +164,7 @@ export class HostedHarness {
     if (o.labelOverride) env.DATA_LABEL = o.labelOverride;
     const { cfg: hcfg, problems } = hostedConfigFromEnv(env as never);
     if (problems.length) throw new Error(problems.join('; '));
-    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : new LLMProvider(h.llm) as AIProvider });
+    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, instanceLockWaitMs: 0, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : new LLMProvider(h.llm) as AIProvider });
     h.server = await new Promise<Server>((res) => { const s = h.hosted.app.listen(h.port, '127.0.0.1', () => res(s)); });
     if (o.pilot !== false) { await setSettingPg(h.db.pool, 'pilot_enabled', true); await setSettingPg(h.db.pool, 'pilot_max_users', o.maxUsers ?? 50); }
     return h;

@@ -30,7 +30,7 @@ export interface HostedApp {
 }
 export interface HostedDeps {
   cfg: AppConfig; hcfg: HostedConfig; dataDir: string;
-  llm?: AIProvider | null; gateway?: CalendarGateway; now?: () => number; pool?: Pool; logger?: Logger;
+  llm?: AIProvider | null; gateway?: CalendarGateway; now?: () => number; pool?: Pool; logger?: Logger; instanceLockWaitMs?: number;
 }
 
 type Student = { id: string; email: string };
@@ -39,12 +39,33 @@ const MB = 1024 * 1024;
 /** A per-student secret for encrypting that student's Calendar tokens: one student's key cannot decrypt another's, and the master secret never encrypts directly. */
 export const deriveUserSecret = (master: string, userId: string) => Buffer.from(hkdfSync('sha256', master, 'study-helper-user', `calendar-tokens:${userId}`, 32)).toString('hex');
 
+/**
+ * Student files live on one disk, so only ONE server process may use a given database at a time. The process holds a PostgreSQL advisory lock for its whole life;
+ * a second process pointed at the same database waits (a deploy briefly overlaps old and new) and then refuses to start instead of writing to a second disk.
+ */
+async function acquireInstanceLock(pool: Pool, waitMs: number) {
+  const c = await pool.connect();
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const r = await c.query('SELECT pg_try_advisory_lock(727003) AS ok');
+    if (r.rows[0].ok) return { release: () => c.release(true) }; // destroying the connection releases the lock
+    if (Date.now() >= deadline) { c.release(); throw new Error('Another Study Helper process is already using this database. Run exactly one instance per service (student files live on one disk). Stop the other process and try again.'); }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
+  const pool = d.pool ?? createPool(d.hcfg.databaseUrl, { ssl: /sslmode=require/.test(d.hcfg.databaseUrl) });
+  const instance = await acquireInstanceLock(pool, d.instanceLockWaitMs ?? Number(process.env.INSTANCE_LOCK_WAIT_MS ?? 30_000)).catch(async (e) => { if (!d.pool) await pool.end(); throw e; });
+  try { return await buildHostedApp(d, pool, instance); }
+  catch (e) { instance.release(); if (!d.pool) await pool.end().catch(() => {}); throw e; }
+}
+
+async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: () => void }): Promise<HostedApp> {
   const { cfg, hcfg } = d;
   const now = d.now ?? Date.now;
   const logger = d.logger ?? makeLogger(undefined, now);
   const metrics = new Metrics();
-  const pool = d.pool ?? createPool(hcfg.databaseUrl, { ssl: /sslmode=require/.test(hcfg.databaseUrl) });
   await migrateControl(pool);
   const authPool = createPool(hcfg.databaseUrl, { max: 10, ssl: /sslmode=require/.test(hcfg.databaseUrl) });
   const auth = createAuth(pool, hcfg, now, authPool);
@@ -247,7 +268,7 @@ export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
   }
 
   const app = createApp({ cfg, now, llm: d.llm ?? null, offline, ctx: () => { throw new Error('hosted mode never uses the shared runtime context'); }, ensureDemo: async () => {}, resetDemo: async () => {}, workspaces: undefined as never, googleGw, demoGw: new MemoryGateway() } as never, hooks);
-  return { app, pool, auth, tenants, metrics, async close() { tenants.closeAll(); await authPool.end(); if (!d.pool) await pool.end(); } };
+  return { app, pool, auth, tenants, metrics, async close() { tenants.closeAll(); instance.release(); await authPool.end(); if (!d.pool) await pool.end(); } };
 }
 
 const inviteMessage = (r: string) => ({ unknown: 'That invitation code was not recognised. Check it and try again.', used: 'That invitation has already been used.', expired: 'That invitation has expired. Ask for a new one.', revoked: 'That invitation is no longer valid.', in_use: 'That invitation is being used right now. Try again in a few minutes.' } as Record<string, string>)[r] ?? 'That invitation does not work.';

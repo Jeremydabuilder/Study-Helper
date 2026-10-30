@@ -64,6 +64,8 @@ d('environments cannot share data', () => {
     const a = await HostedHarness.start({ label: 'production' } as never); open.push(a);
     const labelInDb = (await a.db.pool.query("SELECT value FROM app_settings WHERE key = 'data_label'")).rows[0].value;
     expect(labelInDb).toBe('test'); // the harness's label; now point a "staging" server at the same database
+    await expect(HostedHarness.start({ db: a.db, dir: a.dir, labelOverride: 'staging' } as never)).rejects.toThrow(/Another Study Helper process/); // a second process is refused first
+    await a.stop({ keepDb: true }); open.pop();
     await expect(HostedHarness.start({ db: a.db, dir: a.dir, labelOverride: 'staging' } as never)).rejects.toThrow(/Refusing to start/);
   });
 });
