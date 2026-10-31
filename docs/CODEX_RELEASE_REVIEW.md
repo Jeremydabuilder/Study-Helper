@@ -1,7 +1,7 @@
 # Independent release hardening — 2026-10-31
 
 Base: `ef92cc372c23f72480035042728409c943406dcc` on `claude/pilot-integration`.
-This branch consolidates the source fixes from Codex PRs #7 and #8 without changing the integration branch or publishing a site.
+The integration branch advanced to `feb5f6d` during this pass and already incorporated PRs #7 and #8. Its changes were merged into this review branch, preserving its UI retry, full dependency audit and stale-bundle checks. The integration branch itself was not modified and no site was published.
 
 ## Changes
 

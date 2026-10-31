@@ -37,7 +37,7 @@ export class Tenants {
       this.open.set(k, e);
     }
     e.leases++; e.lastUsed = this.now();
-    // Acquire before trimming: otherwise this newly opened handle can evict itself.
+    // Protect the new handle before eviction: all older handles may be leased.
     this.evict();
     let released = false;
     return { db: e.db, release: () => { if (released) return; released = true; e!.leases--; e!.lastUsed = this.now(); this.evict(); } };
