@@ -2,7 +2,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, 'claude/**']
+    branches: [main, 'claude/**', 'codex/**']
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -25,6 +25,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build:hosted
+      - run: node scripts/check-release-tools.mjs
       - run: npm run scan:secrets
       - run: npm run audit:prod
       - name: Browser tests (real browser, mocked identity provider and AI)
@@ -35,6 +36,8 @@ jobs:
         run: |
           ! APP_MODE=hosted node dist-server/main.mjs 2>err.txt; grep -q DATABASE_URL err.txt
           ! HOST=0.0.0.0 NODE_ENV=production node dist-server/main.mjs 2>err2.txt; grep -q "no login" err2.txt
+      - name: Rehearse built production bundle, restart and backup restoration
+        run: npm run rehearse:prod
       - uses: actions/upload-artifact@v4
         if: failure()
         with: { name: playwright-traces, path: test-results/ }

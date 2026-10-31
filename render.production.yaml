@@ -6,9 +6,9 @@ services:
   - type: web
     name: study-helper-pilot
     runtime: node
-    plan: starter
+    plan: 0.5c-512mb
     region: oregon
-    autoDeploy: false
+    autoDeployTrigger: off
     buildCommand: npm ci --include=dev && npm run build:hosted && npm run prune:prod
     startCommand: npm run start:hosted
     healthCheckPath: /readyz
@@ -33,4 +33,4 @@ services:
       - { key: LIMIT_USER_DAILY_USD, value: "0.30" }
       - { key: LIMIT_GLOBAL_DAILY_USD, value: "5" }    # your hard daily ceiling for the whole pilot: raise it only on purpose
 databases:
-  - { name: study-helper-pilot-db, plan: basic-256mb, region: oregon, databaseName: study_helper_pilot, user: study_helper, ipAllowList: [] }
+  - { name: study-helper-pilot-db, plan: 0.1c-256mb, region: oregon, databaseName: study_helper_pilot, user: study_helper, ipAllowList: [], postgresMajorVersion: "16" }

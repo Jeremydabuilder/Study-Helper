@@ -216,7 +216,11 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         go('connected=1');
       } catch (e) { go(`error=${e instanceof CalendarError ? e.code : 'unavailable'}`); }
     },
-    async resetDemo(req: Request) { const s = studentOf(req); tenants.dropDemo(s.id); demoGws.delete(s.id); demoReady.delete(s.id); },
+    async resetDemo(req: Request) {
+      const s = studentOf(req);
+      if (!tenants.dropDemo(s.id)) throw new HttpError(409, 'demo_busy', 'Your sample workspace is still processing a request. Wait for it to finish, then reset again.');
+      demoGws.delete(s.id); demoReady.delete(s.id);
+    },
     meta(req: Request) { const s = (req as any).student as Student | undefined; return { student: s ? { email: s.email } : null, environment: hcfg.environment }; },
     onError(err: unknown, req: Request) { logger.error('unhandled_error', { errorClass: err instanceof Error ? err.constructor.name : typeof err, route: req.path.replace(/\/[0-9a-f-]{8,}/gi, '/:id'), method: req.method }); },
   };

@@ -29,6 +29,9 @@ for (const f of ['package.json', 'package-lock.json']) cpSync(join(root, f), joi
 cpSync(join(root, 'dist'), join(app, 'dist'), { recursive: true }); cpSync(join(root, 'dist-server'), join(app, 'dist-server'), { recursive: true });
 execFileSync('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: app, stdio: 'pipe' });
 check('production install (npm ci --omit=dev) contains everything the bundle needs', existsSync(join(app, 'node_modules')));
+cpSync(join(root, 'scripts/check-release-tools.mjs'), join(app, 'check-release-tools.mjs'));
+execFileSync(process.execPath, ['check-release-tools.mjs'], { cwd: app, stdio: 'inherit', env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+check('built operator and seed commands run in the production-only install', true);
 
 const idp = await new FakeIdp().start();
 const dbA = await createTestDb({ migrate: false }), dbB = await createTestDb({ migrate: false });

@@ -76,18 +76,18 @@ describe('the live commands never run (or fake results) without credentials and 
   const env = { ...process.env, ANTHROPIC_API_KEY: '', GROQ_API_KEY: '', AI_PROVIDER: '' };
   it('smoke:ai and eval:live exit 2 and say live verification is incomplete', () => {
     for (const script of [['src/eval/smoke.ts'], ['src/eval/cli.ts', '--live']]) {
-      const r = spawnSync('npx', ['tsx', ...script], { env, encoding: 'utf8', cwd: process.cwd() });
+      const r = spawnSync(process.execPath, ['--import', 'tsx', ...script], { env, encoding: 'utf8', cwd: process.cwd() });
       expect(r.status, script.join(' ')).toBe(2);
       expect(r.stderr).toMatch(/NOT run/i);
       expect(r.stdout).not.toMatch(/RESULT: all three live paths/);
     }
   }, 30_000);
   it('with a key but without --confirm-spend it still refuses (no surprise spend)', () => {
-    const r = spawnSync('npx', ['tsx', 'src/eval/smoke.ts'], { env: { ...env, ANTHROPIC_API_KEY: 'sk-test-not-real' }, encoding: 'utf8', cwd: process.cwd() });
+    const r = spawnSync(process.execPath, ['--import', 'tsx', 'src/eval/smoke.ts'], { env: { ...env, ANTHROPIC_API_KEY: 'sk-test-not-real' }, encoding: 'utf8', cwd: process.cwd() });
     expect(r.status).toBe(2); expect(r.stderr).toMatch(/--confirm-spend/);
   }, 30_000);
   it('the offline eval CLI runs and writes a report', () => {
-    const out = execFileSync('npx', ['tsx', 'src/eval/cli.ts', '--only', 'math', '--out', '/tmp/claude-0/eval-test-out'], { env, encoding: 'utf8' });
+    const out = execFileSync(process.execPath, ['--import', 'tsx', 'src/eval/cli.ts', '--only', 'math', '--out', '/tmp/claude-0/eval-test-out'], { env, encoding: 'utf8' });
     expect(out).toMatch(/Math checker accuracy/);
   }, 30_000);
 });

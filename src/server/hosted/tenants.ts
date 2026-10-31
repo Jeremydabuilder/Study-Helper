@@ -35,11 +35,12 @@ export class Tenants {
       recoverOrphans(db);
       e = { db, leases: 0, lastUsed: this.now() };
       this.open.set(k, e);
-      this.evict();
     }
     e.leases++; e.lastUsed = this.now();
+    // Acquire before trimming: otherwise this newly opened handle can evict itself.
+    this.evict();
     let released = false;
-    return { db: e.db, release: () => { if (released) return; released = true; e!.leases--; e!.lastUsed = this.now(); } };
+    return { db: e.db, release: () => { if (released) return; released = true; e!.leases--; e!.lastUsed = this.now(); this.evict(); } };
   }
 
   /** Close idle handles beyond the cap, least recently used first. A handle with an in-flight request is never closed. */
@@ -61,11 +62,13 @@ export class Tenants {
     return true;
   }
 
-  /** Delete only the sample database of one student (reset). */
-  dropDemo(userId: string) {
+  /** Delete only the sample database; refuse while another request still uses it. */
+  dropDemo(userId: string): boolean {
     const k = this.key(userId, 'demo'); const e = this.open.get(k);
+    if (e && e.leases > 0) return false;
     if (e) { e.db.close(); this.open.delete(k); }
     for (const sfx of ['', '-wal', '-shm']) rmSync(this.file(userId, 'demo') + sfx, { force: true });
+    return true;
   }
 
   listUserIds(): string[] {
