@@ -12,7 +12,7 @@ import { AIError } from '../src/ai/provider';
 
 const APP_PORT = Number(process.env.E2E_APP_PORT ?? 4180), CONTROL_PORT = Number(process.env.E2E_CONTROL_PORT ?? 4181);
 const limits = process.env.E2E_LIMITS ? JSON.parse(process.env.E2E_LIMITS) : {};
-const h = await HostedHarness.start({ port: APP_PORT, passwordSignIn: true, limits });
+const h = await HostedHarness.start({ port: APP_PORT, passwordSignIn: true, limits: { AUTH_GUESTS: '1', ...limits } });
 
 const loop = monitorEventLoopDelay({ resolution: 10 }); loop.enable();
 const json = (res: import('node:http').ServerResponse, body: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
