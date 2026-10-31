@@ -10897,7 +10897,13 @@ async function acquireInstanceLock(pool, waitMs) {
   const deadline = Date.now() + waitMs;
   for (; ; ) {
     const r = await c.query("SELECT pg_try_advisory_lock(727003) AS ok");
-    if (r.rows[0].ok) return { release: () => c.release(true) };
+    if (r.rows[0].ok) return { release: async () => {
+      try {
+        await c.query("SELECT pg_advisory_unlock(727003)");
+      } finally {
+        c.release(true);
+      }
+    } };
     if (Date.now() >= deadline) {
       c.release();
       throw new Error("Another Study Helper process is already using this database. Run exactly one instance per service (student files live on one disk). Stop the other process and try again.");
@@ -10914,7 +10920,7 @@ async function createHostedApp(d) {
   try {
     return await buildHostedApp(d, pool, instance);
   } catch (e) {
-    instance.release();
+    await instance.release();
     if (!d.pool) await pool.end().catch(() => {
     });
     throw e;
@@ -11205,7 +11211,7 @@ async function buildHostedApp(d, pool, instance) {
   }, workspaces: void 0, googleGw, demoGw: new MemoryGateway() }, hooks);
   return { app, pool, auth, tenants, metrics, async close() {
     tenants.closeAll();
-    instance.release();
+    await instance.release();
     await authPool.end();
     if (!d.pool) await pool.end();
   } };
