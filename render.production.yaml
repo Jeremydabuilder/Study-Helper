@@ -26,8 +26,8 @@ services:
       - { key: OPERATOR_TOKEN, generateValue: true }
       - { key: OPERATOR_NAME, sync: false }            # required: shown in the privacy notice
       - { key: OPERATOR_CONTACT, sync: false }         # required: how students reach you
-      - { key: GOOGLE_CLIENT_ID, sync: false }
-      - { key: GOOGLE_CLIENT_SECRET, sync: false }
+      - { key: AUTH_GUESTS, value: "1" }
+      # Optional account sign-in: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable it.
       - { key: ANTHROPIC_API_KEY, sync: false }
       - { key: LIMIT_USER_DAILY_AI_REQUESTS, value: "60" }
       - { key: LIMIT_USER_DAILY_USD, value: "0.30" }

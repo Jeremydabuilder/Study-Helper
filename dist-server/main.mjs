@@ -10430,7 +10430,8 @@ function hostedConfigFromEnv(env = process.env) {
     scopes: ["openid", "email"]
   } : null;
   const passwordSignIn = g("AUTH_PASSWORD") === "1";
-  if (!oidc && !passwordSignIn) problems.push("Configure at least one sign-in method: Google/OIDC credentials, or AUTH_PASSWORD=1.");
+  const guestEnabled = g("AUTH_GUESTS") === "1";
+  if (!oidc && !passwordSignIn && !guestEnabled) problems.push("Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.");
   if (environment === "production" && passwordSignIn && g("AUTH_PASSWORD_ALLOW_IN_PRODUCTION") !== "1") problems.push("AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).");
   const dataLabel = g("DATA_LABEL") ?? environment;
   const operator = { name: g("OPERATOR_NAME") ?? "", contact: g("OPERATOR_CONTACT") ?? "" };
@@ -10449,7 +10450,7 @@ function hostedConfigFromEnv(env = process.env) {
     userDailyExtractions: num2("LIMIT_USER_DAILY_EXTRACTIONS", DEFAULT_LIMITS.userDailyExtractions),
     globalConcurrentExtractions: num2("LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS", DEFAULT_LIMITS.globalConcurrentExtractions)
   };
-  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 var GOOGLE;
 var init_config = __esm({
@@ -10506,7 +10507,7 @@ var init_invites = __esm({
 // src/server/hosted/auth.ts
 import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
-import { genericOAuth } from "better-auth/plugins";
+import { anonymous, genericOAuth } from "better-auth/plugins";
 function readCookie(header, name) {
   if (!header) return null;
   for (const part of header.split(";")) {
@@ -10537,6 +10538,7 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p) => ({ email: String(p.email ?? "").toLowerCase(), name: "Student", image: void 0, emailVerified: p.email_verified === true })
   }] })] : [];
+  if (cfg2.guestEnabled) plugins.push(anonymous({ disableDeleteAnonymousUser: true }));
   return betterAuth({
     database: authPool,
     secret: cfg2.authSecret,
@@ -10554,6 +10556,7 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
         if (source.action !== "create-user") return;
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
+        if (source.method === "anonymous" && cfg2.guestEnabled) return;
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
@@ -11010,7 +11013,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg(pool, "pilot_enabled", false);
-          res.json({ signedIn: !!s, email: s?.email ?? null, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90 }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn } });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90 }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
         } catch (e) {
           next(e);
         }
@@ -11058,7 +11061,7 @@ async function buildHostedApp(d, pool, instance) {
       });
       app2.get("/api/account", (req, res) => {
         const s = studentOf(req);
-        res.json({ email: s.email, environment: hcfg.environment, storageMb: Math.round(tenants.usageBytes(s.id) / MB2 * 10) / 10, storageLimitMb: hcfg.limits.userStorageMb });
+        res.json({ email: s.guest ? null : s.email, guest: s.guest, environment: hcfg.environment, storageMb: Math.round(tenants.usageBytes(s.id) / MB2 * 10) / 10, storageLimitMb: hcfg.limits.userStorageMb });
       });
       app2.get("/api/account/assistant", async (req, res, next) => {
         try {
@@ -11071,7 +11074,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const s = studentOf(req);
           await audit(pool, "export_requested", s.id, {});
-          const body = await withCtx(req, "real", (ctx) => exportAccount(ctx, { email: s.email, withFiles: req.query.files === "1" }));
+          const body = await withCtx(req, "real", (ctx) => exportAccount(ctx, { email: s.guest ? "" : s.email, withFiles: req.query.files === "1" }));
           res.setHeader("Content-Type", "application/json");
           res.setHeader("Content-Disposition", 'attachment; filename="study-helper-export.json"');
           res.setHeader("Cache-Control", "no-store");
@@ -11111,6 +11114,7 @@ async function buildHostedApp(d, pool, instance) {
       const go = (q) => res.redirect(`/#/calendar?${q}`);
       try {
         const s = studentOf(req);
+        if (s.guest) return go("error=denied");
         const { code, state, error } = req.query;
         const st = state ? consumeState(state) : null;
         if (error) return go(`error=${error === "access_denied" ? "denied" : "org_blocked"}`);
@@ -11134,7 +11138,7 @@ async function buildHostedApp(d, pool, instance) {
     },
     meta(req) {
       const s = req.student;
-      return { student: s ? { email: s.email } : null, environment: hcfg.environment };
+      return { student: s ? { email: s.guest ? null : s.email, guest: s.guest } : null, environment: hcfg.environment };
     },
     onError(err, req) {
       logger.error("unhandled_error", { errorClass: err instanceof Error ? err.constructor.name : typeof err, route: req.path.replace(/\/[0-9a-f-]{8,}/gi, "/:id"), method: req.method });
@@ -11142,7 +11146,7 @@ async function buildHostedApp(d, pool, instance) {
   };
   async function sessionOf(req) {
     const r = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
-    return r?.user ? { id: r.user.id, email: r.user.email } : null;
+    return r?.user ? { id: r.user.id, email: r.user.email, guest: !!r.user.isAnonymous } : null;
   }
   async function buildCtx(s, ws) {
     const lease = tenants.lease(s.id, ws);
@@ -11170,6 +11174,7 @@ async function buildHostedApp(d, pool, instance) {
   }
   async function routeGuard(req, res, s) {
     const m = req.method, p = req.path;
+    if (s.guest && p === "/calendar/connect") throw new HttpError(403, "guest_calendar_unavailable", "Guest mode does not connect Google Calendar. Enter assignments and tests manually.");
     const upload = m === "POST" && (/^\/subjects\/[^/]+\/files$/.test(p) || /^\/sources\/[^/]+\/replace$/.test(p));
     const heavy = upload || m === "POST" && (/^\/sources\/[^/]+\/ocr$/.test(p) || /^\/sources\/[^/]+\/extract$/.test(p));
     const L = hcfg.limits;

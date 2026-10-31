@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth';
 import { getMigrations } from 'better-auth/db/migration';
-import { genericOAuth } from 'better-auth/plugins';
+import { anonymous, genericOAuth } from 'better-auth/plugins';
 import { Pool, audit } from './pg';
 import { HostedConfig } from './config';
 import { admissionOpen, claimInvite, finishInvite, hashCode, looksLikeCode, normalizeCode } from './invites';
@@ -34,6 +34,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p: Record<string, any>) => ({ email: String(p.email ?? '').toLowerCase(), name: 'Student', image: undefined, emailVerified: p.email_verified === true }),
   }] })] : [];
+  if (cfg.guestEnabled) plugins.push(anonymous({ disableDeleteAnonymousUser: true }) as any);
   return betterAuth({
     database: authPool, secret: cfg.authSecret, baseURL: cfg.publicUrl, basePath: '/api/auth', trustedOrigins: [cfg.publicUrl],
     emailAndPassword: { enabled: cfg.passwordSignIn, minPasswordLength: 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
@@ -47,6 +48,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
         if (source.action !== 'create-user') return;
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === 'full' ? 'pilot_full' : 'pilot_closed', errorDescription: adm.reason === 'full' ? 'The pilot is full right now.' : 'The pilot is not accepting new students right now.' };
+        if (source.method === 'anonymous' && cfg.guestEnabled) return;
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: 'invite_required', errorDescription: 'You need a valid invitation to create an account.' };

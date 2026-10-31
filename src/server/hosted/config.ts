@@ -5,7 +5,7 @@ export interface OidcConfig { providerId: string; clientId: string; clientSecret
 export interface HostedConfig {
   environment: Environment;
   databaseUrl: string; publicUrl: string; authSecret: string;
-  oidc: OidcConfig | null; passwordSignIn: boolean;
+  oidc: OidcConfig | null; passwordSignIn: boolean; guestEnabled: boolean;
   limits: Limits; trustProxy: boolean; sessionDays: number;
   /** requests per minute: signed-in student, sign-in endpoints per address, invitation checks per address */
   rate: { apiPerMin: number; authPerMin: number; invitePerMin: number };
@@ -42,7 +42,8 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
   } : null;
   // password sign-in exists for staging with fictional accounts and for students without a Google account; it is still invite-gated
   const passwordSignIn = g('AUTH_PASSWORD') === '1';
-  if (!oidc && !passwordSignIn) problems.push('Configure at least one sign-in method: Google/OIDC credentials, or AUTH_PASSWORD=1.');
+  const guestEnabled = g('AUTH_GUESTS') === '1';
+  if (!oidc && !passwordSignIn && !guestEnabled) problems.push('Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.');
   if (environment === 'production' && passwordSignIn && g('AUTH_PASSWORD_ALLOW_IN_PRODUCTION') !== '1') problems.push('AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).');
   const dataLabel = g('DATA_LABEL') ?? environment;
   const operator = { name: g('OPERATOR_NAME') ?? '', contact: g('OPERATOR_CONTACT') ?? '' };
@@ -56,5 +57,5 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
     userDailyChat: num('LIMIT_USER_DAILY_CHAT', DEFAULT_LIMITS.userDailyChat), userDailyExtractions: num('LIMIT_USER_DAILY_EXTRACTIONS', DEFAULT_LIMITS.userDailyExtractions),
     globalConcurrentExtractions: num('LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS', DEFAULT_LIMITS.globalConcurrentExtractions),
   };
-  return { cfg: { environment, databaseUrl: g('DATABASE_URL') ?? '', publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g('TRUST_PROXY') !== '0', operator, sessionDays: num('SESSION_DAYS', 7), dataLabel, rate: { apiPerMin: num('RATE_API_PER_MIN', 300), authPerMin: num('RATE_AUTH_PER_MIN', 40), invitePerMin: num('RATE_INVITE_PER_MIN', 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g('DATABASE_URL') ?? '', publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g('TRUST_PROXY') !== '0', operator, sessionDays: num('SESSION_DAYS', 7), dataLabel, rate: { apiPerMin: num('RATE_API_PER_MIN', 300), authPerMin: num('RATE_AUTH_PER_MIN', 40), invitePerMin: num('RATE_INVITE_PER_MIN', 20) } }, problems };
 }

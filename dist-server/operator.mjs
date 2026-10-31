@@ -169,7 +169,7 @@ __export(auth_exports, {
 });
 import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
-import { genericOAuth } from "better-auth/plugins";
+import { anonymous, genericOAuth } from "better-auth/plugins";
 function readCookie(header, name) {
   if (!header) return null;
   for (const part of header.split(";")) {
@@ -200,6 +200,7 @@ function createAuth(pool, cfg, now = Date.now, authPool = pool) {
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p) => ({ email: String(p.email ?? "").toLowerCase(), name: "Student", image: void 0, emailVerified: p.email_verified === true })
   }] })] : [];
+  if (cfg.guestEnabled) plugins.push(anonymous({ disableDeleteAnonymousUser: true }));
   return betterAuth({
     database: authPool,
     secret: cfg.authSecret,
@@ -217,6 +218,7 @@ function createAuth(pool, cfg, now = Date.now, authPool = pool) {
         if (source.action !== "create-user") return;
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
+        if (source.method === "anonymous" && cfg.guestEnabled) return;
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
@@ -467,7 +469,8 @@ function hostedConfigFromEnv(env = process.env) {
     scopes: ["openid", "email"]
   } : null;
   const passwordSignIn = g("AUTH_PASSWORD") === "1";
-  if (!oidc && !passwordSignIn) problems.push("Configure at least one sign-in method: Google/OIDC credentials, or AUTH_PASSWORD=1.");
+  const guestEnabled = g("AUTH_GUESTS") === "1";
+  if (!oidc && !passwordSignIn && !guestEnabled) problems.push("Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.");
   if (environment === "production" && passwordSignIn && g("AUTH_PASSWORD_ALLOW_IN_PRODUCTION") !== "1") problems.push("AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).");
   const dataLabel = g("DATA_LABEL") ?? environment;
   const operator = { name: g("OPERATOR_NAME") ?? "", contact: g("OPERATOR_CONTACT") ?? "" };
@@ -486,7 +489,7 @@ function hostedConfigFromEnv(env = process.env) {
     userDailyExtractions: num("LIMIT_USER_DAILY_EXTRACTIONS", DEFAULT_LIMITS.userDailyExtractions),
     globalConcurrentExtractions: num("LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS", DEFAULT_LIMITS.globalConcurrentExtractions)
   };
-  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num("RATE_API_PER_MIN", 300), authPerMin: num("RATE_AUTH_PER_MIN", 40), invitePerMin: num("RATE_INVITE_PER_MIN", 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num("RATE_API_PER_MIN", 300), authPerMin: num("RATE_AUTH_PER_MIN", 40), invitePerMin: num("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 
 // src/server/ops/cli.ts
