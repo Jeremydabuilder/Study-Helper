@@ -61,11 +61,13 @@ export class Tenants {
     return true;
   }
 
-  /** Delete only the sample database of one student (reset). */
-  dropDemo(userId: string) {
+  /** Delete only the sample database; refuse while another request still uses it. */
+  dropDemo(userId: string): boolean {
     const k = this.key(userId, 'demo'); const e = this.open.get(k);
+    if (e && e.leases > 0) return false;
     if (e) { e.db.close(); this.open.delete(k); }
     for (const sfx of ['', '-wal', '-shm']) rmSync(this.file(userId, 'demo') + sfx, { force: true });
+    return true;
   }
 
   listUserIds(): string[] {
