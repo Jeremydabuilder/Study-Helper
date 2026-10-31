@@ -27,6 +27,9 @@ jobs:
       - run: npm run build:hosted
       - run: npm run scan:secrets
       - run: npm run audit:prod
+      - run: npm audit --audit-level=moderate   # everything, including build and test tools
+      - name: Tracked server bundles are up to date
+        run: git diff --exit-code -- dist-server
       - name: Browser tests (real browser, mocked identity provider and AI)
         run: |
           npx playwright install --with-deps chromium
@@ -35,6 +38,8 @@ jobs:
         run: |
           ! APP_MODE=hosted node dist-server/main.mjs 2>err.txt; grep -q DATABASE_URL err.txt
           ! HOST=0.0.0.0 NODE_ENV=production node dist-server/main.mjs 2>err2.txt; grep -q "no login" err2.txt
+      - name: Production rehearsal of the built bundle (restart, backup/restore, single instance)
+        run: npm run rehearse:prod
       - uses: actions/upload-artifact@v4
         if: failure()
         with: { name: playwright-traces, path: test-results/ }

@@ -1,7 +1,7 @@
 # Launch checklist: release candidate for 3–5 invited friends
 
 **Release branch:** `claude/pilot-integration` (mirrored as `claude/gracious-ramanujan-crnd4h`); `main` and the default branch were not touched. Everything on `main`, `…-annotations`, `…-followups`, `…-trust-m6` and `…-autonomous-m5` is already contained in it.
-**Code commit checked:** `76a99e4` (later commits change documentation and the rebuilt `dist-server` bundle only; the final hash is in the hand-off message).
+**Code commit checked:** `64e561e`, in a **fresh clone** with `npm ci` (so nothing depended on leftover local files). It includes Codex PR #7 and #8, reviewed and merged. Later commits change only the regenerated `dist-server` bundles (verified byte-identical to a clean-clone build), the CI workflow and documentation; the final hash is in the hand-off message.
 **Environment of every check below:** one Linux sandbox, Node 22.22.0, PostgreSQL 16 on 127.0.0.1 (real, not mocked), Chromium via Playwright, **mocked** identity provider, calendar provider and AI model. Nothing was run against Google, Anthropic, OCR, Render or HTTPS.
 
 Status words: **Passed** (command, evidence) · **Failed** (problem, repair) · **Blocked** (exact missing dependency) · **Not applicable** (reason).
@@ -9,11 +9,12 @@ Status words: **Passed** (command, evidence) · **Failed** (problem, repair) · 
 ## A. Engineering checks (all re-run on this commit)
 | # | Check | Status | Command / evidence |
 |---|---|---|---|
+| 0 | Codex PR #7 (tenant handle eviction; audit failures not suppressed) and PR #8 (sample reset vs active requests) | Passed | Reviewed line by line and merged. Their own tests (`tests/tenants.test.ts`, `tests/tenantReset.test.ts`) pass; typecheck and build were **re-run here** (PR #8 had not verified them). Added a route-level test (`tests/hostedRelease.test.ts`): reset is refused with 409 `demo_busy` while a request holds the sample database, works afterwards, and never touches the real workspace; the page retries a busy reset. Conflict in `package.json` resolved by keeping the stricter audit command (`npm audit --omit=dev`, peers included) |
 | 1 | Type checking | Passed | `npm run typecheck` → exit 0 |
-| 2 | All unit/integration tests with PostgreSQL **required** | Passed | `TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5544/postgres REQUIRE_PG=1 npx vitest run` → 41 files, 438 tests passed, 0 skipped (a missing database fails the run; first attempt without Postgres failed loudly, as designed) |
-| 3 | Browser tests, desktop and phone | Passed | `npm run build && npx playwright test` → 19 passed (new student journey, delayed review with injected clock, uploads, failures, isolation, keyboard-only, phone layout, homework) |
-| 4 | Secret scan | Passed | `npm run scan:secrets` → 216 tracked files, no credential-shaped strings |
-| 5 | Dependency audit | Passed | `npm audit` and `npm run audit:prod` → 0 vulnerabilities. Earlier runs found 6 (vite/vitest/esbuild/tinypool, dev tools only); fixed by upgrading to vite 7 / vitest 4; all tests re-run afterwards. `audit:prod` no longer ends in `|| true` |
+| 2 | All unit/integration tests with PostgreSQL **required** | Passed | `TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5544/postgres REQUIRE_PG=1 npx vitest run` → 43 files, 441 tests passed, 0 skipped (a missing database fails the run; first attempt without Postgres failed loudly, as designed) |
+| 3 | Browser tests, desktop and phone | Passed | `npm run build && npx playwright test` → 19 passed (exit 0) (new student journey, delayed review with injected clock, uploads, failures, isolation, keyboard-only, phone layout, homework) |
+| 4 | Secret scan | Passed | `npm run scan:secrets` → 220 tracked files, no credential-shaped strings |
+| 5 | Dependency audit | Passed | `npm audit` and `npm run audit:prod` → 0 vulnerabilities in the fresh clone (CI now also runs the full `npm audit --audit-level=moderate` and fails if the tracked bundles are stale). Earlier runs found 6 (vite/vitest/esbuild/tinypool, dev tools only); fixed by upgrading to vite 7 / vitest 4; all tests re-run afterwards. `audit:prod` no longer ends in `|| true` |
 | 6 | Hosted production build | Passed | `npm run build:hosted` → exit 0 |
 | 7 | Production rehearsal of the **built bundle** | Passed | `npm run rehearse:prod` → 51/51 checks. Runs `dist-server/main.mjs` from a copy installed with `npm ci --omit=dev`, production settings, fresh database and data folder, fake identity provider, no AI key |
 | 8 | Invitation-only sign-up and sign-out | Passed | `tests/hostedAuth.test.ts`; rehearsal (no code → refused; used code → refused; pilot off → refused; sign-ups paused → refused); e2e journey |
@@ -29,7 +30,7 @@ Status words: **Passed** (command, evidence) · **Failed** (problem, repair) · 
 | 18 | Single-instance storage constraint | Passed | enforced in code (PostgreSQL advisory lock): second process refused (`tests/hostedRelease.test.ts`, rehearsal); also `numInstances: 1` in both blueprints |
 | 19 | Pause switches and recovery | Passed | rehearsal: pilot off → 503 pause message while `/healthz` stays up and nothing is lost; on → same session works; sign-ups paused → invitations refused, existing students unaffected |
 | 20 | Calendar cannot block homework or studying | Passed | Calendar is off unless `CALENDAR_ENABLED=1`; the whole rehearsal (homework, study, uploads) ran with it off |
-| 21 | Load, bounded | Passed (limited meaning) | `npm run loadtest -- --students 30 --seconds 60`: 63 req/s, p95 186 ms, no server errors apart from the mock model running out of distinct questions; found and fixed a sign-up pool deadlock. One laptop-class sandbox, mock AI: not a capacity promise |
+| 21 | Load, bounded | Passed (limited meaning) | `npm run loadtest -- --students 30 --seconds 60`: 63 req/s, p95 186 ms (re-run with 20 students: 52 req/s, p95 332 ms), no server errors apart from the mock model running out of distinct questions; found and fixed a sign-up pool deadlock. One laptop-class sandbox, mock AI: not a capacity promise |
 | 22 | Render blueprints, structure | Passed | `tests/blueprints.test.ts`: one service/disk/database each, no cross-environment names, `numInstances: 1`, no secret values, the app accepts the configuration they imply |
 | 23 | Render blueprints against Render's current documentation | **Blocked** | `docs.render.com`/`render.com` unreachable from this environment (host not allowed). Needs: run `render blueprints validate render.staging.yaml` (or the dashboard's validation) once |
 | 24 | Obsolete documentation | Passed (was Failed) | README and `.env.example` still said "no login, authentication does not exist". Rewritten to separate **local mode** (no login, loopback only) from **hosted mode** (sign-in, invitations, per-student isolation) |

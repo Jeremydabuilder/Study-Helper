@@ -1,3 +1,5 @@
+> **Superseded (2026-10-31).** Both fixes in this note were reviewed and merged into `claude/pilot-integration` (PR #7 and #8). The audit findings and test counts below describe the old base: the findings were resolved by upgrading vite/vitest (`npm audit` reports 0), and the full suite now runs with PostgreSQL required. See `docs/LAUNCH_CHECKLIST.md` for current results.
+
 # Independent production hardening pass
 
 Base: `ae3b9b3d2a0e6f9caba86ba414f97814737b0839`, branch `claude/pilot-integration`.
