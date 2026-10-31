@@ -82,7 +82,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
         <div className="banner" role="status">
           <strong>SAMPLE DATA</strong> — made-up records, stored separately from yours.
           <button className="btn small" onClick={() => { setWorkspace('real'); go('/'); }}>Switch to my data</button>
-          <button className="btn small ghost" onClick={async () => { await post('/demo/reset'); window.dispatchEvent(new Event('workspace-changed')); }}>Reset sample</button>
+          <button className="btn small ghost" onClick={async () => { for (let i = 0; i < 4; i++) { try { await post('/demo/reset'); break; } catch (e) { if ((e as { code?: string }).code !== 'demo_busy' || i === 3) throw e; await new Promise((r) => setTimeout(r, 500)); } } window.dispatchEvent(new Event('workspace-changed')); }}>Reset sample</button>
         </div>
       )}
       <header className="topbar">

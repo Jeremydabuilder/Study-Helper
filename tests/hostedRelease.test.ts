@@ -85,3 +85,19 @@ d('single instance', () => {
     expect((await fetch(`${again.url}/readyz`)).status).toBe(200);
   });
 });
+
+d('sample workspace reset', () => {
+  it('is refused while a request still uses the sample database, works afterwards, and never touches the real workspace', async () => {
+    const h = await HostedHarness.start({}); open.push(h);
+    const s = await h.join('reset@example.test');
+    const id = (await h.db.pool.query('SELECT id FROM "user" WHERE email = $1', ['reset@example.test'])).rows[0].id as string;
+    await s.post('/api/subjects', { name: 'Real subject' });
+    const busy = h.hosted.tenants.lease(id, 'demo');
+    const refused = await s.post('/api/demo/reset', {});
+    expect(refused.status).toBe(409); expect(refused.body.error.code).toBe('demo_busy');
+    expect(busy.db.get('SELECT 1 AS n')?.n).toBe(1); // the active request's handle is still open
+    busy.release();
+    expect((await s.post('/api/demo/reset', {})).status).toBe(200);
+    expect(JSON.stringify((await s.get('/api/subjects')).body)).toContain('Real subject');
+  });
+});
