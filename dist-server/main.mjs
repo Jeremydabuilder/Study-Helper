@@ -10761,15 +10761,17 @@ var init_tenants = __esm({
         rmSync(this.userDir(userId), { recursive: true, force: true });
         return true;
       }
-      /** Delete only the sample database of one student (reset). */
+      /** Delete only the sample database; refuse while another request still uses it. */
       dropDemo(userId) {
         const k = this.key(userId, "demo");
         const e = this.open.get(k);
+        if (e && e.leases > 0) return false;
         if (e) {
           e.db.close();
           this.open.delete(k);
         }
         for (const sfx of ["", "-wal", "-shm"]) rmSync(this.file(userId, "demo") + sfx, { force: true });
+        return true;
       }
       listUserIds() {
         const root = join4(this.dir, "users");
@@ -11120,7 +11122,7 @@ async function buildHostedApp(d, pool, instance) {
     },
     async resetDemo(req) {
       const s = studentOf(req);
-      tenants.dropDemo(s.id);
+      if (!tenants.dropDemo(s.id)) throw new HttpError(409, "demo_busy", "Your sample workspace is still processing a request. Wait for it to finish, then reset again.");
       demoGws.delete(s.id);
       demoReady.delete(s.id);
     },
