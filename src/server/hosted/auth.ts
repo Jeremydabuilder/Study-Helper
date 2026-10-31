@@ -34,7 +34,13 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p: Record<string, any>) => ({ email: String(p.email ?? '').toLowerCase(), name: 'Student', image: undefined, emailVerified: p.email_verified === true }),
   }] })] : [];
-  if (cfg.guestEnabled) plugins.push(anonymous({ disableDeleteAnonymousUser: true }) as any);
+  if (cfg.guestEnabled) {
+    const guest = anonymous({ disableDeleteAnonymousUser: true });
+    // No guest-to-account linking: its after-sign-in hook reads the old session
+    // and can clear a freshly issued cookie when that old session has expired.
+    // Keep the maintained guest endpoints/schema; all deletion uses our tenant-aware API.
+    plugins.push({ ...guest, hooks: undefined } as any);
+  }
   return betterAuth({
     database: authPool, secret: cfg.authSecret, baseURL: cfg.publicUrl, basePath: '/api/auth', trustedOrigins: [cfg.publicUrl],
     emailAndPassword: { enabled: cfg.passwordSignIn, minPasswordLength: 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },

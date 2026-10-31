@@ -200,7 +200,10 @@ function createAuth(pool, cfg, now = Date.now, authPool = pool) {
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p) => ({ email: String(p.email ?? "").toLowerCase(), name: "Student", image: void 0, emailVerified: p.email_verified === true })
   }] })] : [];
-  if (cfg.guestEnabled) plugins.push(anonymous({ disableDeleteAnonymousUser: true }));
+  if (cfg.guestEnabled) {
+    const guest = anonymous({ disableDeleteAnonymousUser: true });
+    plugins.push({ ...guest, hooks: void 0 });
+  }
   return betterAuth({
     database: authPool,
     secret: cfg.authSecret,
