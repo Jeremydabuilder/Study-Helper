@@ -10,7 +10,7 @@ const ERROR_TEXT: Record<string, string> = {
   unavailable: 'Google couldn’t be reached. Try again in a minute.', not_configured: 'Google Calendar isn’t set up on this server yet (see README). Manual entry works without it.',
 };
 
-export function CalendarPage({ go, query }: { go: (p: string) => void; query: string }) {
+export function CalendarPage({ go, query, guest = false }: { go: (p: string) => void; query: string; guest?: boolean }) {
   const cal = useApi<any>('/calendar');
   const props = useApi<any[]>('/items?status=proposed');
   const subjects = useApi<any[]>('/subjects');
@@ -39,7 +39,8 @@ export function CalendarPage({ go, query }: { go: (p: string) => void; query: st
   return (
     <div className="narrow">
       <p className="small"><a href="#/plan">← Plan</a></p>
-      <h1>Google Calendar</h1>
+      <h1>{guest ? 'Calendar and assignments' : 'Google Calendar'}</h1>
+      {guest && <div className="notice info">Guest mode needs no Google connection. Add homework and tests manually from Plan. Google Calendar is available only with account sign-in.</div>}
       {qp.get('connected') && <div className="notice good" role="status">Connected. Choose which calendars to include below, then sync.</div>}
       {qp.get('error') && <div className="notice bad" role="alert">{ERROR_TEXT[qp.get('error')!] ?? 'Connecting failed.'}</div>}
       {err && <ErrorBox error={err} onRetry={sync} />}
@@ -57,7 +58,7 @@ export function CalendarPage({ go, query }: { go: (p: string) => void; query: st
         {!connected && !c.available && <div className="notice warn small">{c.setupHint}</div>}
 
         <div className="row">
-          {!connected || c.status === 'reauth_required' ? <button className="btn primary" disabled={!c.available || !!busy} onClick={connect}>{c.demo ? 'Use the sample calendar' : c.status === 'reauth_required' ? 'Reconnect Google Calendar' : 'Connect Google Calendar (read-only)'}</button>
+          {!connected || c.status === 'reauth_required' ? <button className="btn primary" disabled={guest || !c.available || !!busy} onClick={connect}>{c.demo ? 'Use the sample calendar' : c.status === 'reauth_required' ? 'Reconnect Google Calendar' : 'Connect Google Calendar (read-only)'}</button>
             : <button className="btn primary" disabled={!!busy || selected.length === 0} onClick={sync}>Sync now</button>}
           {connected && <button className="btn" onClick={() => setShowDisc(true)}>Disconnect / delete data…</button>}
           <button className="btn unavailable" disabled title="Not available yet">Add study sessions to Calendar — not available yet</button>

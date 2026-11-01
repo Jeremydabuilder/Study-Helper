@@ -9,7 +9,7 @@ import { Tenants } from './tenants';
  * (SQLite VACUUM INTO, safe while the app is running). The bundle contains student data: keep it private. With a passphrase every file is encrypted (AES-256-GCM).
  * Ordinary scheduled backups of the PostgreSQL service itself (the hosting provider's, or pg_dump) are still recommended in addition; see docs/OPERATIONS.md.
  */
-const TABLES = ['app_settings', 'invites', 'user', 'account', 'session', 'verification', 'ai_requests', 'usage_counters', 'audit_log', 'reports']; // parents before children
+const TABLES = ['app_settings', 'invites', 'user', 'account', 'session', 'verification', 'ai_requests', 'usage_counters', 'audit_log', 'reports', 'guest_expiry']; // parents before children
 const MAGIC = Buffer.from('SHBK1');
 
 const enc = (data: Buffer, pass: string) => { const salt = randomBytes(16), iv = randomBytes(12); const c = createCipheriv('aes-256-gcm', scryptSync(pass, salt, 32), iv); const ct = Buffer.concat([c.update(data), c.final()]); return Buffer.concat([MAGIC, salt, iv, c.getAuthTag(), ct]); };

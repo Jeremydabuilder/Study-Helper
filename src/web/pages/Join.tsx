@@ -51,7 +51,7 @@ export function Join({ session, onSignedIn }: { session: any; onSignedIn: () => 
       {m.guest && <section className="card">
         <h2>Start without signing in</h2>
         <p>No email, password or Google account needed. Your work stays separate from everyone else’s.</p>
-        <p className="small muted">Work is saved on this server and accessed using a cookie in this browser. Clearing cookies, leaving your guest session or session expiry can permanently lose access. Guest work does not move into an account. Export or delete it in Settings. Google Calendar is unavailable in guest mode; enter homework and tests manually.</p>
+        <p className="small muted">Work is saved on this server and accessed using a cookie in this browser. Clearing cookies, leaving your guest session or session expiry can permanently lose access. Unreachable guest workspaces are automatically deleted after a seven-day grace period. Guest work does not move into an account. Export or delete it in Settings. Google Calendar is unavailable in guest mode; enter homework and tests manually.</p>
         <button className="btn primary big" disabled={busy || !session.pilotOpen} onClick={async () => { setBusy(true); setErr(null); try { await post('/auth/sign-in/anonymous', {}); onSignedIn(); } catch (e) { fail(e); } finally { setBusy(false); } }}>Continue without an account</button>
       </section>}
       {(m.oidc || m.password) && <>

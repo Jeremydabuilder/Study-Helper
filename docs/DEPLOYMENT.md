@@ -9,7 +9,7 @@ One Node 22 web service per environment, one PostgreSQL database, one persistent
 - a deploy means a short outage. Deploy outside school hours.
 
 ## Files
-- `render.staging.yaml`: staging only (1 service, 1 disk of 2 GB, 1 database). Email+password sign-in (still invitation-only) so no real Google accounts are needed; made-up data only.
+- `render.staging.yaml`: staging only (1 service, 1 disk of 2 GB, 1 database). Guest entry needs no sign-in; optional email+password sign-in is invitation-gated, so no real Google accounts are needed; made-up data only.
 - `render.production.yaml`: production only. Do not create it until `docs/LAUNCH_CHECKLIST.md` has no open blockers.
 Each file creates nothing for the other environment. Environment labels (`DATA_LABEL`) make a staging server refuse a production database or data folder and the reverse.
 
@@ -27,8 +27,9 @@ Each file creates nothing for the other environment. Environment labels (`DATA_L
 | `DATA_DIR` | `/var/data` | `/var/data` | the disk's mount path |
 | `BETTER_AUTH_SECRET`, `APP_SECRET`, `OPERATOR_TOKEN` | generated | generated | never printed; `APP_SECRET` must differ from `BETTER_AUTH_SECRET` |
 | `PUBLIC_URL` | optional | optional | defaults to Render's `RENDER_EXTERNAL_URL` (`https://<service>.onrender.com`); set it only for a custom domain |
+| `AUTH_GUESTS=1` | yes | yes | no email, Google or invitation; existing pilot admission and budget controls still apply |
 | `AUTH_PASSWORD=1` | yes | **refused** unless `AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1` | |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | not needed | required for Google sign-in | dashboard only (`sync: false`) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | not needed | optional, for account sign-in | dashboard only; guests need neither variable |
 | `OPERATOR_NAME`, `OPERATOR_CONTACT` | optional | **required** | printed in the privacy notice |
 | `ANTHROPIC_API_KEY` | leave empty | only after a live smoke test | empty = the assistant is simply unavailable; math checking, notes and reviews still work |
 | `CALENDAR_ENABLED` | leave unset | leave unset | Calendar stays off unless this is `1`; signing in with Google never enables it |
@@ -36,12 +37,12 @@ Each file creates nothing for the other environment. Environment labels (`DATA_L
 The app refuses to start with a missing or weak secret, an `http` public address, or no sign-in method; it prints which setting, never the value.
 
 ## Google sign-in (production, or a staging that uses Google)
-In Google Cloud Console create an OAuth client of type "Web application". Add the **authorized redirect URI** `https://<your address>/api/auth/callback/google` (checked against the running app: this is the redirect the app sends). Requested scopes: `openid email` only. If you later switch Calendar on, add `https://<your address>/api/calendar/oauth/callback` as well and see `GOOGLE_SETUP.md`. Keep the consent screen's test users to your friends while the app is in Testing.
+Skip this section for a guest-only site. In Google Cloud Console create an OAuth client of type "Web application". Add the **authorized redirect URI** `https://<your address>/api/auth/callback/google` (checked against the running app: this is the redirect the app sends). Requested scopes: `openid email` only. If you later switch Calendar on, add `https://<your address>/api/calendar/oauth/callback` as well and see `GOOGLE_SETUP.md`. Keep the consent screen's test users to your friends while the app is in Testing.
 
 ## Staging, step by step (no production resources are created)
 1. In Render: New → Blueprint → this repository → branch `claude/pilot-integration` → **Blueprint file path `render.staging.yaml`**. Before approving, read the plan: it must list one web service, one disk and one database, all named `…staging…`.
 2. Leave `ANTHROPIC_API_KEY` and `PUBLIC_URL` empty. Wait for the deploy to turn healthy (`/readyz`).
-3. In the service Shell: `npm run seed:staging -- --count 3` (refuses outside staging) runs the built seed command without TypeScript tooling, prints three single-use invitation codes and switches the pilot on for up to 10 testers, with paid AI disabled. It refuses to relabel a database from another environment. Send codes yourself; nothing is sent automatically.
+3. In the service Shell: `npm run seed:staging -- --count 3` (refuses outside staging) runs the built seed command without TypeScript tooling, prints three single-use invitation codes and switches the pilot on for up to 10 testers, with paid AI disabled. It refuses to relabel a database from another environment. Guest testers can use **Continue without an account** without a code. The printed codes are only for testing optional account sign-in. Nothing is sent automatically.
 4. Run the staging items in `docs/LAUNCH_CHECKLIST.md` ("Staging validation") and `docs/LIVE_CHECKS.md`.
 5. Rehearse backup and restore on staging (OPERATIONS.md).
 

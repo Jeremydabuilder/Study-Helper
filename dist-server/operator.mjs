@@ -200,7 +200,7 @@ function createAuth(pool, cfg, now = Date.now, authPool = pool) {
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p) => ({ email: String(p.email ?? "").toLowerCase(), name: "Student", image: void 0, emailVerified: p.email_verified === true })
   }] })] : [];
-  if (cfg.guestEnabled) {
+  {
     const guest = anonymous({ disableDeleteAnonymousUser: true });
     plugins.push({ ...guest, hooks: void 0 });
   }
@@ -221,7 +221,7 @@ function createAuth(pool, cfg, now = Date.now, authPool = pool) {
         if (source.action !== "create-user") return;
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
-        if (source.method === "anonymous" && cfg.guestEnabled) return;
+        if (source.method === "anonymous") return cfg.guestEnabled ? void 0 : { error: "guest_disabled", errorDescription: "Guest entry is disabled." };
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
@@ -703,7 +703,7 @@ init_pg();
 import { createCipheriv, createDecipheriv, createHash as createHash2, randomBytes, scryptSync } from "node:crypto";
 import { copyFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync as readdirSync4, renameSync, rmSync as rmSync2, writeFileSync } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
-var TABLES = ["app_settings", "invites", "user", "account", "session", "verification", "ai_requests", "usage_counters", "audit_log", "reports"];
+var TABLES = ["app_settings", "invites", "user", "account", "session", "verification", "ai_requests", "usage_counters", "audit_log", "reports", "guest_expiry"];
 var MAGIC = Buffer.from("SHBK1");
 var enc = (data, pass) => {
   const salt = randomBytes(16), iv = randomBytes(12);
@@ -914,6 +914,7 @@ async function deleteAccount(o) {
   await tx(o.pool, async (c) => {
     const email = (await c.query('SELECT email FROM "user" WHERE id = $1', [o.userId])).rows[0]?.email;
     await c.query("UPDATE ai_requests SET user_id = NULL WHERE user_id = $1", [o.userId]);
+    await c.query("DELETE FROM guest_expiry WHERE user_id = $1", [o.userId]);
     await c.query("DELETE FROM usage_counters WHERE user_id = $1", [o.userId]);
     await c.query("DELETE FROM reports WHERE user_id = $1", [o.userId]);
     await c.query("UPDATE audit_log SET user_id = NULL WHERE user_id = $1", [o.userId]);

@@ -34,7 +34,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p: Record<string, any>) => ({ email: String(p.email ?? '').toLowerCase(), name: 'Student', image: undefined, emailVerified: p.email_verified === true }),
   }] })] : [];
-  if (cfg.guestEnabled) {
+  { // Always retain guest schema/identity, including when new guests are disabled.
     const guest = anonymous({ disableDeleteAnonymousUser: true });
     // No guest-to-account linking: its after-sign-in hook reads the old session
     // and can clear a freshly issued cookie when that old session has expired.
@@ -54,7 +54,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
         if (source.action !== 'create-user') return;
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === 'full' ? 'pilot_full' : 'pilot_closed', errorDescription: adm.reason === 'full' ? 'The pilot is full right now.' : 'The pilot is not accepting new students right now.' };
-        if (source.method === 'anonymous' && cfg.guestEnabled) return;
+        if (source.method === 'anonymous') return cfg.guestEnabled ? undefined : { error: 'guest_disabled', errorDescription: 'Guest entry is disabled.' };
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: 'invite_required', errorDescription: 'You need a valid invitation to create an account.' };

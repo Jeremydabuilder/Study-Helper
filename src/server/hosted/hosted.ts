@@ -23,9 +23,11 @@ import { Tenants } from './tenants';
 import { exportAccount } from './account';
 import { deleteAccount } from './account';
 import { submitReport } from './reports';
+import { cleanupGuests, GUEST_GRACE_DAYS } from './guests';
 
 export interface HostedApp {
   app: express.Express; pool: Pool; auth: Auth; tenants: Tenants; metrics: Metrics;
+  cleanupGuests(): Promise<{ deleted: number }>;
   close(): Promise<void>;
 }
 export interface HostedDeps {
@@ -132,6 +134,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
       const siteOrigin = new URL(hcfg.publicUrl).origin;
       app.use('/api/auth', (req, res, next) => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin && req.headers.origin !== siteOrigin) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-site requests are not allowed.' } }); next(); });
       // Better Auth endpoints (sign in/out, callbacks), rate limited per address
+      app.use('/api/auth/sign-in/anonymous', (_req, res, next) => { if (!hcfg.guestEnabled) return res.status(404).json({ error: { code: 'not_found', message: 'Guest entry is disabled.' } }); next(); });
       app.all('/api/auth/*', (req, res, next) => { const r = authLimiter.check(ipOf(req)); if (!r.ok) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many attempts. Wait a minute and try again.' } }); next(); }, toNodeHandler(auth));
     },
 
@@ -141,7 +144,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg<boolean>(pool, 'pilot_enabled', false);
-          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90 }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
         } catch (e) { next(e); }
       });
       app.post('/api/invite/check', async (req, res, next) => {
@@ -279,7 +282,17 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
   }
 
   const app = createApp({ cfg, now, llm: d.llm ?? null, offline, ctx: () => { throw new Error('hosted mode never uses the shared runtime context'); }, ensureDemo: async () => {}, resetDemo: async () => {}, workspaces: undefined as never, googleGw, demoGw: new MemoryGateway() } as never, hooks);
-  return { app, pool, auth, tenants, metrics, async close() { tenants.closeAll(); await instance.release(); await authPool.end(); if (!d.pool) await pool.end(); } };
+  let maintenance: Promise<{ deleted: number }> | null = null;
+  const sweepGuests = () => {
+    if (maintenance) return maintenance;
+    maintenance = cleanupGuests({ pool, tenants, now, onDeleted: (id) => { demoGws.delete(id); demoReady.delete(id); } })
+      .finally(() => { maintenance = null; });
+    return maintenance;
+  };
+  await sweepGuests();
+  const timer = setInterval(() => { void sweepGuests().catch(() => logger.error('guest_cleanup_failed')); }, 3_600_000);
+  timer.unref();
+  return { app, pool, auth, tenants, metrics, cleanupGuests: sweepGuests, async close() { clearInterval(timer); await maintenance?.catch(() => {}); tenants.closeAll(); await instance.release(); await authPool.end(); if (!d.pool) await pool.end(); } };
 }
 
 const inviteMessage = (r: string) => ({ unknown: 'That invitation code was not recognised. Check it and try again.', used: 'That invitation has already been used.', expired: 'That invitation has expired. Ask for a new one.', revoked: 'That invitation is no longer valid.', in_use: 'That invitation is being used right now. Try again in a few minutes.' } as Record<string, string>)[r] ?? 'That invitation does not work.';

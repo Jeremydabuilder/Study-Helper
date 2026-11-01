@@ -67,7 +67,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
   else if (path.startsWith('/subjects/')) page = <SubjectDetail id={path.split('/')[2]} go={go} />;
   else if (path === '/subjects') page = <Subjects go={go} />;
   else if (path === '/plan') page = <Plan go={go} />;
-  else if (path === '/calendar') page = <CalendarPage go={go} query={route.split('?')[1] ?? ''} />;
+  else if (path === '/calendar') page = <CalendarPage guest={!!hosted?.guest} go={go} query={route.split('?')[1] ?? ''} />;
   else if (path === '/progress') page = <Progress go={go} />;
   else if (path === '/memory') page = <Memory go={go} />;
   else if (path === '/settings') page = <Settings go={go} meta={meta.data} hosted={hosted} onSignOut={onSignOut} />;

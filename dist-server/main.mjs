@@ -10538,7 +10538,7 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p) => ({ email: String(p.email ?? "").toLowerCase(), name: "Student", image: void 0, emailVerified: p.email_verified === true })
   }] })] : [];
-  if (cfg2.guestEnabled) {
+  {
     const guest = anonymous({ disableDeleteAnonymousUser: true });
     plugins.push({ ...guest, hooks: void 0 });
   }
@@ -10559,7 +10559,7 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
         if (source.action !== "create-user") return;
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
-        if (source.method === "anonymous" && cfg2.guestEnabled) return;
+        if (source.method === "anonymous") return cfg2.guestEnabled ? void 0 : { error: "guest_disabled", errorDescription: "Guest entry is disabled." };
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
@@ -10841,6 +10841,7 @@ async function deleteAccount(o) {
   await tx(o.pool, async (c) => {
     const email = (await c.query('SELECT email FROM "user" WHERE id = $1', [o.userId])).rows[0]?.email;
     await c.query("UPDATE ai_requests SET user_id = NULL WHERE user_id = $1", [o.userId]);
+    await c.query("DELETE FROM guest_expiry WHERE user_id = $1", [o.userId]);
     await c.query("DELETE FROM usage_counters WHERE user_id = $1", [o.userId]);
     await c.query("DELETE FROM reports WHERE user_id = $1", [o.userId]);
     await c.query("UPDATE audit_log SET user_id = NULL WHERE user_id = $1", [o.userId]);
@@ -10884,6 +10885,38 @@ var init_reports = __esm({
     init_common();
     init_pg();
     init_limits();
+  }
+});
+
+// src/server/hosted/guests.ts
+async function cleanupGuests(o) {
+  const at = new Date(o.now());
+  await o.pool.query(`DELETE FROM guest_expiry g WHERE NOT EXISTS
+    (SELECT 1 FROM "user" u WHERE u.id = g.user_id AND u."isAnonymous" = true)
+    OR EXISTS (SELECT 1 FROM session s WHERE s."userId" = g.user_id AND s."expiresAt" > $1)`, [at]);
+  await o.pool.query(`INSERT INTO guest_expiry (user_id, unreachable_since)
+    SELECT u.id, $1 FROM "user" u WHERE u."isAnonymous" = true
+    AND NOT EXISTS (SELECT 1 FROM session s WHERE s."userId" = u.id AND s."expiresAt" > $1)
+    ON CONFLICT (user_id) DO NOTHING`, [at]);
+  const rows = (await o.pool.query(`SELECT g.user_id FROM guest_expiry g JOIN "user" u ON u.id = g.user_id
+    WHERE u."isAnonymous" = true AND g.unreachable_since <= $1
+    AND NOT EXISTS (SELECT 1 FROM session s WHERE s."userId" = u.id AND s."expiresAt" > $2)
+    ORDER BY g.unreachable_since LIMIT 50`, [new Date(o.now() - GUEST_GRACE_DAYS * 864e5), at])).rows;
+  let deleted = 0;
+  for (const r of rows) {
+    if (!o.tenants.remove(r.user_id)) continue;
+    await deleteAccount({ ...o, userId: r.user_id });
+    o.onDeleted?.(r.user_id);
+    deleted++;
+  }
+  return { deleted };
+}
+var GUEST_GRACE_DAYS;
+var init_guests = __esm({
+  "src/server/hosted/guests.ts"() {
+    "use strict";
+    init_account();
+    GUEST_GRACE_DAYS = 7;
   }
 });
 
@@ -11005,6 +11038,10 @@ async function buildHostedApp(d, pool, instance) {
         if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.headers.origin && req.headers.origin !== siteOrigin) return res.status(403).json({ error: { code: "forbidden_origin", message: "Cross-site requests are not allowed." } });
         next();
       });
+      app2.use("/api/auth/sign-in/anonymous", (_req, res, next) => {
+        if (!hcfg.guestEnabled) return res.status(404).json({ error: { code: "not_found", message: "Guest entry is disabled." } });
+        next();
+      });
       app2.all("/api/auth/*", (req, res, next) => {
         const r = authLimiter.check(ipOf(req));
         if (!r.ok) return res.status(429).json({ error: { code: "rate_limited", message: "Too many attempts. Wait a minute and try again." } });
@@ -11016,7 +11053,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg(pool, "pilot_enabled", false);
-          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90 }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
         } catch (e) {
           next(e);
         }
@@ -11217,7 +11254,26 @@ async function buildHostedApp(d, pool, instance) {
   }, ensureDemo: async () => {
   }, resetDemo: async () => {
   }, workspaces: void 0, googleGw, demoGw: new MemoryGateway() }, hooks);
-  return { app, pool, auth, tenants, metrics, async close() {
+  let maintenance = null;
+  const sweepGuests = () => {
+    if (maintenance) return maintenance;
+    maintenance = cleanupGuests({ pool, tenants, now, onDeleted: (id) => {
+      demoGws.delete(id);
+      demoReady.delete(id);
+    } }).finally(() => {
+      maintenance = null;
+    });
+    return maintenance;
+  };
+  await sweepGuests();
+  const timer = setInterval(() => {
+    void sweepGuests().catch(() => logger.error("guest_cleanup_failed"));
+  }, 36e5);
+  timer.unref();
+  return { app, pool, auth, tenants, metrics, cleanupGuests: sweepGuests, async close() {
+    clearInterval(timer);
+    await maintenance?.catch(() => {
+    });
     tenants.closeAll();
     await instance.release();
     await authPool.end();
@@ -11254,6 +11310,7 @@ var init_hosted = __esm({
     init_account();
     init_account();
     init_reports();
+    init_guests();
     MB2 = 1024 * 1024;
     deriveUserSecret = (master, userId) => Buffer.from(hkdfSync2("sha256", master, "study-helper-user", `calendar-tokens:${userId}`, 32)).toString("hex");
     inviteMessage = (r) => ({ unknown: "That invitation code was not recognised. Check it and try again.", used: "That invitation has already been used.", expired: "That invitation has expired. Ask for a new one.", revoked: "That invitation is no longer valid.", in_use: "That invitation is being used right now. Try again in a few minutes." })[r] ?? "That invitation does not work.";

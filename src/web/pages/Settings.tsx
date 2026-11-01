@@ -316,7 +316,7 @@ function AccountTab({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void
   };
   return (<>
     <section className="card"><h2>{hosted.guest ? 'Your guest workspace' : 'Your account'}</h2>
-      {hosted.guest ? <p>No sign-in required. This browser cookie is your only access to your saved work; it cannot be recovered if the session ends. Guest work stays on the server until deleted; leaving does not delete it.</p> : <p>Signed in as <strong>{acct.data?.email ?? hosted.email}</strong>.</p>}
+      {hosted.guest ? <p>No sign-in required. This browser cookie is your only access to your saved work; it cannot be recovered if the session ends. Unreachable guest workspaces are automatically deleted after a seven-day grace period; leaving does not delete them immediately.</p> : <p>Signed in as <strong>{acct.data?.email ?? hosted.email}</strong>.</p>}
       {acct.data && <p className="small muted">Storage used: {acct.data.storageMb} MB of {acct.data.storageLimitMb} MB.</p>}
       <div className="row"><button className="btn" onClick={onSignOut}>{hosted.guest ? 'Leave guest session' : 'Sign out'}</button></div>
     </section>

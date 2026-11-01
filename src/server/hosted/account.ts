@@ -46,6 +46,7 @@ export async function deleteAccount(o: { pool: Pool; tenants: Tenants; userId: s
   await tx(o.pool, async (c) => {
     const email = (await c.query('SELECT email FROM "user" WHERE id = $1', [o.userId])).rows[0]?.email as string | undefined;
     await c.query('UPDATE ai_requests SET user_id = NULL WHERE user_id = $1', [o.userId]);
+    await c.query('DELETE FROM guest_expiry WHERE user_id = $1', [o.userId]);
     await c.query('DELETE FROM usage_counters WHERE user_id = $1', [o.userId]);
     await c.query('DELETE FROM reports WHERE user_id = $1', [o.userId]);
     await c.query('UPDATE audit_log SET user_id = NULL WHERE user_id = $1', [o.userId]);
