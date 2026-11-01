@@ -1,4 +1,21 @@
-# Launch checklist: release candidate for 3–5 invited friends
+# Current release status — guest mode
+
+The historical report below describes Claude’s earlier invitation-only candidate. The current guest release is on `codex/guest-mode`, built on PR #9’s production tooling fixes. **PR #10** adds no-sign-in guest entry, isolation, export/deletion, Calendar restrictions, and browser tests. The latest commit and CI evidence are recorded on the PR; do not infer current results from the historical counts below.
+
+The guest-only launch path needs no Google OAuth setup. Keep Calendar off. Configure the operator contact and hosting secrets, validate `render.staging.yaml`, and test the HTTPS staging URL with fictional data before enabling real classmates. An AI key and operator-chosen budget are still needed for live AI validation. No deployment or school approval is claimed.
+
+Guest maintenance runs on startup and hourly: no unexpired session → seven-day grace → tenant-aware deletion. Active/busy workspaces are protected, and backup/restore preserves the grace clock. Global spend caps remain essential because clearing cookies can create a fresh per-user allowance.
+
+- Engineering checks: see PR #10 CI for the exact tested SHA. Guest tests include real PostgreSQL, restart, isolation, admission, retention, export/deletion and encrypted backup/restore; browser tests include no-sign-in entry and expired-account re-sign-in.
+- Render Blueprint specification: reviewed against the official reference on October 31, 2026 in PR #9; **dashboard/CLI validation and actual hosting remain unverified**.
+- Staging: outstanding — hosting account, HTTPS cookie/restart/persistence and hosted backup/restore validation.
+- Live AI and OCR: outstanding — real credentials and an explicit test budget. OCR stays off.
+- Google sign-in/Calendar: optional; remain unverified and unnecessary for guest mode.
+- Operator identity/contact, privacy review and applicable school/guardian decisions: outstanding; no-sign-in mode does not decide them.
+
+---
+
+# Historical validation: earlier invitation-only candidate
 
 **Release branch:** `claude/pilot-integration` (mirrored as `claude/gracious-ramanujan-crnd4h`); `main` and the default branch were not touched. Everything on `main`, `…-annotations`, `…-followups`, `…-trust-m6` and `…-autonomous-m5` is already contained in it.
 **Code commit checked:** `64e561e`, in a **fresh clone** with `npm ci` (so nothing depended on leftover local files). It includes Codex PR #7 and #8, reviewed and merged. Later commits change only the regenerated `dist-server` bundles (verified byte-identical to a clean-clone build), the CI workflow and documentation; the final hash is in the hand-off message.

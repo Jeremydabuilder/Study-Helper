@@ -45,10 +45,18 @@ export function Join({ session, onSignedIn }: { session: any; onSignedIn: () => 
     <div className="narrow join">
       {staging && <div className="notice warn" role="status"><strong>Test site.</strong> This is a staging copy with made-up data. Do not enter real schoolwork.</div>}
       <h1 ref={h1} tabIndex={-1}>{mode === 'join' ? 'Join Study Helper' : 'Sign in'}</h1>
-      <p className="muted">A small invite-only pilot. Study Helper turns your own notes and packets into practice, remembers what you find hard, and brings it back later.</p>
+      <p className="muted">Study at your own pace. Study Helper turns your own notes and packets into practice, remembers what you find hard, and brings it back later.</p>
       {!session?.pilotOpen && <div className="notice info" role="status">Study Helper is paused right now. Please come back later.</div>}
-      <div className="seg mb" role="group" aria-label="Choose"><button aria-pressed={mode === 'join'} onClick={() => { setMode('join'); setErr(null); }}>I have an invitation</button><button aria-pressed={mode === 'signin'} onClick={() => { setMode('signin'); setErr(null); }}>I already have an account</button></div>
       {err && <div className="notice bad" role="alert">{err}</div>}
+      {m.guest && <section className="card">
+        <h2>Start without signing in</h2>
+        <p>No email, password or Google account needed. Your work stays separate from everyone else’s.</p>
+        <p className="small muted">Work is saved on this server and accessed using a cookie in this browser. Clearing cookies, leaving your guest session or session expiry can permanently lose access. Unreachable guest workspaces are automatically deleted after a seven-day grace period. Guest work does not move into an account. Export or delete it in Settings. Google Calendar is unavailable in guest mode; enter homework and tests manually.</p>
+        <button className="btn primary big" disabled={busy || !session.pilotOpen} onClick={async () => { setBusy(true); setErr(null); try { await post('/auth/sign-in/anonymous', {}); onSignedIn(); } catch (e) { fail(e); } finally { setBusy(false); } }}>Continue without an account</button>
+      </section>}
+      {(m.oidc || m.password) && <>
+      <div className="seg mb" role="group" aria-label="Choose"><button aria-pressed={mode === 'join'} onClick={() => { setMode('join'); setErr(null); }}>I have an invitation</button><button aria-pressed={mode === 'signin'} onClick={() => { setMode('signin'); setErr(null); }}>I already have an account</button></div>
+
 
       {mode === 'join' && (
         <section className="card">
@@ -74,6 +82,7 @@ export function Join({ session, onSignedIn }: { session: any; onSignedIn: () => 
           {!m.oidc && !m.password && <ErrorBox error="No sign-in method is set up on this server." />}
         </section>
       )}
+      </>}
       <p className="small muted">By continuing you agree to the <a href="#/privacy">privacy notice</a>. You can export or delete everything from Settings → Account at any time.</p>
     </div>
   );

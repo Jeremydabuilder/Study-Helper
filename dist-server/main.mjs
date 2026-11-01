@@ -10430,7 +10430,8 @@ function hostedConfigFromEnv(env = process.env) {
     scopes: ["openid", "email"]
   } : null;
   const passwordSignIn = g("AUTH_PASSWORD") === "1";
-  if (!oidc && !passwordSignIn) problems.push("Configure at least one sign-in method: Google/OIDC credentials, or AUTH_PASSWORD=1.");
+  const guestEnabled = g("AUTH_GUESTS") === "1";
+  if (!oidc && !passwordSignIn && !guestEnabled) problems.push("Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.");
   if (environment === "production" && passwordSignIn && g("AUTH_PASSWORD_ALLOW_IN_PRODUCTION") !== "1") problems.push("AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).");
   const dataLabel = g("DATA_LABEL") ?? environment;
   const operator = { name: g("OPERATOR_NAME") ?? "", contact: g("OPERATOR_CONTACT") ?? "" };
@@ -10449,7 +10450,7 @@ function hostedConfigFromEnv(env = process.env) {
     userDailyExtractions: num2("LIMIT_USER_DAILY_EXTRACTIONS", DEFAULT_LIMITS.userDailyExtractions),
     globalConcurrentExtractions: num2("LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS", DEFAULT_LIMITS.globalConcurrentExtractions)
   };
-  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 var GOOGLE;
 var init_config = __esm({
@@ -10506,7 +10507,7 @@ var init_invites = __esm({
 // src/server/hosted/auth.ts
 import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
-import { genericOAuth } from "better-auth/plugins";
+import { anonymous, genericOAuth } from "better-auth/plugins";
 function readCookie(header, name) {
   if (!header) return null;
   for (const part of header.split(";")) {
@@ -10537,6 +10538,10 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
     // keep only what the app needs: an email address. No display name or photo is stored.
     mapProfileToUser: (p) => ({ email: String(p.email ?? "").toLowerCase(), name: "Student", image: void 0, emailVerified: p.email_verified === true })
   }] })] : [];
+  {
+    const guest = anonymous({ disableDeleteAnonymousUser: true });
+    plugins.push({ ...guest, hooks: void 0 });
+  }
   return betterAuth({
     database: authPool,
     secret: cfg2.authSecret,
@@ -10554,6 +10559,7 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
         if (source.action !== "create-user") return;
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
+        if (source.method === "anonymous") return cfg2.guestEnabled ? void 0 : { error: "guest_disabled", errorDescription: "Guest entry is disabled." };
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
@@ -10835,6 +10841,7 @@ async function deleteAccount(o) {
   await tx(o.pool, async (c) => {
     const email = (await c.query('SELECT email FROM "user" WHERE id = $1', [o.userId])).rows[0]?.email;
     await c.query("UPDATE ai_requests SET user_id = NULL WHERE user_id = $1", [o.userId]);
+    await c.query("DELETE FROM guest_expiry WHERE user_id = $1", [o.userId]);
     await c.query("DELETE FROM usage_counters WHERE user_id = $1", [o.userId]);
     await c.query("DELETE FROM reports WHERE user_id = $1", [o.userId]);
     await c.query("UPDATE audit_log SET user_id = NULL WHERE user_id = $1", [o.userId]);
@@ -10878,6 +10885,38 @@ var init_reports = __esm({
     init_common();
     init_pg();
     init_limits();
+  }
+});
+
+// src/server/hosted/guests.ts
+async function cleanupGuests(o) {
+  const at = new Date(o.now());
+  await o.pool.query(`DELETE FROM guest_expiry g WHERE NOT EXISTS
+    (SELECT 1 FROM "user" u WHERE u.id = g.user_id AND u."isAnonymous" = true)
+    OR EXISTS (SELECT 1 FROM session s WHERE s."userId" = g.user_id AND s."expiresAt" > $1)`, [at]);
+  await o.pool.query(`INSERT INTO guest_expiry (user_id, unreachable_since)
+    SELECT u.id, $1 FROM "user" u WHERE u."isAnonymous" = true
+    AND NOT EXISTS (SELECT 1 FROM session s WHERE s."userId" = u.id AND s."expiresAt" > $1)
+    ON CONFLICT (user_id) DO NOTHING`, [at]);
+  const rows = (await o.pool.query(`SELECT g.user_id FROM guest_expiry g JOIN "user" u ON u.id = g.user_id
+    WHERE u."isAnonymous" = true AND g.unreachable_since <= $1
+    AND NOT EXISTS (SELECT 1 FROM session s WHERE s."userId" = u.id AND s."expiresAt" > $2)
+    ORDER BY g.unreachable_since LIMIT 50`, [new Date(o.now() - GUEST_GRACE_DAYS * 864e5), at])).rows;
+  let deleted = 0;
+  for (const r of rows) {
+    if (!o.tenants.remove(r.user_id)) continue;
+    await deleteAccount({ ...o, userId: r.user_id });
+    o.onDeleted?.(r.user_id);
+    deleted++;
+  }
+  return { deleted };
+}
+var GUEST_GRACE_DAYS;
+var init_guests = __esm({
+  "src/server/hosted/guests.ts"() {
+    "use strict";
+    init_account();
+    GUEST_GRACE_DAYS = 7;
   }
 });
 
@@ -10999,6 +11038,10 @@ async function buildHostedApp(d, pool, instance) {
         if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.headers.origin && req.headers.origin !== siteOrigin) return res.status(403).json({ error: { code: "forbidden_origin", message: "Cross-site requests are not allowed." } });
         next();
       });
+      app2.use("/api/auth/sign-in/anonymous", (_req, res, next) => {
+        if (!hcfg.guestEnabled) return res.status(404).json({ error: { code: "not_found", message: "Guest entry is disabled." } });
+        next();
+      });
       app2.all("/api/auth/*", (req, res, next) => {
         const r = authLimiter.check(ipOf(req));
         if (!r.ok) return res.status(429).json({ error: { code: "rate_limited", message: "Too many attempts. Wait a minute and try again." } });
@@ -11010,7 +11053,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg(pool, "pilot_enabled", false);
-          res.json({ signedIn: !!s, email: s?.email ?? null, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90 }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn } });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
         } catch (e) {
           next(e);
         }
@@ -11058,7 +11101,7 @@ async function buildHostedApp(d, pool, instance) {
       });
       app2.get("/api/account", (req, res) => {
         const s = studentOf(req);
-        res.json({ email: s.email, environment: hcfg.environment, storageMb: Math.round(tenants.usageBytes(s.id) / MB2 * 10) / 10, storageLimitMb: hcfg.limits.userStorageMb });
+        res.json({ email: s.guest ? null : s.email, guest: s.guest, environment: hcfg.environment, storageMb: Math.round(tenants.usageBytes(s.id) / MB2 * 10) / 10, storageLimitMb: hcfg.limits.userStorageMb });
       });
       app2.get("/api/account/assistant", async (req, res, next) => {
         try {
@@ -11071,7 +11114,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const s = studentOf(req);
           await audit(pool, "export_requested", s.id, {});
-          const body = await withCtx(req, "real", (ctx) => exportAccount(ctx, { email: s.email, withFiles: req.query.files === "1" }));
+          const body = await withCtx(req, "real", (ctx) => exportAccount(ctx, { email: s.guest ? "" : s.email, withFiles: req.query.files === "1" }));
           res.setHeader("Content-Type", "application/json");
           res.setHeader("Content-Disposition", 'attachment; filename="study-helper-export.json"');
           res.setHeader("Cache-Control", "no-store");
@@ -11111,6 +11154,7 @@ async function buildHostedApp(d, pool, instance) {
       const go = (q) => res.redirect(`/#/calendar?${q}`);
       try {
         const s = studentOf(req);
+        if (s.guest) return go("error=denied");
         const { code, state, error } = req.query;
         const st = state ? consumeState(state) : null;
         if (error) return go(`error=${error === "access_denied" ? "denied" : "org_blocked"}`);
@@ -11134,7 +11178,7 @@ async function buildHostedApp(d, pool, instance) {
     },
     meta(req) {
       const s = req.student;
-      return { student: s ? { email: s.email } : null, environment: hcfg.environment };
+      return { student: s ? { email: s.guest ? null : s.email, guest: s.guest } : null, environment: hcfg.environment };
     },
     onError(err, req) {
       logger.error("unhandled_error", { errorClass: err instanceof Error ? err.constructor.name : typeof err, route: req.path.replace(/\/[0-9a-f-]{8,}/gi, "/:id"), method: req.method });
@@ -11142,7 +11186,7 @@ async function buildHostedApp(d, pool, instance) {
   };
   async function sessionOf(req) {
     const r = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
-    return r?.user ? { id: r.user.id, email: r.user.email } : null;
+    return r?.user ? { id: r.user.id, email: r.user.email, guest: !!r.user.isAnonymous } : null;
   }
   async function buildCtx(s, ws) {
     const lease = tenants.lease(s.id, ws);
@@ -11170,6 +11214,7 @@ async function buildHostedApp(d, pool, instance) {
   }
   async function routeGuard(req, res, s) {
     const m = req.method, p = req.path;
+    if (s.guest && p === "/calendar/connect") throw new HttpError(403, "guest_calendar_unavailable", "Guest mode does not connect Google Calendar. Enter assignments and tests manually.");
     const upload = m === "POST" && (/^\/subjects\/[^/]+\/files$/.test(p) || /^\/sources\/[^/]+\/replace$/.test(p));
     const heavy = upload || m === "POST" && (/^\/sources\/[^/]+\/ocr$/.test(p) || /^\/sources\/[^/]+\/extract$/.test(p));
     const L = hcfg.limits;
@@ -11209,7 +11254,26 @@ async function buildHostedApp(d, pool, instance) {
   }, ensureDemo: async () => {
   }, resetDemo: async () => {
   }, workspaces: void 0, googleGw, demoGw: new MemoryGateway() }, hooks);
-  return { app, pool, auth, tenants, metrics, async close() {
+  let maintenance = null;
+  const sweepGuests = () => {
+    if (maintenance) return maintenance;
+    maintenance = cleanupGuests({ pool, tenants, now, onDeleted: (id) => {
+      demoGws.delete(id);
+      demoReady.delete(id);
+    } }).finally(() => {
+      maintenance = null;
+    });
+    return maintenance;
+  };
+  await sweepGuests();
+  const timer = setInterval(() => {
+    void sweepGuests().catch(() => logger.error("guest_cleanup_failed"));
+  }, 36e5);
+  timer.unref();
+  return { app, pool, auth, tenants, metrics, cleanupGuests: sweepGuests, async close() {
+    clearInterval(timer);
+    await maintenance?.catch(() => {
+    });
     tenants.closeAll();
     await instance.release();
     await authPool.end();
@@ -11246,6 +11310,7 @@ var init_hosted = __esm({
     init_account();
     init_account();
     init_reports();
+    init_guests();
     MB2 = 1024 * 1024;
     deriveUserSecret = (master, userId) => Buffer.from(hkdfSync2("sha256", master, "study-helper-user", `calendar-tokens:${userId}`, 32)).toString("hex");
     inviteMessage = (r) => ({ unknown: "That invitation code was not recognised. Check it and try again.", used: "That invitation has already been used.", expired: "That invitation has expired. Ask for a new one.", revoked: "That invitation is no longer valid.", in_use: "That invitation is being used right now. Try again in a few minutes." })[r] ?? "That invitation does not work.";

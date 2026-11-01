@@ -315,10 +315,10 @@ function AccountTab({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void
     try { await post('/account/delete', { confirm }); window.location.href = '/'; } catch (e) { setErr(e as ApiError); setBusy(null); }
   };
   return (<>
-    <section className="card"><h2>Your account</h2>
-      <p>Signed in as <strong>{acct.data?.email ?? hosted.email}</strong>.</p>
+    <section className="card"><h2>{hosted.guest ? 'Your guest workspace' : 'Your account'}</h2>
+      {hosted.guest ? <p>No sign-in required. This browser cookie is your only access to your saved work; it cannot be recovered if the session ends. Unreachable guest workspaces are automatically deleted after a seven-day grace period; leaving does not delete them immediately.</p> : <p>Signed in as <strong>{acct.data?.email ?? hosted.email}</strong>.</p>}
       {acct.data && <p className="small muted">Storage used: {acct.data.storageMb} MB of {acct.data.storageLimitMb} MB.</p>}
-      <div className="row"><button className="btn" onClick={onSignOut}>Sign out</button></div>
+      <div className="row"><button className="btn" onClick={onSignOut}>{hosted.guest ? 'Leave guest session' : 'Sign out'}</button></div>
     </section>
     <section className="card"><h2>Download my data</h2>
       <p className="small muted">Everything you made: materials, notes, answers, memory, chats and assignments, as one file. Calendar tokens and other secrets are never included.</p>
@@ -326,7 +326,7 @@ function AccountTab({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void
       <div className="row mt-s"><button className="btn primary" disabled={busy === 'export'} onClick={exportAll}>{busy === 'export' ? 'Preparing…' : 'Download'}</button></div>
     </section>
     <section className="card"><h2>Delete my account</h2>
-      <p className="small">This permanently deletes your account, files, notes, answers, memory, conversations and calendar connection, and signs you out everywhere. It cannot be undone, and you would need a new invitation to come back. Download your data first if you want a copy.</p>
+      <p className="small">This permanently deletes your account, files, notes, answers, memory, conversations and calendar connection, and signs you out everywhere. It cannot be undone, and account users would need a new invitation to come back. Download your data first if you want a copy.</p>
       <Field label="Type DELETE MY ACCOUNT to confirm"><input type="text" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" /></Field>
       {err && <ErrorBox error={err} />}
       <div className="row mt-s"><button className="btn danger" disabled={confirm !== 'DELETE MY ACCOUNT' || busy === 'delete'} onClick={del}>{busy === 'delete' ? 'Deleting…' : 'Delete everything'}</button></div>

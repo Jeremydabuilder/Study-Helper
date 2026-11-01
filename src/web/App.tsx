@@ -40,7 +40,7 @@ export function App() {
   if (route.startsWith('/privacy')) return <div className="shell"><main><Privacy session={sess.data} /></main></div>;
   if (paused) return <div className="narrow" style={{ paddingTop: 60 }}><h1>Study Helper is paused</h1><p>Your work is saved. Please come back later.</p><button className="btn" onClick={() => { setPaused(false); sess.reload(); }}>Check again</button></div>;
   if (!sess.data.signedIn || ended) return <div className="shell"><main><Join session={sess.data} onSignedIn={() => { setEnded(false); sess.reload(); }} /></main></div>;
-  return <AppShell hosted={sess.data} onSignOut={async () => { try { await post('/auth/sign-out', {}); } catch { /* the cookie may already be gone */ } setEnded(true); sess.reload(); }} />;
+  return <AppShell hosted={sess.data} onSignOut={async () => { if (sess.data?.guest && !window.confirm('Leaving ends access to this guest workspace. Download or delete your data in Settings first. Leave anyway?')) return; try { await post('/auth/sign-out', {}); } catch { /* the cookie may already be gone */ } setEnded(true); sess.reload(); }} />;
 }
 
 function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }) {
@@ -67,7 +67,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
   else if (path.startsWith('/subjects/')) page = <SubjectDetail id={path.split('/')[2]} go={go} />;
   else if (path === '/subjects') page = <Subjects go={go} />;
   else if (path === '/plan') page = <Plan go={go} />;
-  else if (path === '/calendar') page = <CalendarPage go={go} query={route.split('?')[1] ?? ''} />;
+  else if (path === '/calendar') page = <CalendarPage guest={!!hosted?.guest} go={go} query={route.split('?')[1] ?? ''} />;
   else if (path === '/progress') page = <Progress go={go} />;
   else if (path === '/memory') page = <Memory go={go} />;
   else if (path === '/settings') page = <Settings go={go} meta={meta.data} hosted={hosted} onSignOut={onSignOut} />;
@@ -78,6 +78,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
     <HostedContext.Provider value={!!hosted}>
     <div className="shell">
       <a className="skip" href="#main">Skip to content</a>
+      {hosted?.guest && <div className="banner" role="status">Guest mode · Work is private to this browser session. Export or delete it in Settings before leaving or clearing cookies.</div>}
       {ws === 'demo' && (
         <div className="banner" role="status">
           <strong>SAMPLE DATA</strong> — made-up records, stored separately from yours.
@@ -94,7 +95,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
               {NAV.map(([p, label]) => <a key={p} href={`#${p}`} aria-current={path === p || (p !== '/' && path.startsWith(p + '/')) || (p === '/readings' && (path.startsWith('/read/') || path.startsWith('/outline/'))) || (p === '/plan' && path === '/calendar') ? 'page' : undefined}>{label}</a>)}
             </nav>
           )}
-          {hosted && onSignOut && <button className="btn ghost small signout" onClick={onSignOut}>Sign out</button>}
+          {hosted && onSignOut && <button className="btn ghost small signout" onClick={onSignOut}>{hosted.guest ? 'Leave guest session' : 'Sign out'}</button>}
         </div>
       </header>
       <main id="main" tabIndex={-1} className={path.startsWith('/read/') || /^\/homework\/[^/]+$/.test(path) && path !== '/homework/new' ? 'wide' : undefined}>{page}</main>

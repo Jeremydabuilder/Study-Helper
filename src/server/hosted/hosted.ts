@@ -23,9 +23,11 @@ import { Tenants } from './tenants';
 import { exportAccount } from './account';
 import { deleteAccount } from './account';
 import { submitReport } from './reports';
+import { cleanupGuests, GUEST_GRACE_DAYS } from './guests';
 
 export interface HostedApp {
   app: express.Express; pool: Pool; auth: Auth; tenants: Tenants; metrics: Metrics;
+  cleanupGuests(): Promise<{ deleted: number }>;
   close(): Promise<void>;
 }
 export interface HostedDeps {
@@ -33,7 +35,7 @@ export interface HostedDeps {
   llm?: AIProvider | null; gateway?: CalendarGateway; now?: () => number; pool?: Pool; logger?: Logger; instanceLockWaitMs?: number;
 }
 
-type Student = { id: string; email: string };
+type Student = { id: string; email: string; guest: boolean };
 const MB = 1024 * 1024;
 
 /** A per-student secret for encrypting that student's Calendar tokens: one student's key cannot decrypt another's, and the master secret never encrypts directly. */
@@ -132,6 +134,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
       const siteOrigin = new URL(hcfg.publicUrl).origin;
       app.use('/api/auth', (req, res, next) => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin && req.headers.origin !== siteOrigin) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-site requests are not allowed.' } }); next(); });
       // Better Auth endpoints (sign in/out, callbacks), rate limited per address
+      app.use('/api/auth/sign-in/anonymous', (_req, res, next) => { if (!hcfg.guestEnabled) return res.status(404).json({ error: { code: 'not_found', message: 'Guest entry is disabled.' } }); next(); });
       app.all('/api/auth/*', (req, res, next) => { const r = authLimiter.check(ipOf(req)); if (!r.ok) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many attempts. Wait a minute and try again.' } }); next(); }, toNodeHandler(auth));
     },
 
@@ -141,7 +144,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg<boolean>(pool, 'pilot_enabled', false);
-          res.json({ signedIn: !!s, email: s?.email ?? null, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90 }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn } });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
         } catch (e) { next(e); }
       });
       app.post('/api/invite/check', async (req, res, next) => {
@@ -178,13 +181,13 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
       });
 
       // ---- account: export, delete, assistant state, problem reports ----
-      app.get('/api/account', (req, res) => { const s = studentOf(req); res.json({ email: s.email, environment: hcfg.environment, storageMb: Math.round((tenants.usageBytes(s.id) / MB) * 10) / 10, storageLimitMb: hcfg.limits.userStorageMb }); });
+      app.get('/api/account', (req, res) => { const s = studentOf(req); res.json({ email: s.guest ? null : s.email, guest: s.guest, environment: hcfg.environment, storageMb: Math.round((tenants.usageBytes(s.id) / MB) * 10) / 10, storageLimitMb: hcfg.limits.userStorageMb }); });
       app.get('/api/account/assistant', async (req, res, next) => { try { res.json(await assistantState(pool, studentOf(req).id, hcfg.limits, now())); } catch (e) { next(e); } });
       app.get('/api/account/export', async (req, res, next) => {
         try {
           const s = studentOf(req);
           await audit(pool, 'export_requested', s.id, {});
-          const body = await withCtx(req, 'real', (ctx) => exportAccount(ctx, { email: s.email, withFiles: req.query.files === '1' }));
+          const body = await withCtx(req, 'real', (ctx) => exportAccount(ctx, { email: s.guest ? '' : s.email, withFiles: req.query.files === '1' }));
           res.setHeader('Content-Type', 'application/json'); res.setHeader('Content-Disposition', 'attachment; filename="study-helper-export.json"'); res.setHeader('Cache-Control', 'no-store');
           res.send(JSON.stringify(body));
         } catch (e) { next(e); }
@@ -211,6 +214,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
       const go = (q: string) => res.redirect(`/#/calendar?${q}`);
       try {
         const s = studentOf(req);
+        if (s.guest) return go('error=denied');
         const { code, state, error } = req.query as Record<string, string>;
         const st = state ? cal.consumeState(state) : null;
         if (error) return go(`error=${error === 'access_denied' ? 'denied' : 'org_blocked'}`);
@@ -226,13 +230,13 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
       if (!tenants.dropDemo(s.id)) throw new HttpError(409, 'demo_busy', 'Your sample workspace is still processing a request. Wait for it to finish, then reset again.');
       demoGws.delete(s.id); demoReady.delete(s.id);
     },
-    meta(req: Request) { const s = (req as any).student as Student | undefined; return { student: s ? { email: s.email } : null, environment: hcfg.environment }; },
+    meta(req: Request) { const s = (req as any).student as Student | undefined; return { student: s ? { email: s.guest ? null : s.email, guest: s.guest } : null, environment: hcfg.environment }; },
     onError(err: unknown, req: Request) { logger.error('unhandled_error', { errorClass: err instanceof Error ? err.constructor.name : typeof err, route: req.path.replace(/\/[0-9a-f-]{8,}/gi, '/:id'), method: req.method }); },
   };
 
   async function sessionOf(req: Request): Promise<Student | null> {
     const r = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
-    return r?.user ? { id: r.user.id, email: r.user.email } : null;
+    return r?.user ? { id: r.user.id, email: r.user.email, guest: !!(r.user as any).isAnonymous } : null;
   }
 
   async function buildCtx(s: Student, ws: WorkspaceName): Promise<{ ctx: Ctx; release(): void }> {
@@ -256,6 +260,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
   /** Per-route protections that need the student, the database or the clock: upload and extraction limits, chat allowance, import size. */
   async function routeGuard(req: Request, res: Response, s: Student) {
     const m = req.method, p = req.path;
+    if (s.guest && p === '/calendar/connect') throw new HttpError(403, 'guest_calendar_unavailable', 'Guest mode does not connect Google Calendar. Enter assignments and tests manually.');
     const upload = m === 'POST' && (/^\/subjects\/[^/]+\/files$/.test(p) || /^\/sources\/[^/]+\/replace$/.test(p));
     const heavy = upload || (m === 'POST' && (/^\/sources\/[^/]+\/ocr$/.test(p) || /^\/sources\/[^/]+\/extract$/.test(p)));
     const L = hcfg.limits;
@@ -277,7 +282,17 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
   }
 
   const app = createApp({ cfg, now, llm: d.llm ?? null, offline, ctx: () => { throw new Error('hosted mode never uses the shared runtime context'); }, ensureDemo: async () => {}, resetDemo: async () => {}, workspaces: undefined as never, googleGw, demoGw: new MemoryGateway() } as never, hooks);
-  return { app, pool, auth, tenants, metrics, async close() { tenants.closeAll(); await instance.release(); await authPool.end(); if (!d.pool) await pool.end(); } };
+  let maintenance: Promise<{ deleted: number }> | null = null;
+  const sweepGuests = () => {
+    if (maintenance) return maintenance;
+    maintenance = cleanupGuests({ pool, tenants, now, onDeleted: (id) => { demoGws.delete(id); demoReady.delete(id); } })
+      .finally(() => { maintenance = null; });
+    return maintenance;
+  };
+  await sweepGuests();
+  const timer = setInterval(() => { void sweepGuests().catch(() => logger.error('guest_cleanup_failed')); }, 3_600_000);
+  timer.unref();
+  return { app, pool, auth, tenants, metrics, cleanupGuests: sweepGuests, async close() { clearInterval(timer); await maintenance?.catch(() => {}); tenants.closeAll(); await instance.release(); await authPool.end(); if (!d.pool) await pool.end(); } };
 }
 
 const inviteMessage = (r: string) => ({ unknown: 'That invitation code was not recognised. Check it and try again.', used: 'That invitation has already been used.', expired: 'That invitation has expired. Ask for a new one.', revoked: 'That invitation is no longer valid.', in_use: 'That invitation is being used right now. Try again in a few minutes.' } as Record<string, string>)[r] ?? 'That invitation does not work.';

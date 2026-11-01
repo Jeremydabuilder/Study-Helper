@@ -4,11 +4,13 @@ Everything here needs something only you can provide. Never paste a secret into 
 
 **One-time setup (about 20 minutes)**
 1. Render: create the staging blueprint (`DEPLOYMENT.md`). Open the `…onrender.com` address; `/readyz` should say ready.
-2. Google (optional for staging, required for production): OAuth client, redirect URI `https://<staging address>/api/auth/callback/google`, add your own account as a test user. Put `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` in the dashboard and redeploy.
+2. Google (optional for both staging and production): OAuth client, redirect URI `https://<staging address>/api/auth/callback/google`, add your own account as a test user. Put `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` in the dashboard and redeploy.
 3. Anthropic (optional): put `ANTHROPIC_API_KEY` in the dashboard; set a provider-side spend cap first; keep `LIMIT_GLOBAL_DAILY_USD=0.5`.
 
 **Checks (about 20 minutes, with made-up notes)**
-- [ ] Sign in with Google using a staging invitation (`npm run seed:staging -- --count 2` in the Render shell). A second browser without a code is refused.
+- [ ] In a fresh browser choose **Continue without an account**. No email, Google login or invitation is requested. Create fictional homework. In a second private browser create another guest and confirm it sees none of the first guest’s work.
+- [ ] Reload the first browser: the same guest workspace remains. Export it from Settings; delete the second guest’s workspace and confirm the first is unaffected.
+- [ ] Optional account sign-in: sign in with Google using a staging invitation (`npm run seed:staging -- --count 2` in the Render shell). A second **account sign-up** without a code is refused; guest entry remains available when enabled.
 - [ ] Paste a few made-up notes, let the assistant propose concepts, answer one question in words: you get graded feedback.
 - [ ] Homework: paste a made-up worksheet, type working with one wrong step, Check my work (exact), then Give me a hint (assistant).
 - [ ] Upload a photo of a printed made-up page; compare what was read with the original (only if you enabled OCR).
