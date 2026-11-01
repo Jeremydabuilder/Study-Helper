@@ -15,12 +15,12 @@ describe.each([['render.staging.yaml', 'staging'], ['render.production.yaml', 'p
     expect(svc.name).toContain(name === 'staging' ? 'staging' : 'pilot');
   });
   it('is one instance with a disk, deploys only by hand, and checks readiness', () => {
-    expect(svc.numInstances).toBe(1); expect(svc.autoDeploy).toBe(false); expect(svc.healthCheckPath).toBe('/readyz');
+    expect(svc.numInstances).toBe(1); expect(svc.autoDeployTrigger).toBe('off'); expect(svc.healthCheckPath).toBe('/readyz');
     expect(svc.disk.mountPath).toBe(e.DATA_DIR.value); expect(svc.disk.sizeGB).toBeGreaterThan(0);
     expect(svc.buildCommand).toContain('--include=dev'); expect(svc.startCommand).toBe('npm run start:hosted');
   });
   it('keeps the database private and takes its address from the platform', () => {
-    expect(d.databases[0].ipAllowList).toEqual([]); expect(e.DATABASE_URL.fromDatabase.name).toBe(d.databases[0].name);
+    expect(d.databases[0].ipAllowList).toEqual([]); expect(d.databases[0].postgresMajorVersion).toBe('16'); expect(d.databases[0].plan).toBe('0.1c-256mb'); expect(svc.plan).toBe('0.5c-512mb'); expect(e.DATABASE_URL.fromDatabase.name).toBe(d.databases[0].name);
   });
   it('holds no secret values: generated or entered in the dashboard', () => {
     for (const k of ['BETTER_AUTH_SECRET', 'APP_SECRET', 'OPERATOR_TOKEN']) expect(e[k].generateValue).toBe(true);

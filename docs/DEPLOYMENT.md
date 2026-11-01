@@ -1,7 +1,7 @@
 # Deployment (Render candidate): staging first
 
 **Release branch:** `claude/pilot-integration` (also pushed as `claude/gracious-ramanujan-crnd4h`). It contains everything on `main` plus the hosted pilot and the homework helper. `main` and the default branch are untouched. Deploy a **commit hash**, written in your deploy notes, never "latest of a branch".
-**Status:** never deployed. The Render blueprints below were checked only by this repository's own structure tests and by running the same build and start commands locally; Render's documentation could not be reached from the build environment, so field names and plan names are **unvalidated** (see "Before the first sync").
+**Status:** never deployed. The Render blueprints below were checked only by this repository's own structure tests and by running the same build and start commands locally; Plan IDs, manual deployment field, database version, and custom Blueprint file support were reviewed against [Render’s official reference](https://render.com/docs/blueprint-spec) on 2026-10-31. This is documentation review, not a Render validation response or deployment.
 
 ## Shape
 One Node 22 web service per environment, one PostgreSQL database, one persistent disk at `/var/data`. Each student's private study data is a SQLite file under `DATA_DIR/users/<id>/`. Because those files live on one disk:
@@ -41,14 +41,18 @@ In Google Cloud Console create an OAuth client of type "Web application". Add th
 ## Staging, step by step (no production resources are created)
 1. In Render: New → Blueprint → this repository → branch `claude/pilot-integration` → **Blueprint file path `render.staging.yaml`**. Before approving, read the plan: it must list one web service, one disk and one database, all named `…staging…`.
 2. Leave `ANTHROPIC_API_KEY` and `PUBLIC_URL` empty. Wait for the deploy to turn healthy (`/readyz`).
-3. In the service Shell: `npm run seed:staging -- --count 3` (refuses outside staging) prints three single-use invitation codes and switches the pilot on for up to 10 testers. Send codes yourself; nothing is sent automatically.
+3. In the service Shell: `npm run seed:staging -- --count 3` (refuses outside staging) runs the built seed command without TypeScript tooling, prints three single-use invitation codes and switches the pilot on for up to 10 testers, with paid AI disabled. It refuses to relabel a database from another environment. Send codes yourself; nothing is sent automatically.
 4. Run the staging items in `docs/LAUNCH_CHECKLIST.md` ("Staging validation") and `docs/LIVE_CHECKS.md`.
 5. Rehearse backup and restore on staging (OPERATIONS.md).
 
-## Before the first sync (unvalidated against Render)
+## Before the first sync (actual hosting remains unverified)
 Run `render blueprints validate render.staging.yaml` (Render CLI) or let the dashboard validate it, and compare with Render's current Blueprint specification: `plan` names for the web service and database, `numInstances`, `disk`, `ipAllowList`, `fromDatabase`/`connectionString`, `generateValue`, and whether a "Blueprint file path" other than `render.yaml` can be chosen. If a name differs, change only that name; the app does not depend on Render-specific features.
 
 ## Rollback
 - Code: Render → service → Deploys → redeploy the previous known-good commit. Schema changes are additive and forward-only.
 - Data: OPERATIONS.md (backup/restore). Restore targets an **empty** database and disk with the same `DATA_LABEL`, so it is a rebuild, not an undo.
 - Stop fast: `npm run operator -- pilot off` (students see a pause message, nothing is lost) or `ai off`.
+
+## Built operator tools
+
+Run `npm run build:hosted` before operator commands locally. `npm run operator -- help` and `npm run seed:staging -- --count 3` execute plain Node bundles and keep working after deployment removes `tsx`. CI checks the built commands. The blueprints pin PostgreSQL 16 to match CI and use manual deployments. No hosting resources have been created by this change.
