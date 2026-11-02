@@ -30,11 +30,13 @@
     "loadtest": "node --import tsx scripts/loadtest.ts",
     "rehearse:prod": "node --import tsx scripts/rehearse-production.ts",
     "seed:staging": "node dist-server/seed-staging.mjs",
-    "scan:secrets": "node scripts/scan-secrets.mjs"
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "personal": "node scripts/start-personal.mjs"
   },
   "dependencies": {
     "better-auth": "^1.7.14",
     "express": "^4.21.2",
+    "jose": "^6.2.13",
     "pdf-lib": "1.17.1",
     "pg": "^8.23.1",
     "react": "^18.3.1",

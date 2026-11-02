@@ -10,7 +10,7 @@ export function ErrorBox({ error, onRetry, children }: { error: ApiError | Error
   return (
     <div className="notice bad" role="alert">
       <strong>That didn’t work.</strong> <span>{msg}</span>
-      <div className="row gap-s mt-s">{onRetry && <button className="btn" onClick={onRetry}>Try again</button>}{children}</div>
+      <div className="row gap-s mt-s">{error instanceof ApiError && error.extra.manageUsageUrl === 'https://chatgpt.com/settings/usage' && <a className="btn primary" href={error.extra.manageUsageUrl} target="_blank" rel="noreferrer">Manage usage</a>}{onRetry && <button className="btn" onClick={onRetry}>Try again</button>}{children}</div>
     </div>
   );
 }

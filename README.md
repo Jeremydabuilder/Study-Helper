@@ -1,3 +1,5 @@
+> **Personal ChatGPT mode:** run `npm ci`, then `npm run personal`, and open `http://127.0.0.1:8787/#/settings`. Choose **Continue with ChatGPT**, authorize your account, then select an available model. No Render or API key is needed for this local plan flow. It generates new responses; existing ChatGPT chats/memory are not imported. Eligibility and plan limits still apply. See [the personal setup guide](docs/PERSONAL_CHATGPT.md). Real sign-in still needs your own account test.
+
 # Study Helper
 
 An evidence-driven study coach. It aims to help you learn more **per minute** than ordinary AI chat — and to *measure* whether it does, rather than claim it.

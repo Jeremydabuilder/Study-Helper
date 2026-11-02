@@ -7,3 +7,5 @@ data
 *.db-journal
 *.log
 eval-out
+# Personal ChatGPT authorization records, even with an overridden data folder.
+chatgpt-auth/

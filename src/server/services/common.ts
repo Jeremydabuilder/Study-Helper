@@ -10,7 +10,7 @@ import type { CalendarGateway } from './calendarGoogle';
 
 export interface AppConfig {
   anthropicKey: string | null; model: string; anthropicBaseUrl: string;
-  aiProvider: 'anthropic' | 'groq'; groqKey: string | null; groqModel: string | null;
+  aiProvider: 'anthropic' | 'groq' | 'chatgpt'; groqKey: string | null; groqModel: string | null;
   /** per-task overrides (model / maxOutputTokens / effort) */
   aiTasks: Partial<Record<'extract' | 'generate' | 'grade', Partial<TaskConfig>>>;
   ocr: { enabled: boolean; model: string | null; maxOutputTokens?: number };
@@ -131,7 +131,7 @@ export function aiInfo(ctx: Ctx) {
   const w = usageWindow(ctx);
   const live = ctx.ai.live;
   const tasks = TASKS.map((t) => ({ task: t, model: ctx.ai.modelFor?.(t) ?? null, maxOutputTokens: ctx.cfg.aiTasks[t]?.maxOutputTokens ?? DEFAULT_TASKS[t].maxOutputTokens, effort: ctx.cfg.aiTasks[t]?.effort ?? DEFAULT_TASKS[t].effort ?? null }));
-  let mode: AiMode = 'offline', detail = ctx.cfg.aiProvider === 'groq' ? 'AI_PROVIDER=groq is set but GROQ_API_KEY is missing.' : 'No ANTHROPIC_API_KEY is set. Math works fully offline; other subjects use basic templates.';
+  let mode: AiMode = 'offline', detail = ctx.cfg.aiProvider === 'chatgpt' ? 'Connect your ChatGPT account and choose a model in Settings. Plan usage stays on this computer.' : ctx.cfg.aiProvider === 'groq' ? 'AI_PROVIDER=groq is set but GROQ_API_KEY is missing.' : 'No ANTHROPIC_API_KEY is set. Math works fully offline; other subjects use basic templates.';
   let verification: ReturnType<typeof deriveVerification> = [];
   if (live) {
     verification = deriveVerification(ctx.db, ctx.ai);
@@ -144,7 +144,7 @@ export function aiInfo(ctx: Ctx) {
     else { mode = 'configured_unverified'; detail = `Credentials are configured but no authenticated request has succeeded yet for ${[...new Set(verification.filter((v) => v.status === 'unverified').map((v) => v.model))].join(', ')}. Use “Verify connection”.`; }
   }
   return {
-    mode, detail, provider: ctx.ai.name, live, label: ctx.ai.label, providerName: live ? ctx.ai.providerId ?? ctx.ai.name.split(':')[0] : 'offline', tasks, verification,
+    personalPlan: ctx.cfg.aiProvider === 'chatgpt', mode, detail, provider: ctx.ai.name, live, label: ctx.ai.label, providerName: live ? ctx.ai.providerId ?? ctx.ai.name.split(':')[0] : 'offline', tasks, verification,
     callsToday: w.requests, dailyLimit: _limit(ctx), spentUsd: w.spentUsd, heldUsd: w.heldUnknownUsd + w.reservedUsd, committedUsd: w.committedUsd, dailyBudgetUsd: _budget(ctx), pricingAsOf: PRICING_AS_OF,
   };
 }
