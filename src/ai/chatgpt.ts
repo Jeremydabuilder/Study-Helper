@@ -20,17 +20,25 @@ export class ChatGPTTransport implements LLMTransport {
     if (req.attachments?.length) throw new AIError('rejected', 'Personal ChatGPT photo reading is not enabled here. Paste text instead.', undefined, 'not_sent');
     const model = this.connection.model;
     if (!model || req.model !== model) throw new AIError('not_configured', 'Choose your ChatGPT model in Settings first.', undefined, 'not_sent');
-    const token = await this.connection.accessToken();
-    const res = await this.fetchImpl('https://api.openai.com/v1/responses', {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      // Plan usage explicitly forbids max_output_tokens, temperature, previous_response_id and system input items.
-      body: JSON.stringify({ model, instructions: req.system, input: [{ role: 'user', content: req.user }], store: false, stream: true }),
-      signal: AbortSignal.timeout(req.timeoutMs), redirect: 'error',
-    });
-    if (!res.ok) throw responseError(res.status);
+    // Plan usage explicitly forbids max_output_tokens, temperature, previous_response_id and system input items.
+    const body = JSON.stringify({ model, instructions: req.system, input: [{ role: 'user', content: req.user }], store: false, stream: true });
+    let token = await this.connection.accessToken();
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.fetchImpl('https://api.openai.com/v1/responses', {
+        method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body,
+        signal: AbortSignal.timeout(req.timeoutMs), redirect: 'error',
+      });
+      // A refused token (revoked or expired a moment ago) is renewed once and the same request is sent again; a refused request costs nothing.
+      if (res.status === 401 && attempt === 0) { await res.body?.cancel().catch(() => {}); token = await this.connection.accessToken({ rejected: token }); continue; }
+      if (!res.ok) throw responseError(res.status);
+      return this.read(res, model);
+    }
+  }
+  private async read(res: Response, model: string): Promise<LLMResponse> {
     if (!res.body) throw new AIError('malformed', 'ChatGPT returned no response stream.', undefined, 'unknown');
     const reader = res.body.getReader(), decoder = new TextDecoder();
     let pending = '', bytes = 0, completed: any = null;
+    const items: any[] = [];
     try {
       for (;;) {
         const { done, value } = await reader.read();
@@ -46,12 +54,16 @@ export class ChatGPTTransport implements LLMTransport {
           let event: any; try { event = JSON.parse(data); } catch { throw new AIError('malformed', 'ChatGPT returned an unreadable stream.', undefined, 'unknown'); }
           if (event.type === 'response.failed' || event.type === 'error') throw streamError(event.response?.error?.code ?? event.code);
           if (event.type === 'response.incomplete') throw new AIError('malformed', 'ChatGPT did not finish the answer. Your work is saved; try again.', undefined, 'unknown');
+          if (event.type === 'response.output_item.done' && event.item) items.push(event.item);
           if (event.type === 'response.completed') completed = event.response;
         }
       }
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    // Success only after the provider says the response completed; text from the stream is never trusted on its own.
     if (!completed || completed.status !== 'completed') throw new AIError('malformed', 'The ChatGPT connection ended before the answer completed. Your work is saved.', undefined, 'unknown');
-    const text = (completed.output ?? []).filter((o: any) => o.type === 'message').flatMap((o: any) => o.content ?? []).filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('');
+    const textOf = (output: any[]) => (output ?? []).filter((o: any) => o?.type === 'message').flatMap((o: any) => o.content ?? []).filter((c: any) => c?.type === 'output_text').map((c: any) => c.text).join('');
+    // Some completed events carry no output (the items were streamed before): use those items, still only because the response completed.
+    const text = textOf(completed.output) || textOf(items);
     const usage = completed.usage;
     return { text, model: completed.model ?? model, stopReason: 'end_turn', requestId: completed.id ?? null, usage: usage ? { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0, cacheRead: 0, cacheWrite: 0 } : null };
   }

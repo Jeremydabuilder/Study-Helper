@@ -35,6 +35,278 @@ var init_provider = __esm({
   }
 });
 
+// src/server/personal/protect.ts
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+function syncedFolderWarning(dir) {
+  const full = resolve(dir);
+  return SYNCED.test(full) ? `The ChatGPT connection folder (${full}) looks like it is inside a cloud-synced folder, which would copy your saved sign-in to that service. Set CHATGPT_AUTH_DIR to a private folder that is not synced (see docs/PERSONAL_CHATGPT.md).` : null;
+}
+function restrictToCurrentUser(dir, o = {}) {
+  if ((o.platform ?? process.platform) !== "win32") return { ok: true, note: null };
+  const env = o.env ?? process.env, user = env.USERNAME ? `${env.USERDOMAIN ? `${env.USERDOMAIN}\\` : ""}${env.USERNAME}` : null;
+  if (!user) return { ok: false, note: "Could not tell which Windows user is running Study Helper, so the folder permissions were not tightened." };
+  const run = o.run ?? spawnSync;
+  const r = run("icacls", [resolve(dir), "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`, "/grant:r", "*S-1-5-18:(OI)(CI)F"], { encoding: "utf8", windowsHide: true, timeout: 15e3 });
+  return r.status === 0 && !r.error ? { ok: true, note: null } : { ok: false, note: "Windows would not let Study Helper restrict the connection folder to your account. Keep it in a folder only you can open." };
+}
+var SYNCED;
+var init_protect = __esm({
+  "src/server/personal/protect.ts"() {
+    "use strict";
+    SYNCED = /(^|[\\/])(onedrive[^\\/]*|dropbox[^\\/]*|icloud ?drive|iclouddrive|mobile documents|google ?drive|googledrive|box sync|box|pcloud ?drive|megasync|sync\.com|nextcloud|syncthing)([\\/]|$)/i;
+  }
+});
+
+// src/server/personal/chatgpt.ts
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createRemoteJWKSet, jwtVerify } from "jose";
+async function verifyChatGPTIdentity(token, clientId, keySet = keys) {
+  return (await jwtVerify(token, keySet, { issuer: ISSUER, audience: clientId, algorithms: ["RS256"], requiredClaims: ["sub", "exp", "iat"] })).payload;
+}
+var ISSUER, RESOURCE, TOKEN_URL, keys, PLAN_SCOPE, ConnectError, fail, TERMINAL, RENEW_EARLY_MS, TokenFailure, ChatGPTConnection;
+var init_chatgpt = __esm({
+  "src/server/personal/chatgpt.ts"() {
+    "use strict";
+    init_provider();
+    init_protect();
+    ISSUER = "https://auth.openai.com";
+    RESOURCE = "https://api.openai.com/v1";
+    TOKEN_URL = `${ISSUER}/api/accounts/oauth/token`;
+    keys = createRemoteJWKSet(new URL(`${ISSUER}/.well-known/jwks.json`));
+    PLAN_SCOPE = "chatgpt.tokens.use.direct";
+    ConnectError = class extends AIError {
+      constructor(message, reason) {
+        super("not_configured", message, void 0, "not_sent");
+        this.reason = reason;
+      }
+      reason;
+    };
+    fail = (message = "ChatGPT sign-in could not be verified. Try signing in again.", reason = "generic") => new ConnectError(message, reason);
+    TERMINAL = /* @__PURE__ */ new Set(["refresh_token_reused", "refresh_token_invalidated", "refresh_token_expired", "invalid_grant"]);
+    RENEW_EARLY_MS = 6e4;
+    TokenFailure = class extends Error {
+      constructor(status, code) {
+        super("token request failed");
+        this.status = status;
+        this.code = code;
+      }
+      status;
+      code;
+    };
+    ChatGPTConnection = class {
+      constructor(dir, o = {}) {
+        this.dir = dir;
+        this.fetch = o.fetch ?? fetch;
+        this.now = o.now ?? Date.now;
+        this.verify = o.verify ?? verifyChatGPTIdentity;
+        mkdirSync(dir, { recursive: true, mode: 448 });
+        chmodSync(dir, 448);
+        const protect = (o.restrict ?? restrictToCurrentUser)(dir);
+        if (protect.note) (o.warn ?? console.warn)(protect.note);
+        this.storageWarning = o.blockSynced === false ? null : syncedFolderWarning(dir);
+        if (this.storageWarning) (o.warn ?? console.warn)(this.storageWarning);
+        const host = this.read("host.json");
+        this.hostId = host?.id ?? `urn:uuid:${randomUUID()}`;
+        if (!host) this.save("host.json", { id: this.hostId });
+        this.identity = this.read("identity.json");
+        this.credential = this.read("credentials.json");
+        if (this.credential && (!this.identity || this.credential.subject !== this.identity.subject || this.credential.clientId !== this.identity.clientId)) throw fail("The saved ChatGPT connection files do not match each other. Close Study Helper, delete the chatgpt-auth folder (see docs/PERSONAL_CHATGPT.md), and connect again.", "storage");
+      }
+      dir;
+      credential = null;
+      identity = null;
+      pending = null;
+      catalog = [];
+      refreshing = null;
+      listeners = /* @__PURE__ */ new Set();
+      storageWarning;
+      generation = 0;
+      hostId;
+      fetch;
+      now;
+      verify;
+      read(name) {
+        const f = join(this.dir, name);
+        if (!existsSync(f)) return null;
+        chmodSync(f, 384);
+        try {
+          return JSON.parse(readFileSync(f, "utf8"));
+        } catch {
+          throw fail("The saved ChatGPT connection is unreadable. Close Study Helper, delete the chatgpt-auth folder (see docs/PERSONAL_CHATGPT.md), and connect again.", "storage");
+        }
+      }
+      save(name, value) {
+        const f = join(this.dir, name), temp = `${f}.${randomUUID()}.tmp`;
+        try {
+          writeFileSync(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
+          renameSync(temp, f);
+          chmodSync(f, 384);
+        } finally {
+          rmSync(temp, { force: true });
+        }
+      }
+      get model() {
+        return this.credential?.model ?? null;
+      }
+      get fingerprint() {
+        return createHash("sha256").update(`${this.identity?.clientId ?? ""}:${this.identity?.subject ?? ""}`).digest("hex").slice(0, 12);
+      }
+      /** Called after the connection changes without a request from the person (for example, a renewal the provider refused for good). */
+      onChange(fn) {
+        this.listeners.add(fn);
+      }
+      changed() {
+        for (const fn of this.listeners) {
+          try {
+            fn();
+          } catch {
+          }
+        }
+      }
+      status() {
+        return { storageWarning: this.storageWarning, connected: !!this.credential, email: this.identity?.email ?? null, model: this.model, needsWelcome: !!this.credential && !this.credential.welcomed, usingPlan: !!this.credential && !!this.model, manageUsageUrl: "https://chatgpt.com/settings/usage" };
+      }
+      begin(origin, browser) {
+        if (this.storageWarning) throw fail(this.storageWarning, "storage");
+        const url = new URL(origin);
+        if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password || url.pathname !== "/") throw fail("Open Study Helper at http://127.0.0.1:8787 to connect ChatGPT.");
+        const state = randomBytes(32).toString("base64url"), nonce = randomBytes(32).toString("base64url"), verifier = randomBytes(48).toString("base64url");
+        const redirect = `${url.origin}/auth/chatgpt/callback`;
+        this.pending = { state, browser, nonce, verifier, redirect, expires: this.now() + 6e5, clientId: this.identity?.clientId ?? null, generation: this.generation };
+        const params = new URLSearchParams({ client_id: this.identity?.clientId ?? "dynamic_agent_client", ext_agent_host_id: this.hostId, response_type: "code", redirect_uri: redirect, scope: "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct", resource: RESOURCE, state, nonce, code_challenge_method: "S256", code_challenge: createHash("sha256").update(verifier).digest("base64url") });
+        if (!this.identity) params.set("agent_name_hint", "Study Helper");
+        if (this.credential?.idToken) params.set("id_token_hint", this.credential.idToken);
+        if (this.identity?.email) params.set("login_hint", this.identity.email);
+        return `${ISSUER}/api/accounts/authorize?${params}`;
+      }
+      async token(body) {
+        const res = await this.fetch(TOKEN_URL, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(15e3), redirect: "error" });
+        if (!res.ok) {
+          const e = await res.json().catch(() => null);
+          const code = typeof e?.error === "string" ? e.error : typeof e?.error?.code === "string" ? e.error.code : typeof e?.code === "string" ? e.code : null;
+          throw new TokenFailure(res.status, code);
+        }
+        const j = await res.json();
+        if (typeof j.access_token !== "string" || typeof j.refresh_token !== "string" || typeof j.expires_in !== "number" || j.expires_in <= 0 || String(j.token_type).toLowerCase() !== "bearer") throw fail();
+        return j;
+      }
+      /** Matches the pending sign-in: right browser, right state, not expired. Used so that a forged request cannot disturb the real attempt. */
+      matches(query, browser) {
+        const p = this.pending;
+        return !!p && !!browser && browser === p.browser && query.get("state") === p.state && p.expires > this.now();
+      }
+      async callback(query, browser) {
+        const p = this.pending;
+        if (!p || !this.matches(query, browser)) throw fail(p && p.expires <= this.now() ? "The ChatGPT sign-in took too long. Start again." : void 0, p && p.expires <= this.now() ? "expired" : "generic");
+        this.pending = null;
+        if (query.has("error") || !query.get("code")) throw fail("ChatGPT sign-in was cancelled. You can try again.", "cancelled");
+        const clientId = query.get("client_id") ?? p.clientId;
+        if (!clientId || clientId === "dynamic_agent_client" || p.clientId && clientId !== p.clientId) throw fail();
+        let tokens2;
+        try {
+          tokens2 = await this.token(new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, code: query.get("code"), code_verifier: p.verifier, redirect_uri: p.redirect, resource: RESOURCE }));
+        } catch (e) {
+          throw e instanceof TokenFailure ? fail("ChatGPT authorization expired or was declined. Sign in again; no other provider will be used.", "expired") : e;
+        }
+        if (!tokens2.id_token) throw fail();
+        let claims;
+        try {
+          claims = await this.verify(tokens2.id_token, clientId);
+        } catch {
+          throw fail();
+        }
+        if (!claims.sub || claims.nonce !== p.nonce || this.identity && (claims.sub !== this.identity.subject || clientId !== this.identity.clientId)) throw fail("This is a different ChatGPT account or workspace. The saved account was not changed. Choose your original account.", "account_mismatch");
+        const scopes = tokens2.scope?.split(/\s+/) ?? [];
+        if (!scopes.includes(PLAN_SCOPE) || !scopes.includes("resource.invoke")) throw fail("ChatGPT plan permission was not granted. Sign in again and approve plan use.", "permission");
+        if (p.generation !== this.generation) throw fail();
+        const identity = { clientId, subject: claims.sub, email: typeof claims.email === "string" ? claims.email : null };
+        const c = { ...identity, access: tokens2.access_token, refresh: tokens2.refresh_token, idToken: tokens2.id_token, expiresAt: this.now() + tokens2.expires_in * 1e3, scopes, model: this.credential?.model ?? null, welcomed: this.credential?.welcomed ?? false };
+        this.save("identity.json", identity);
+        this.save("credentials.json", c);
+        this.identity = identity;
+        this.credential = c;
+        this.catalog = [];
+        this.generation++;
+      }
+      /** `rejected`: a token the provider just refused; it is renewed once even if it looks valid. Otherwise a token with under a minute left is renewed first. */
+      async accessToken(o = {}) {
+        const c = this.credential;
+        if (!c) throw fail("Connect your ChatGPT account in Settings first.");
+        if (c.access !== o.rejected && c.expiresAt - RENEW_EARLY_MS > this.now()) return c.access;
+        if (this.refreshing) return this.refreshing;
+        const generation = this.generation;
+        this.refreshing = (async () => {
+          let t;
+          try {
+            t = await this.token(new URLSearchParams({ grant_type: "refresh_token", client_id: c.clientId, refresh_token: c.refresh, resource: RESOURCE }));
+          } catch (e) {
+            if (!(e instanceof TokenFailure)) throw e;
+            if (e.code && TERMINAL.has(e.code) && generation === this.generation) {
+              this.endConnection();
+              throw fail("ChatGPT ended this sign-in. Choose Continue with ChatGPT and approve the same account again.", "expired");
+            }
+            throw fail(e.code === "invalid_client" ? "ChatGPT does not recognise this saved app registration. See docs/PERSONAL_CHATGPT.md." : "ChatGPT could not renew the sign-in. Try again in a moment; if it keeps failing, reconnect in Settings.", "expired");
+          }
+          const scopes = t.scope?.split(/\s+/) ?? c.scopes;
+          if (!scopes.includes(PLAN_SCOPE) || !scopes.includes("resource.invoke")) throw fail("ChatGPT plan permission ended. Reconnect in Settings.", "permission");
+          if (t.id_token) {
+            let claims;
+            try {
+              claims = await this.verify(t.id_token, c.clientId);
+            } catch {
+              throw fail();
+            }
+            if (claims.sub !== c.subject) throw fail();
+          }
+          const cur = this.credential;
+          if (generation !== this.generation || !cur || cur.subject !== c.subject || cur.clientId !== c.clientId) throw fail();
+          const next = { ...cur, access: t.access_token, refresh: t.refresh_token, idToken: t.id_token ?? cur.idToken, expiresAt: this.now() + t.expires_in * 1e3, scopes };
+          this.save("credentials.json", next);
+          this.credential = next;
+          return next.access;
+        })().finally(() => {
+          this.refreshing = null;
+        });
+        return this.refreshing;
+      }
+      async models() {
+        const token = await this.accessToken();
+        const res = await this.fetch(`${RESOURCE}/models`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15e3), redirect: "error" });
+        if (!res.ok) throw fail("Could not load the models allowed by your ChatGPT account. Reconnect or try again later.");
+        const j = await res.json();
+        this.catalog = (j.models ?? []).filter((m) => m.visibility === "list" && typeof m.slug === "string" && typeof m.display_name === "string").map((m) => ({ slug: m.slug, display_name: m.display_name }));
+        return this.catalog;
+      }
+      async selectModel(slug) {
+        if (!(await this.models()).some((m) => m.slug === slug) || !this.credential) throw fail("Choose a model available to your connected ChatGPT account.");
+        this.credential = { ...this.credential, model: slug };
+        this.save("credentials.json", this.credential);
+      }
+      welcome() {
+        if (this.credential) {
+          this.credential = { ...this.credential, welcomed: true };
+          this.save("credentials.json", this.credential);
+        }
+      }
+      /** Forget the tokens. The account binding (client and subject) stays, so a later sign-in must be the same account. */
+      endConnection() {
+        this.generation++;
+        this.pending = null;
+        this.catalog = [];
+        this.credential = null;
+        rmSync(join(this.dir, "credentials.json"), { force: true });
+        this.changed();
+      }
+      disconnect() {
+        this.endConnection();
+      }
+    };
+  }
+});
+
 // src/ai/schemas.ts
 import { z } from "zod";
 var ExtractedConcept, ConceptExtraction, Rubric, GeneratedQuestion, QuestionBatch, GradeResult, Clarification, PageReading, SupportAssessment, AssistReply, AnnotationFeedback, ChatReply, HomeworkReply, HomeworkCheck;
@@ -148,7 +420,7 @@ var init_schemas = __esm({
 });
 
 // src/ai/llm.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 function extractJson(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const body = (fenced ? fenced[1] : text).trim();
@@ -504,7 +776,7 @@ ${i.reasoning}`.toLowerCase();
     };
     supportsEffort = (model) => /^claude-(fable|mythos|opus|sonnet|haiku)-5/.test(model) || /^claude-(opus|sonnet)-4-[5-9]/.test(model);
     NOT_SENT = /* @__PURE__ */ new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "ERR_INVALID_URL", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "DEPTH_ZERO_SELF_SIGNED_CERT", "CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID", "SELF_SIGNED_CERT_IN_CHAIN"]);
-    credentialFingerprint = (provider, secret2, endpoint) => createHash("sha256").update(`${provider}\0${secret2}\0${endpoint}`).digest("hex").slice(0, 12);
+    credentialFingerprint = (provider, secret2, endpoint) => createHash2("sha256").update(`${provider}\0${secret2}\0${endpoint}`).digest("hex").slice(0, 12);
     AnthropicTransport = class {
       constructor(apiKey, defaultModel, fetchImpl = fetch, baseUrl = "https://api.anthropic.com") {
         this.apiKey = apiKey;
@@ -570,7 +842,7 @@ function streamError(code) {
   return new AIError(code === "subscription_sharing_usage_limit_exceeded" ? "limit_reached" : "unavailable", code === "subscription_sharing_usage_limit_exceeded" || code === "subscription_sharing_usage_unavailable" ? "ChatGPT plan usage is unavailable or has reached its limit. Use Manage usage in Settings. Your saved work is still available." : "ChatGPT could not complete the answer. Your saved work is still available.", void 0, "unknown");
 }
 var ChatGPTTransport;
-var init_chatgpt = __esm({
+var init_chatgpt2 = __esm({
   "src/ai/chatgpt.ts"() {
     "use strict";
     init_provider();
@@ -602,19 +874,31 @@ var init_chatgpt = __esm({
         if (req.attachments?.length) throw new AIError("rejected", "Personal ChatGPT photo reading is not enabled here. Paste text instead.", void 0, "not_sent");
         const model = this.connection.model;
         if (!model || req.model !== model) throw new AIError("not_configured", "Choose your ChatGPT model in Settings first.", void 0, "not_sent");
-        const token = await this.connection.accessToken();
-        const res = await this.fetchImpl("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-          // Plan usage explicitly forbids max_output_tokens, temperature, previous_response_id and system input items.
-          body: JSON.stringify({ model, instructions: req.system, input: [{ role: "user", content: req.user }], store: false, stream: true }),
-          signal: AbortSignal.timeout(req.timeoutMs),
-          redirect: "error"
-        });
-        if (!res.ok) throw responseError(res.status);
+        const body = JSON.stringify({ model, instructions: req.system, input: [{ role: "user", content: req.user }], store: false, stream: true });
+        let token = await this.connection.accessToken();
+        for (let attempt = 0; ; attempt++) {
+          const res = await this.fetchImpl("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            body,
+            signal: AbortSignal.timeout(req.timeoutMs),
+            redirect: "error"
+          });
+          if (res.status === 401 && attempt === 0) {
+            await res.body?.cancel().catch(() => {
+            });
+            token = await this.connection.accessToken({ rejected: token });
+            continue;
+          }
+          if (!res.ok) throw responseError(res.status);
+          return this.read(res, model);
+        }
+      }
+      async read(res, model) {
         if (!res.body) throw new AIError("malformed", "ChatGPT returned no response stream.", void 0, "unknown");
         const reader = res.body.getReader(), decoder = new TextDecoder();
         let pending2 = "", bytes = 0, completed = null;
+        const items = [];
         try {
           for (; ; ) {
             const { done, value } = await reader.read();
@@ -636,6 +920,7 @@ var init_chatgpt = __esm({
               }
               if (event.type === "response.failed" || event.type === "error") throw streamError(event.response?.error?.code ?? event.code);
               if (event.type === "response.incomplete") throw new AIError("malformed", "ChatGPT did not finish the answer. Your work is saved; try again.", void 0, "unknown");
+              if (event.type === "response.output_item.done" && event.item) items.push(event.item);
               if (event.type === "response.completed") completed = event.response;
             }
           }
@@ -645,7 +930,8 @@ var init_chatgpt = __esm({
           reader.releaseLock();
         }
         if (!completed || completed.status !== "completed") throw new AIError("malformed", "The ChatGPT connection ended before the answer completed. Your work is saved.", void 0, "unknown");
-        const text = (completed.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []).filter((c) => c.type === "output_text").map((c) => c.text).join("");
+        const textOf = (output) => (output ?? []).filter((o) => o?.type === "message").flatMap((o) => o.content ?? []).filter((c) => c?.type === "output_text").map((c) => c.text).join("");
+        const text = textOf(completed.output) || textOf(items);
         const usage = completed.usage;
         return { text, model: completed.model ?? model, stopReason: "end_turn", requestId: completed.id ?? null, usage: usage ? { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0, cacheRead: 0, cacheWrite: 0 } : null };
       }
@@ -742,18 +1028,19 @@ function buildProvider(cfg2, chatgpt) {
 var init_factory = __esm({
   "src/ai/factory.ts"() {
     "use strict";
-    init_chatgpt();
+    init_chatgpt2();
     init_groq();
     init_llm();
   }
 });
 
 // src/server/personal/routes.ts
-import { randomBytes } from "node:crypto";
+import { randomBytes as randomBytes2 } from "node:crypto";
 function mountChatGPT(app, rt, connection) {
   const reload = () => {
     rt.llm = buildProvider(rt.cfg, connection);
   };
+  connection.onChange(reload);
   const route = (fn) => async (req, res, next) => {
     try {
       await fn(req, res);
@@ -763,7 +1050,7 @@ function mountChatGPT(app, rt, connection) {
   };
   app.get("/api/chatgpt/status", (_req, res) => res.json(connection.status()));
   app.post("/api/chatgpt/connect", route((req, res) => {
-    const browser = randomBytes(32).toString("base64url");
+    const browser = randomBytes2(32).toString("base64url");
     const url = connection.begin(`http://${req.headers.host}`, browser);
     res.cookie(COOKIE, browser, { httpOnly: true, sameSite: "lax", maxAge: 6e5, path: "/auth/chatgpt/callback" });
     res.json({ url });
@@ -771,13 +1058,14 @@ function mountChatGPT(app, rt, connection) {
   app.get("/auth/chatgpt/callback", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const browser = req.headers.cookie?.split(";").map((s) => s.trim()).find((s) => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1) ?? null;
-    res.clearCookie(COOKIE, { path: "/auth/chatgpt/callback" });
+    const query = new URL(req.originalUrl, "http://127.0.0.1").searchParams;
+    if (connection.matches(query, browser)) res.clearCookie(COOKIE, { path: "/auth/chatgpt/callback" });
     try {
-      await connection.callback(new URL(req.originalUrl, "http://127.0.0.1").searchParams, browser);
+      await connection.callback(query, browser);
       reload();
       res.redirect("/#/settings?tab=setup&chatgpt=connected");
-    } catch {
-      res.redirect("/#/settings?tab=setup&chatgpt=failed");
+    } catch (e) {
+      res.redirect(`/#/settings?tab=setup&chatgpt=failed&reason=${e instanceof ConnectError ? e.reason : "generic"}`);
     }
   });
   app.get("/api/chatgpt/models", route(async (_req, res) => res.json(await connection.models())));
@@ -801,6 +1089,7 @@ var COOKIE;
 var init_routes = __esm({
   "src/server/personal/routes.ts"() {
     "use strict";
+    init_chatgpt();
     init_factory();
     COOKIE = "sh_chatgpt_oauth";
   }
@@ -1841,7 +2130,7 @@ var init_common = __esm({
 });
 
 // src/server/services/ledger.ts
-import { randomUUID } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 function recoverExpired(db, now) {
   return Number(db.run("UPDATE ai_usage SET status='abandoned', outcome='abandoned', billing='unknown', unknown_usd=worst_usd, reserved_usd=0 WHERE status='reserved' AND expires_at < ?", now).changes);
 }
@@ -1882,7 +2171,7 @@ var init_ledger2 = __esm({
           if (held + worst > budget) {
             throw new AIError("budget_reached", `Daily AI budget reached: about $${w.spent.toFixed(3)} spent, $${(w.unknown + w.reserved).toFixed(3)} held for in-flight or unconfirmed requests, of $${budget.toFixed(2)}. This request could cost up to $${worst.toFixed(3)}. The budget is a guardrail based on list-price estimates, not a hard ceiling; provider billing is authoritative. Offline mode still works, or raise the budget in Settings.`);
           }
-          const uid2 = randomUUID();
+          const uid2 = randomUUID2();
           db.run(`INSERT INTO ai_usage (ts,purpose,ok,provider,model,attempt,outcome,status,worst_usd,reserved_usd,expires_at,cred_fp,request_uid,usage_source,est_cost_usd,price_known)
         VALUES (?,?,0,?,?,?,?,?,?,?,?,?,?,?,0,1)`, t, p.purpose, p.provider, p.model, p.attempt, "pending", "reserved", worst, worst, t + cfg2.aiTimeoutMs + 6e4, p.credFp, uid2, "none");
           return uid2;
@@ -1937,19 +2226,19 @@ var init_ledger2 = __esm({
 
 // src/server/db.ts
 import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, readdirSync, unlinkSync } from "node:fs";
+import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 function migrate(db) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)");
   const done = new Set(db.all("SELECT version FROM schema_migrations").map((r) => r.version));
-  const files = readdirSync(join(here, "migrations")).filter((f) => /^\d+_.+\.sql$/.test(f)).sort();
+  const files = readdirSync(join2(here, "migrations")).filter((f) => /^\d+_.+\.sql$/.test(f)).sort();
   const applied = [];
   for (const f of files) {
     const version = parseInt(f, 10);
     if (done.has(version)) continue;
-    const sql = readFileSync(join(here, "migrations", f), "utf8");
+    const sql = readFileSync2(join2(here, "migrations", f), "utf8");
     db.tx(() => {
       db.exec(sql);
       db.run("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?,?,?)", version, f, Date.now());
@@ -1959,7 +2248,7 @@ function migrate(db) {
   return applied;
 }
 function openDb(path) {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") mkdirSync2(dirname(path), { recursive: true });
   const raw = new DatabaseSync(path);
   raw.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;");
   const db = new Db(raw, path);
@@ -1974,7 +2263,7 @@ var init_db = __esm({
     "use strict";
     init_ledger2();
     ({ DatabaseSync } = createRequire(import.meta.url)("node:sqlite"));
-    uid = () => randomUUID2();
+    uid = () => randomUUID3();
     Db = class {
       constructor(raw, path) {
         this.raw = raw;
@@ -2026,7 +2315,7 @@ var init_db = __esm({
       get(name) {
         let db = this.dbs.get(name);
         if (!db) {
-          db = openDb(this.dir === ":memory:" ? ":memory:" : join(this.dir, name === "demo" ? "demo.db" : "study.db"));
+          db = openDb(this.dir === ":memory:" ? ":memory:" : join2(this.dir, name === "demo" ? "demo.db" : "study.db"));
           recoverOrphans(db);
           this.dbs.set(name, db);
         }
@@ -2041,7 +2330,7 @@ var init_db = __esm({
         }
         if (this.dir !== ":memory:") for (const sfx of ["", "-wal", "-shm"]) {
           try {
-            unlinkSync(join(this.dir, "demo.db") + sfx);
+            unlinkSync(join2(this.dir, "demo.db") + sfx);
           } catch {
           }
         }
@@ -2705,7 +2994,7 @@ function reflow(lines) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 function readRaw(data, o) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const worker = new Worker(new URL("./pdfWorker.mjs", import.meta.url), {
       workerData: { data: new Uint8Array(data), maxPages: LIMITS.maxPages, maxChars: LIMITS.maxChars, testDelayMs: o.testDelayMs ?? 0 },
       resourceLimits: { maxOldGenerationSizeMb: 768 }
@@ -2730,7 +3019,7 @@ function readRaw(data, o) {
     worker.on("message", (m) => {
       if (m.type === "pages") pageCount = m.pageCount;
       else if (m.type === "page") pages.push({ n: m.n, items: m.items });
-      else if (m.type === "done") finish(() => resolve3({ pageCount, pages }));
+      else if (m.type === "done") finish(() => resolve4({ pageCount, pages }));
       else if (m.type === "error") finish(() => reject(new PdfError(m.code, m.message)));
     });
     worker.on("error", () => finish(() => reject(new PdfError("failed", "This PDF could not be read."))));
@@ -2772,7 +3061,7 @@ var init_pdf = __esm({
 });
 
 // src/server/services/files.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 async function readUpload(data, signal) {
   if (!data.length) throw new HttpError(400, "empty_file", "That file is empty.");
   const kind = sniff(data);
@@ -2845,7 +3134,7 @@ function applyText(ctx, src, text, kind, note, extra = {}) {
     extra.fileId ?? null,
     extra.pageCount ?? null,
     extra.extraction ?? null,
-    createHash2("sha256").update(extra.fileId ? ctx.db.get("SELECT sha256 FROM source_files WHERE id=?", extra.fileId).sha256 : `${src.content_hash}:${rev}`).digest("hex"),
+    createHash3("sha256").update(extra.fileId ? ctx.db.get("SELECT sha256 FROM source_files WHERE id=?", extra.fileId).sha256 : `${src.content_hash}:${rev}`).digest("hex"),
     src.id
   );
   ctx.db.run("INSERT INTO source_revisions (id,source_id,rev,kind,text,file_id,note,created_at) VALUES (?,?,?,?,?,?,?,?)", uid(), src.id, rev, kind, text, extra.fileId ?? src.file_id, note, ctx.now());
@@ -3043,7 +3332,7 @@ var init_files = __esm({
     MAX_PAGE_CHARS = 4e4;
     NO_TEXT_BELOW = 15;
     KINDS = ["notes", "review_packet", "rubric", "teacher_instructions", "passage", "textbook", "student_work", "other"];
-    sha = (b) => createHash2("sha256").update(b).digest("hex");
+    sha = (b) => createHash3("sha256").update(b).digest("hex");
     joinPages = (pages) => pages.map((p) => p.text).join("\f");
     extractionMeta = (x) => JSON.stringify({ method: x.method, kind: x.kind, pages: x.pages.map((p) => ({ n: p.n, warning: p.warning })) });
     locate = (text, quote) => findQuote(text, quote) ?? (quote.length < 6 && quote.trim() ? ((i) => i >= 0 ? { start: i, end: i + quote.length } : null)(text.indexOf(quote)) : null);
@@ -4054,7 +4343,7 @@ var init_questions = __esm({
 });
 
 // src/server/services/content.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 function listSubjects(ctx) {
   const rows = ctx.db.all(`SELECT s.*, 
     (SELECT COUNT(*) FROM sources WHERE subject_id = s.id) AS source_count,
@@ -4094,7 +4383,7 @@ function addSource(ctx, subjectId, b) {
   const text = String(b.text ?? "").replace(/\r\n/g, "\n");
   if (text.trim().length < 20) throw new HttpError(400, "too_short", "Paste a bit more text (at least a couple of sentences).");
   if (text.length > MAX_SOURCE_CHARS) throw new HttpError(413, "too_long", `That is too long (${text.length.toLocaleString()} characters). The limit is ${MAX_SOURCE_CHARS.toLocaleString()}; split it into parts.`);
-  const hash = createHash3("sha256").update(text.trim()).digest("hex");
+  const hash = createHash4("sha256").update(text.trim()).digest("hex");
   const dup = ctx.db.get("SELECT id FROM sources WHERE subject_id = ? AND content_hash = ?", subjectId, hash);
   if (dup) return { id: dup.id, duplicate: true };
   const kinds = ["notes", "review_packet", "rubric", "teacher_instructions", "passage", "textbook", "student_work", "other"];
@@ -4832,7 +5121,7 @@ var init_stats = __esm({
 });
 
 // src/core/calendar.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 function normalizeEvent(raw, calendarId, calendarTz) {
   if (!raw.id || !raw.start) return raw.status === "cancelled" && raw.id ? cancelledStub(raw, calendarId, calendarTz) : null;
   const allDay = !!raw.start.date && !raw.start.dateTime;
@@ -4851,7 +5140,7 @@ function normalizeEvent(raw, calendarId, calendarTz) {
   }
   const title = (raw.summary ?? "").trim() || "(untitled event)";
   const description = (raw.description ?? "").slice(0, 2e3);
-  const fingerprint = createHash4("sha1").update(JSON.stringify([title, description, allDay, startUtc, endUtc, startDate, endDate, status, raw.transparency ?? ""])).digest("hex").slice(0, 16);
+  const fingerprint = createHash5("sha1").update(JSON.stringify([title, description, allDay, startUtc, endUtc, startDate, endDate, status, raw.transparency ?? ""])).digest("hex").slice(0, 16);
   return {
     calendarId,
     eventId: raw.id,
@@ -6850,9 +7139,9 @@ var init_studyItems = __esm({
 });
 
 // src/server/crypto.ts
-import { createCipheriv, createDecipheriv, createHash as createHash5, hkdfSync, randomBytes as randomBytes2 } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash as createHash6, hkdfSync, randomBytes as randomBytes3 } from "node:crypto";
 function encryptJson(value, secret2) {
-  const iv = randomBytes2(12);
+  const iv = randomBytes3(12);
   const c = createCipheriv("aes-256-gcm", key(secret2), iv);
   const enc = Buffer.concat([c.update(JSON.stringify(value), "utf8"), c.final()]);
   return ["v1", iv.toString("base64"), c.getAuthTag().toString("base64"), enc.toString("base64")].join(".");
@@ -6869,8 +7158,8 @@ var init_crypto = __esm({
   "src/server/crypto.ts"() {
     "use strict";
     key = (secret2) => Buffer.from(hkdfSync("sha256", secret2, "study-helper", "token-encryption", 32));
-    sha256b64url = (s) => createHash5("sha256").update(s).digest("base64url");
-    randomToken = (n = 32) => randomBytes2(n).toString("base64url");
+    sha256b64url = (s) => createHash6("sha256").update(s).digest("base64url");
+    randomToken = (n = 32) => randomBytes3(n).toString("base64url");
   }
 });
 
@@ -7546,7 +7835,7 @@ var init_chat = __esm({
 });
 
 // src/server/services/ocr.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 function ocrAvailability(ctx) {
   const steps = ["Set ANTHROPIC_API_KEY in .env (server-side only).", "Set AI_OCR=anthropic in .env \u2014 an explicit opt-in to sending page images to Anthropic.", "Restart the app.", "Open this material again; you will see exactly what will be sent before anything is."];
@@ -7694,7 +7983,7 @@ var init_ocr = __esm({
       handwriting: "Handwriting can be misread. Check every word and number.",
       table: "Contains a table. Its layout may be lost."
     };
-    digest = (o) => createHash6("sha256").update(JSON.stringify(o)).digest("hex").slice(0, 24);
+    digest = (o) => createHash7("sha256").update(JSON.stringify(o)).digest("hex").slice(0, 24);
   }
 });
 
@@ -9388,8 +9677,8 @@ var init_homework = __esm({
 
 // src/server/app.ts
 import express from "express";
-import { existsSync } from "node:fs";
-import { join as join2, resolve } from "node:path";
+import { existsSync as existsSync2 } from "node:fs";
+import { join as join3, resolve as resolve2 } from "node:path";
 import { z as z3, ZodError } from "zod";
 function createApp(rt, hosted) {
   const app = express();
@@ -9405,7 +9694,8 @@ function createApp(rt, hosted) {
         return res.status(403).end();
       }
     }
-    if (origin && host) {
+    const signInReturn = req.method === "GET" && req.path === "/auth/chatgpt/callback";
+    if (origin && host && !signInReturn) {
       try {
         if (new URL(origin).host !== host) return res.status(403).json({ error: { code: "forbidden_origin", message: "Cross-origin requests are not allowed." } });
       } catch {
@@ -9754,10 +10044,10 @@ function createApp(rt, hosted) {
   app.put("/api/homework/questions/:id/topics", h((ctx, req) => setQuestionConcepts(ctx, req.params.id, z3.object({ conceptIds: z3.array(z3.string()).max(10).optional(), newTopic: z3.string().optional() }).parse(req.body))));
   app.post("/api/homework/questions/:id/fresh-check", h((ctx, req) => requestFreshCheck(ctx, req.params.id)));
   app.post("/api/homework/checks/:id/challenge", h((ctx, req) => challengeCheck(ctx, req.params.id, z3.object({ reason: z3.string(), note: z3.string().optional() }).parse(req.body))));
-  const dist = resolve(process.cwd(), "dist");
-  if (existsSync(join2(dist, "index.html"))) {
+  const dist = resolve2(process.cwd(), "dist");
+  if (existsSync2(join3(dist, "index.html"))) {
     app.use(express.static(dist, { setHeaders: (r) => r.setHeader("Cache-Control", "no-cache") }));
-    app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(join2(dist, "index.html")));
+    app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(join3(dist, "index.html")));
   }
   app.use("/api", (_req, res) => res.status(404).json({ error: { code: "not_found", message: "Unknown endpoint." } }));
   app.use((err, _req, res, _next) => {
@@ -10840,7 +11130,7 @@ var init_ops = __esm({
 
 // src/server/hosted/tenants.ts
 import { existsSync as existsSync5, mkdirSync as mkdirSync3, readdirSync as readdirSync3, rmSync as rmSync2, statSync } from "node:fs";
-import { join as join6, resolve as resolve2, sep } from "node:path";
+import { join as join6, resolve as resolve3, sep } from "node:path";
 var ID_RE, Tenants;
 var init_tenants = __esm({
   "src/server/hosted/tenants.ts"() {
@@ -10863,8 +11153,8 @@ var init_tenants = __esm({
       /** Directory of one student's files. The id must look like an id: never a path. */
       userDir(userId) {
         if (!ID_RE.test(userId)) throw new Error("invalid user id");
-        const p = resolve2(this.dir, "users", userId);
-        if (!p.startsWith(resolve2(this.dir, "users") + sep)) throw new Error("invalid user id");
+        const p = resolve3(this.dir, "users", userId);
+        if (!p.startsWith(resolve3(this.dir, "users") + sep)) throw new Error("invalid user id");
         return p;
       }
       key(userId, ws) {
@@ -11488,10 +11778,10 @@ init_app();
 
 // src/server/config.ts
 init_groq();
-import { readFileSync as readFileSync2, existsSync as existsSync2 } from "node:fs";
+import { readFileSync as readFileSync3, existsSync as existsSync3 } from "node:fs";
 function loadEnvFile(path = ".env") {
-  if (!existsSync2(path)) return;
-  for (const line of readFileSync2(path, "utf8").split("\n")) {
+  if (!existsSync3(path)) return;
+  for (const line of readFileSync3(path, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
     if (m && process.env[m[1]] === void 0) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
   }
@@ -11546,192 +11836,18 @@ function configFromEnv(env = process.env) {
 }
 
 // src/server/context.ts
-import { join as join4 } from "node:path";
-
-// src/server/personal/chatgpt.ts
-init_provider();
-import { createHash as createHash7, randomBytes as randomBytes3, randomUUID as randomUUID3 } from "node:crypto";
-import { chmodSync, existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join as join3 } from "node:path";
-import { createRemoteJWKSet, jwtVerify } from "jose";
-var ISSUER = "https://auth.openai.com";
-var RESOURCE = "https://api.openai.com/v1";
-var TOKEN_URL = `${ISSUER}/api/accounts/oauth/token`;
-var keys = createRemoteJWKSet(new URL(`${ISSUER}/.well-known/jwks.json`));
-async function verifyChatGPTIdentity(token, clientId, keySet = keys) {
-  return (await jwtVerify(token, keySet, { issuer: ISSUER, audience: clientId, algorithms: ["RS256"], requiredClaims: ["sub", "exp", "iat"] })).payload;
-}
-var PLAN_SCOPE = "chatgpt.tokens.use.direct";
-var fail = (message = "ChatGPT sign-in could not be verified. Try signing in again.") => new AIError("not_configured", message, void 0, "not_sent");
-var ChatGPTConnection = class {
-  constructor(dir, o = {}) {
-    this.dir = dir;
-    this.fetch = o.fetch ?? fetch;
-    this.now = o.now ?? Date.now;
-    this.verify = o.verify ?? verifyChatGPTIdentity;
-    mkdirSync2(dir, { recursive: true, mode: 448 });
-    chmodSync(dir, 448);
-    const host = this.read("host.json");
-    this.hostId = host?.id ?? `urn:uuid:${randomUUID3()}`;
-    if (!host) this.save("host.json", { id: this.hostId });
-    this.identity = this.read("identity.json");
-    this.credential = this.read("credentials.json");
-    if (this.credential && (!this.identity || this.credential.subject !== this.identity.subject || this.credential.clientId !== this.identity.clientId)) throw fail("The saved ChatGPT connection is inconsistent. Disconnect it before reconnecting.");
-  }
-  dir;
-  credential = null;
-  identity = null;
-  pending = null;
-  catalog = [];
-  refreshing = null;
-  generation = 0;
-  hostId;
-  fetch;
-  now;
-  verify;
-  read(name) {
-    const f = join3(this.dir, name);
-    if (!existsSync3(f)) return null;
-    chmodSync(f, 384);
-    try {
-      return JSON.parse(readFileSync3(f, "utf8"));
-    } catch {
-      throw fail("The saved ChatGPT connection is unreadable. Reconnect using a fresh private data folder.");
-    }
-  }
-  save(name, value) {
-    const f = join3(this.dir, name), temp = `${f}.${randomUUID3()}.tmp`;
-    try {
-      writeFileSync(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
-      renameSync(temp, f);
-      chmodSync(f, 384);
-    } finally {
-      rmSync(temp, { force: true });
-    }
-  }
-  get model() {
-    return this.credential?.model ?? null;
-  }
-  get fingerprint() {
-    return createHash7("sha256").update(`${this.identity?.clientId ?? ""}:${this.identity?.subject ?? ""}`).digest("hex").slice(0, 12);
-  }
-  status() {
-    return { connected: !!this.credential, email: this.identity?.email ?? null, model: this.model, needsWelcome: !!this.credential && !this.credential.welcomed, usingPlan: !!this.credential && !!this.model, manageUsageUrl: "https://chatgpt.com/settings/usage" };
-  }
-  begin(origin, browser) {
-    const url = new URL(origin);
-    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password || url.pathname !== "/") throw fail("Open Study Helper at http://127.0.0.1:8787 to connect ChatGPT.");
-    const state = randomBytes3(32).toString("base64url"), nonce = randomBytes3(32).toString("base64url"), verifier = randomBytes3(48).toString("base64url");
-    const redirect = `${url.origin}/auth/chatgpt/callback`;
-    this.pending = { state, browser, nonce, verifier, redirect, expires: this.now() + 6e5, clientId: this.identity?.clientId ?? null, generation: this.generation };
-    const params = new URLSearchParams({ client_id: this.identity?.clientId ?? "dynamic_agent_client", ext_agent_host_id: this.hostId, response_type: "code", redirect_uri: redirect, scope: "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct", resource: RESOURCE, state, nonce, code_challenge_method: "S256", code_challenge: createHash7("sha256").update(verifier).digest("base64url") });
-    if (!this.identity) params.set("agent_name_hint", "Study Helper");
-    if (this.credential?.idToken) params.set("id_token_hint", this.credential.idToken);
-    if (this.identity?.email) params.set("login_hint", this.identity.email);
-    return `${ISSUER}/api/accounts/authorize?${params}`;
-  }
-  async token(body) {
-    const res = await this.fetch(TOKEN_URL, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(15e3), redirect: "error" });
-    if (!res.ok) throw fail("ChatGPT authorization expired or was declined. Sign in again; no other provider will be used.");
-    const j = await res.json();
-    if (typeof j.access_token !== "string" || typeof j.refresh_token !== "string" || typeof j.expires_in !== "number" || j.expires_in <= 0 || String(j.token_type).toLowerCase() !== "bearer") throw fail();
-    return j;
-  }
-  async callback(query, browser) {
-    const p = this.pending;
-    if (!p || !browser || browser !== p.browser || query.get("state") !== p.state || p.expires <= this.now()) throw fail();
-    this.pending = null;
-    if (query.has("error") || !query.get("code")) throw fail("ChatGPT sign-in was cancelled. You can try again.");
-    const clientId = query.get("client_id") ?? p.clientId;
-    if (!clientId || clientId === "dynamic_agent_client" || p.clientId && clientId !== p.clientId) throw fail();
-    const tokens2 = await this.token(new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, code: query.get("code"), code_verifier: p.verifier, redirect_uri: p.redirect, resource: RESOURCE }));
-    if (!tokens2.id_token) throw fail();
-    let claims;
-    try {
-      claims = await this.verify(tokens2.id_token, clientId);
-    } catch {
-      throw fail();
-    }
-    if (!claims.sub || claims.nonce !== p.nonce || this.identity && (claims.sub !== this.identity.subject || clientId !== this.identity.clientId)) throw fail("This is a different ChatGPT account or workspace. The saved account was not changed. Choose your original account.");
-    const scopes = tokens2.scope?.split(/\s+/) ?? [];
-    if (!scopes.includes(PLAN_SCOPE) || !scopes.includes("resource.invoke")) throw fail("ChatGPT plan permission was not granted. Sign in again and approve plan use.");
-    if (p.generation !== this.generation) throw fail();
-    const identity = { clientId, subject: claims.sub, email: typeof claims.email === "string" ? claims.email : null };
-    const c = { ...identity, access: tokens2.access_token, refresh: tokens2.refresh_token, idToken: tokens2.id_token, expiresAt: this.now() + tokens2.expires_in * 1e3, scopes, model: this.credential?.model ?? null, welcomed: this.credential?.welcomed ?? false };
-    this.save("identity.json", identity);
-    this.save("credentials.json", c);
-    this.identity = identity;
-    this.credential = c;
-    this.catalog = [];
-  }
-  async accessToken() {
-    const c = this.credential;
-    if (!c) throw fail("Connect your ChatGPT account in Settings first.");
-    if (c.expiresAt > this.now()) return c.access;
-    if (this.refreshing) return this.refreshing;
-    const generation = this.generation;
-    this.refreshing = (async () => {
-      const t = await this.token(new URLSearchParams({ grant_type: "refresh_token", client_id: c.clientId, refresh_token: c.refresh, resource: RESOURCE }));
-      const scopes = t.scope?.split(/\s+/) ?? c.scopes;
-      if (!scopes.includes(PLAN_SCOPE) || !scopes.includes("resource.invoke")) throw fail("ChatGPT plan permission ended. Reconnect in Settings.");
-      if (t.id_token) {
-        let claims;
-        try {
-          claims = await this.verify(t.id_token, c.clientId);
-        } catch {
-          throw fail();
-        }
-        if (claims.sub !== c.subject) throw fail();
-      }
-      if (generation !== this.generation || this.credential !== c) throw fail();
-      const next = { ...c, access: t.access_token, refresh: t.refresh_token, idToken: t.id_token ?? c.idToken, expiresAt: this.now() + t.expires_in * 1e3, scopes };
-      this.save("credentials.json", next);
-      this.credential = next;
-      return next.access;
-    })().finally(() => {
-      this.refreshing = null;
-    });
-    return this.refreshing;
-  }
-  async models() {
-    const token = await this.accessToken();
-    const res = await this.fetch(`${RESOURCE}/models`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15e3), redirect: "error" });
-    if (!res.ok) throw fail("Could not load the models allowed by your ChatGPT account. Reconnect or try again later.");
-    const j = await res.json();
-    this.catalog = (j.models ?? []).filter((m) => m.visibility === "list" && typeof m.slug === "string" && typeof m.display_name === "string").map((m) => ({ slug: m.slug, display_name: m.display_name }));
-    return this.catalog;
-  }
-  async selectModel(slug) {
-    if (!(await this.models()).some((m) => m.slug === slug) || !this.credential) throw fail("Choose a model available to your connected ChatGPT account.");
-    this.credential = { ...this.credential, model: slug };
-    this.save("credentials.json", this.credential);
-  }
-  welcome() {
-    if (this.credential) {
-      this.credential.welcomed = true;
-      this.save("credentials.json", this.credential);
-    }
-  }
-  disconnect() {
-    this.generation++;
-    this.pending = null;
-    this.catalog = [];
-    this.credential = null;
-    rmSync(join3(this.dir, "credentials.json"), { force: true });
-  }
-};
-
-// src/server/context.ts
+init_chatgpt();
 init_factory();
 init_offline();
 init_db();
 init_common();
 init_calendarGoogle();
 init_demoSeed();
+import { join as join4 } from "node:path";
 function createRuntime(cfg2, o = {}) {
   const now = o.now ?? Date.now;
   const offline = new OfflineProvider();
-  const chatgpt = cfg2.aiProvider === "chatgpt" ? new ChatGPTConnection(join4(cfg2.dataDir, "chatgpt-auth")) : void 0;
+  const chatgpt = cfg2.aiProvider === "chatgpt" ? new ChatGPTConnection(process.env.CHATGPT_AUTH_DIR?.trim() || join4(cfg2.dataDir, "chatgpt-auth")) : void 0;
   const llm = o.llm !== void 0 ? o.llm : buildProvider(cfg2, chatgpt);
   const demoGw = new MemoryGateway();
   const googleGw = o.gateway ?? (cfg2.google ? new GoogleGateway(cfg2.google) : new UnconfiguredGateway());
@@ -11793,10 +11909,10 @@ async function main() {
     const logger = makeLogger2();
     const hostedCfg = { ...cfg, google: process.env.CALENDAR_ENABLED === "1" && cfg.google ? { ...cfg.google, redirectUri: process.env.GOOGLE_REDIRECT_URI?.trim() || `${hcfg.publicUrl}/api/calendar/oauth/callback` } : null };
     const h = await createHostedApp2({ cfg: hostedCfg, hcfg, dataDir: cfg.dataDir, logger, llm: (await Promise.resolve().then(() => (init_factory(), factory_exports))).buildProvider(cfg) });
-    const server = h.app.listen(port, host2, () => logger.info("listening", { detail: `${hcfg.environment} on ${host2}:${port}` }));
+    const server2 = h.app.listen(port, host2, () => logger.info("listening", { detail: `${hcfg.environment} on ${host2}:${port}` }));
     const stop = async () => {
       logger.info("shutting_down");
-      server.close();
+      server2.close();
       await h.close();
       process.exit(0);
     };
@@ -11810,11 +11926,15 @@ async function main() {
     process.exit(1);
   }
   const rt = createRuntime(cfg);
-  createApp(rt).listen(port, host, () => {
+  const server = createApp(rt).listen(port, host, () => {
     console.log(`Study Helper running at http://127.0.0.1:${port}`);
     console.log(`  AI:       ${cfg.aiProvider === "chatgpt" ? "Personal ChatGPT \u2014 connect in Settings" : cfg.anthropicKey ? `Anthropic (${cfg.model})` : "Offline mode (no ANTHROPIC_API_KEY set)"}`);
     console.log(`  Calendar: ${cfg.google ? "Google Calendar (read-only) configured" : "Google not configured (manual entry + demo calendar only)"}`);
     console.log(`  Data:     ${cfg.dataDir}`);
+  });
+  server.on("error", (e) => {
+    console.error(e.code === "EADDRINUSE" ? `Port ${port} is already in use. Close the other Study Helper window, or start with a different PORT.` : "Could not start the local server.");
+    process.exit(1);
   });
 }
 main().catch((e) => {
