@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, statSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -27,7 +27,7 @@ function fixture() {
   const connection = new ChatGPTConnection(folder, options);
   const begin = () => { const u = new URL(connection.begin('http://127.0.0.1:8787', 'browser-cookie')); nonce = u.searchParams.get('nonce')!; return u; };
   const finish = async (u = begin(), extra: Record<string, string> = {}) => connection.callback(new URLSearchParams({ state: u.searchParams.get('state')!, code: 'one-use-code', client_id: 'oaiapp_my-client', ...extra }), 'browser-cookie');
-  return { connection, folder, begin, finish, options, calls: () => calls, body: () => lastBody!, advance: () => { now += 3600001; }, subject: (s: string) => { subject = s; }, badScope: () => { badScope = true; } };
+  return { connection, folder, begin, finish, options, calls: () => calls, body: () => lastBody!, advance: () => { now += 3600001; }, subject: (s: string) => { subject = s; }, badScope: () => { badScope = true; }, nonce: (n: string) => { nonce = n; } };
 }
 describe('personal account authorization', () => {
   it('uses official dynamic registration, stable host ID, PKCE and browser-bound one-use callbacks', async () => {
@@ -89,6 +89,23 @@ describe('personal account authorization', () => {
     f.connection.disconnect();
     expect(buildProvider(baseCfg({ aiProvider: 'chatgpt', anthropicKey: 'other-key' }), f.connection)).toBeNull();
     expect(configFromEnv({ AI_PROVIDER: 'chatgpt' }).aiPriceOverride).toEqual({ inPerM: 0, outPerM: 0 });
+  });
+  it('rejects an ID-token nonce that differs from the pending request', async () => {
+    const f = fixture(), u = f.begin(); f.nonce('wrong-nonce');
+    await expect(f.finish(u)).rejects.toMatchObject({ code: 'not_configured' });
+    expect(f.connection.status().connected).toBe(false);
+  });
+  it('a disconnect during renewal cannot restore tokens or reconnect the account', async () => {
+    const f = fixture(); await f.finish(); f.advance();
+    const renewal = f.connection.accessToken(); f.connection.disconnect();
+    await expect(renewal).rejects.toMatchObject({ code: 'not_configured' });
+    expect(f.connection.status().connected).toBe(false);
+    expect(existsSync(join(f.folder, 'credentials.json'))).toBe(false);
+  });
+  it('never includes damaged credential contents in errors', () => {
+    const d = dir(); writeFileSync(join(d, 'credentials.json'), '{"access":"PRIVATE-TOKEN-SENTINEL');
+    try { new ChatGPTConnection(d); throw new Error('should reject damaged credentials'); }
+    catch (e) { expect((e as Error).message).toContain('unreadable'); expect((e as Error).message).not.toContain('PRIVATE-TOKEN'); }
   });
   it('verifies real ID-token signatures, issuer, audience and expiry', async () => {
     const pair = await generateKeyPair('RS256'), jwk = await exportJWK(pair.publicKey);

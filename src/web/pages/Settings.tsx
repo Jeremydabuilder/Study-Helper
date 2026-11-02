@@ -348,11 +348,11 @@ function ChatGPTAccount() {
     <p>Use your ChatGPT plan for eligible study requests on this computer. This creates new answers; it cannot read this chat or your ChatGPT conversation history or memory.</p>
     {window.location.hash.includes('chatgpt=failed') && <p className="notice warn">Sign-in was cancelled or could not be verified. Your previous account was not replaced. Try again and choose the original account and workspace.</p>}
     {c.email && <p>Saved account: <strong>{c.email}</strong>. Check that this is the same account you use in ChatGPT.</p>}
-    {!c.connected ? <button className="btn primary" data-oai-siwc-button disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button> : <>
+    {!c.connected ? <button className="btn primary" data-oai-siwc-button="" disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button> : <>
       <p><strong>{c.model ? 'Using ChatGPT plan' : 'Connected — choose a model below to begin'}</strong> · <a href={c.manageUsageUrl} target="_blank" rel="noreferrer">Manage usage</a></p>
       <Field label="ChatGPT model" hint="Only models returned for your authorized account are shown. Changing the model applies to new requests."><select value={c.model ?? ''} disabled={busy || !models.data} onChange={e => run(async () => { await post('/chatgpt/model', { model: e.target.value }); })}><option value="" disabled>Choose a model</option>{models.data?.map(m => <option key={m.slug} value={m.slug}>{m.display_name}</option>)}</select></Field>
       {models.error && <ErrorBox error={models.error} onRetry={models.reload} />}
-      <button className="btn mt-s" data-oai-siwc-button disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button>
+      <button className="btn mt-s" data-oai-siwc-button="" disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button>
       <button className="btn mt-s" disabled={busy} onClick={() => run(async () => { await post('/chatgpt/disconnect'); })}>Disconnect ChatGPT on this computer</button>
       <p className="small muted">Disconnect removes local tokens. To revoke the app’s permission, use Manage usage in ChatGPT. Your study notes stay on this computer.</p>
     </>}

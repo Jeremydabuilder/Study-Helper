@@ -11593,7 +11593,11 @@ var ChatGPTConnection = class {
     const f = join3(this.dir, name);
     if (!existsSync3(f)) return null;
     chmodSync(f, 384);
-    return JSON.parse(readFileSync3(f, "utf8"));
+    try {
+      return JSON.parse(readFileSync3(f, "utf8"));
+    } catch {
+      throw fail("The saved ChatGPT connection is unreadable. Reconnect using a fresh private data folder.");
+    }
   }
   save(name, value) {
     const f = join3(this.dir, name), temp = `${f}.${randomUUID3()}.tmp`;

@@ -44,7 +44,7 @@ export class ChatGPTConnection {
     this.credential = this.read<Credentials>('credentials.json');
     if (this.credential && (!this.identity || this.credential.subject !== this.identity.subject || this.credential.clientId !== this.identity.clientId)) throw fail('The saved ChatGPT connection is inconsistent. Disconnect it before reconnecting.');
   }
-  private read<T>(name: string): T | null { const f = join(this.dir, name); if (!existsSync(f)) return null; chmodSync(f, 0o600); return JSON.parse(readFileSync(f, 'utf8')); }
+  private read<T>(name: string): T | null { const f = join(this.dir, name); if (!existsSync(f)) return null; chmodSync(f, 0o600); try { return JSON.parse(readFileSync(f, 'utf8')); } catch { throw fail('The saved ChatGPT connection is unreadable. Reconnect using a fresh private data folder.'); } }
   private save(name: string, value: unknown) { const f = join(this.dir, name), temp = `${f}.${randomUUID()}.tmp`; try { writeFileSync(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); renameSync(temp, f); chmodSync(f, 0o600); } finally { rmSync(temp, { force: true }); } }
   get model() { return this.credential?.model ?? null; }
   get fingerprint() { return createHash('sha256').update(`${this.identity?.clientId ?? ''}:${this.identity?.subject ?? ''}`).digest('hex').slice(0, 12); }
