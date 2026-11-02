@@ -21,7 +21,7 @@ export interface Runtime {
 export function createRuntime(cfg: AppConfig, o: { now?: () => number; dir?: string | ':memory:'; llm?: AIProvider | null; gateway?: CalendarGateway } = {}): Runtime {
   const now = o.now ?? Date.now;
   const offline = new OfflineProvider();
-  const chatgpt = cfg.aiProvider === 'chatgpt' ? new ChatGPTConnection(join(cfg.dataDir, 'chatgpt-auth')) : undefined;
+  const chatgpt = cfg.aiProvider === 'chatgpt' ? new ChatGPTConnection(process.env.CHATGPT_AUTH_DIR?.trim() || join(cfg.dataDir, 'chatgpt-auth')) : undefined;
   const llm = o.llm !== undefined ? o.llm : buildProvider(cfg, chatgpt);
   const demoGw = new MemoryGateway();
   const googleGw: CalendarGateway = o.gateway ?? (cfg.google ? new GoogleGateway(cfg.google) : new UnconfiguredGateway());

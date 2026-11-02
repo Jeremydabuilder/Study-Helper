@@ -336,27 +336,47 @@ function AccountTab({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void
 }
 
 
+const SIGN_IN_FAILURE: Record<string, string> = {
+  account_mismatch: 'That was a different ChatGPT account or workspace from the one saved here. Nothing was changed. Choose Continue with ChatGPT again and pick your original account and workspace.',
+  permission: 'ChatGPT plan permission was not granted. Choose Continue with ChatGPT again and approve plan use.',
+  cancelled: 'Sign-in was cancelled. Nothing was changed.',
+  expired: 'The sign-in took too long or was refused. Try again.',
+  storage: 'The saved connection folder needs attention. See the note below.',
+  generic: 'Sign-in could not be verified. Your previous account was not replaced. Try again and choose the original account and workspace.',
+};
+
 function ChatGPTAccount() {
   const connection = useApi<any>('/chatgpt/status');
   const models = useApi<{ slug: string; display_name: string }[]>(connection.data?.connected ? '/chatgpt/models' : null, [connection.data?.connected]);
   const [busy, setBusy] = useState(false), [error, setError] = useState<ApiError | null>(null);
+  // The result of the sign-in page is shown once, then removed from the address so a reload does not repeat it.
+  const [outcome] = useState<{ kind: 'connected' | 'failed'; reason: string } | null>(() => {
+    const q = new URLSearchParams(window.location.hash.split('?')[1] ?? '');
+    const kind = q.get('chatgpt');
+    return kind === 'connected' || kind === 'failed' ? { kind, reason: q.get('reason') ?? 'generic' } : null;
+  });
+  useEffect(() => { if (outcome) { try { window.history.replaceState(null, '', '#/settings?tab=setup'); } catch { /* the notice simply stays until the next page */ } } }, [outcome]);
   const run = async (fn: () => Promise<void>) => { setBusy(true); setError(null); try { await fn(); await connection.reload(); window.dispatchEvent(new Event('workspace-changed')); } catch (e) { setError(e as ApiError); } finally { setBusy(false); } };
+  if (connection.error && !connection.data) return <section className="card"><h2>Your ChatGPT account</h2><ErrorBox error={connection.error} onRetry={connection.reload} /></section>;
   if (!connection.data) return <Spinner />;
   const c = connection.data;
+  const connect = () => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); });
   return <section className="card">
     <h2>Your ChatGPT account</h2>
     <p>Use your ChatGPT plan for eligible study requests on this computer. This creates new answers; it cannot read this chat or your ChatGPT conversation history or memory.</p>
-    {window.location.hash.includes('chatgpt=failed') && <p className="notice warn">Sign-in was cancelled or could not be verified. Your previous account was not replaced. Try again and choose the original account and workspace.</p>}
-    {c.email && <p>Saved account: <strong>{c.email}</strong>. Check that this is the same account you use in ChatGPT.</p>}
-    {!c.connected ? <button className="btn primary" data-oai-siwc-button="" disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button> : <>
+    {outcome?.kind === 'failed' && <p className="notice warn" role="alert">{SIGN_IN_FAILURE[outcome.reason] ?? SIGN_IN_FAILURE.generic}</p>}
+    {outcome?.kind === 'connected' && <p className="notice good" role="status">Connected. {c.model ? 'You are using your ChatGPT plan.' : 'Now choose a model below.'}</p>}
+    {c.storageWarning && <p className="notice warn" role="alert">{c.storageWarning}</p>}
+    {c.email && <p>Saved account: <strong>{c.email}</strong>. Check that this is the same account you use in ChatGPT.{!c.connected && ' It stays saved after you disconnect, so only this account can be reconnected.'}</p>}
+    {!c.connected ? <button className="btn primary" data-oai-siwc-button="" disabled={busy || !!c.storageWarning} onClick={connect}>Continue with ChatGPT</button> : <>
       <p><strong>{c.model ? 'Using ChatGPT plan' : 'Connected — choose a model below to begin'}</strong> · <a href={c.manageUsageUrl} target="_blank" rel="noreferrer">Manage usage</a></p>
       <Field label="ChatGPT model" hint="Only models returned for your authorized account are shown. Changing the model applies to new requests."><select value={c.model ?? ''} disabled={busy || !models.data} onChange={e => run(async () => { await post('/chatgpt/model', { model: e.target.value }); })}><option value="" disabled>Choose a model</option>{models.data?.map(m => <option key={m.slug} value={m.slug}>{m.display_name}</option>)}</select></Field>
       {models.error && <ErrorBox error={models.error} onRetry={models.reload} />}
-      <button className="btn mt-s" data-oai-siwc-button="" disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button>
+      <button className="btn mt-s" data-oai-siwc-button="" disabled={busy} onClick={connect}>Continue with ChatGPT</button>
       <button className="btn mt-s" disabled={busy} onClick={() => run(async () => { await post('/chatgpt/disconnect'); })}>Disconnect ChatGPT on this computer</button>
       <p className="small muted">Disconnect removes local tokens. To revoke the app’s permission, use Manage usage in ChatGPT. Your study notes stay on this computer.</p>
     </>}
-    <p className="small muted">Your plan’s limits and eligibility apply. This app never switches to a paid API key or another account automatically. Your local request allowance still applies; no API dollar charge is estimated for plan requests.</p>
+    <p className="small muted">Your plan’s limits and eligibility apply. This app never switches to a paid API key or another account automatically. Your local request allowance still applies; no API dollar charge is estimated for plan requests. Anything you ask is sent to OpenAI to answer it.</p>
     {error && <ErrorBox error={error} />}
     {c.needsWelcome && <Modal title="You’re using your ChatGPT plan" onClose={() => run(async () => { await post('/chatgpt/welcome'); })}><p>Eligible AI requests in Study Helper use the connected account’s ChatGPT plan or credits. Review usage and access in ChatGPT settings.</p><a href={c.manageUsageUrl} target="_blank" rel="noreferrer">Manage usage</a><button className="btn primary" onClick={() => run(async () => { await post('/chatgpt/welcome'); })}>Got it</button></Modal>}
   </section>;

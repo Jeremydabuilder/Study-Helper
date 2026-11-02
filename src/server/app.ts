@@ -78,7 +78,9 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   app.use((req, res, next) => {
     const origin = req.headers.origin, host = req.headers.host;
     if (!hosted) { try { if (!host || !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(`http://${host}`).hostname)) return res.status(403).json({ error: { code: 'forbidden_host', message: 'Use the loopback address printed by the local server.' } }); } catch { return res.status(403).end(); } }
-    if (origin && host) { try { if (new URL(origin).host !== host) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-origin requests are not allowed.' } }); } catch { return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Bad origin.' } }); } }
+    // The sign-in return trip is a plain GET that may carry another site's Origin after OpenAI's redirect; it is protected by its one-use state and browser-bound cookie instead.
+    const signInReturn = req.method === 'GET' && req.path === '/auth/chatgpt/callback';
+    if (origin && host && !signInReturn) { try { if (new URL(origin).host !== host) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-origin requests are not allowed.' } }); } catch { return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Bad origin.' } }); } }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.is('application/json') === false && !(isUploadRoute(req) && req.is(UPLOAD_TYPES))) return res.status(415).json({ error: { code: 'unsupported', message: 'JSON only.' } });
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store');
     next();
