@@ -1,0 +1,12 @@
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createRuntime } from '../src/server/context';
+import { createApp } from '../src/server/app';
+import { configFromEnv } from '../src/server/config';
+const port = Number(process.env.E2E_PERSONAL_PORT ?? 4190);
+const cfg = configFromEnv({ AI_PROVIDER: 'chatgpt', DATA_DIR: mkdtempSync(join(tmpdir(), 'sh-personal-e2e-')) });
+const rt = createRuntime(cfg);
+const server = createApp(rt).listen(port, '127.0.0.1');
+const stop = () => server.close(() => process.exit(0));
+process.on('SIGTERM', stop); process.on('SIGINT', stop);

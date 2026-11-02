@@ -35,6 +35,8 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npx playwright test
+      - name: Personal ChatGPT UI (mock consent, no live account)
+        run: npx playwright test --config playwright.personal.config.ts
       - name: Production bundle starts and refuses unsafe configuration
         run: |
           ! APP_MODE=hosted node dist-server/main.mjs 2>err.txt; grep -q DATABASE_URL err.txt

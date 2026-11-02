@@ -30,8 +30,8 @@ async function main() {
   if (!loopback(host)) { console.error(`Refusing to start: local mode has no login and must listen on 127.0.0.1 (HOST=${host}). To host this for other people, run with APP_MODE=hosted (see docs/DEPLOYMENT.md).`); process.exit(1); }
   const rt = createRuntime(cfg);
   createApp(rt).listen(port, host, () => {
-    console.log(`Study Helper running at http://localhost:${port}`);
-    console.log(`  AI:       ${cfg.anthropicKey ? `Anthropic (${cfg.model})` : 'Offline mode (no ANTHROPIC_API_KEY set)'}`);
+    console.log(`Study Helper running at http://127.0.0.1:${port}`);
+    console.log(`  AI:       ${cfg.aiProvider === 'chatgpt' ? 'Personal ChatGPT — connect in Settings' : cfg.anthropicKey ? `Anthropic (${cfg.model})` : 'Offline mode (no ANTHROPIC_API_KEY set)'}`);
     console.log(`  Calendar: ${cfg.google ? 'Google Calendar (read-only) configured' : 'Google not configured (manual entry + demo calendar only)'}`);
     console.log(`  Data:     ${cfg.dataDir}`);
   });

@@ -62,6 +62,7 @@ async function acquireInstanceLock(pool: Pool, waitMs: number) {
 }
 
 export async function createHostedApp(d: HostedDeps): Promise<HostedApp> {
+  if (d.cfg.aiProvider === 'chatgpt') throw new Error('ChatGPT plan use is personal and local only. It cannot be shared through hosted mode.');
   const pool = d.pool ?? createPool(d.hcfg.databaseUrl, { ssl: /sslmode=require/.test(d.hcfg.databaseUrl) });
   const instance = await acquireInstanceLock(pool, d.instanceLockWaitMs ?? Number(process.env.INSTANCE_LOCK_WAIT_MS ?? 30_000)).catch(async (e) => { if (!d.pool) await pool.end(); throw e; });
   try { return await buildHostedApp(d, pool, instance); }

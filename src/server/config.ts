@@ -24,7 +24,7 @@ export function configFromEnv(env = process.env): AppConfig {
   const g = (k: string) => (env[k] && env[k]!.trim() ? env[k]!.trim() : null);
   const num = (k: string) => { const v = g(k); const n = v === null ? NaN : Number(v); return Number.isFinite(n) ? n : null; };
   const port = env.PORT ?? '8787';
-  const provider = g('AI_PROVIDER') === 'groq' ? 'groq' : 'anthropic'; // anthropic unless the operator explicitly opts in to groq
+  const provider = g('AI_PROVIDER') === 'chatgpt' ? 'chatgpt' : g('AI_PROVIDER') === 'groq' ? 'groq' : 'anthropic'; // anthropic unless the operator explicitly opts in to groq
   const task = (t: 'EXTRACT' | 'GENERATE' | 'GRADE') => {
     const e = g(`AI_EFFORT_${t}`);
     return { model: g(`AI_MODEL_${t}`) ?? undefined, maxOutputTokens: num(`AI_MAX_OUTPUT_${t}`) ?? undefined, effort: e && EFFORTS.includes(e) ? (e as Effort) : undefined };
@@ -38,7 +38,7 @@ export function configFromEnv(env = process.env): AppConfig {
     // Reading screenshots / scanned pages with a vision model is OFF unless the operator opts in explicitly (and uses Anthropic).
     ocr: { enabled: g('AI_OCR') === 'anthropic', model: g('AI_MODEL_OCR'), maxOutputTokens: num('AI_MAX_OUTPUT_OCR') ?? undefined },
     aiTimeoutMs: Number(env.AI_TIMEOUT_MS) || 45_000, aiDailyLimit: Number(env.AI_DAILY_CALL_LIMIT) || 150,
-    aiDailyBudgetUsd: num('AI_DAILY_BUDGET_USD') ?? 1, aiPriceOverride: { inPerM: num('AI_PRICE_IN_PER_MTOK') ?? undefined, outPerM: num('AI_PRICE_OUT_PER_MTOK') ?? undefined },
+    aiDailyBudgetUsd: num('AI_DAILY_BUDGET_USD') ?? 1, aiPriceOverride: provider === 'chatgpt' ? { inPerM: 0, outPerM: 0 } : { inPerM: num('AI_PRICE_IN_PER_MTOK') ?? undefined, outPerM: num('AI_PRICE_OUT_PER_MTOK') ?? undefined },
     google: g('GOOGLE_CLIENT_ID') && g('GOOGLE_CLIENT_SECRET') && g('APP_SECRET')
       ? { clientId: g('GOOGLE_CLIENT_ID')!, clientSecret: g('GOOGLE_CLIENT_SECRET')!, redirectUri: g('GOOGLE_REDIRECT_URI') ?? `http://localhost:${port}/api/calendar/oauth/callback` } : null,
     googleRedirectUri: g('GOOGLE_REDIRECT_URI') ?? `http://localhost:${port}/api/calendar/oauth/callback`,

@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { ChatGPTConnection } from './personal/chatgpt';
 import { AIProvider } from '../ai/provider';
 import { buildProvider } from '../ai/factory';
 import { OfflineProvider } from '../ai/offline';
@@ -7,6 +9,7 @@ import { CalendarGateway, GoogleGateway, MemoryGateway, UnconfiguredGateway } fr
 import { seedDemo, demoCalendarEvents } from './demoSeed';
 
 export interface Runtime {
+  chatgpt?: ChatGPTConnection;
   cfg: AppConfig; workspaces: Workspaces; now: () => number;
   llm: AIProvider | null; offline: OfflineProvider; googleGw: CalendarGateway; demoGw: MemoryGateway;
   ctx(name: WorkspaceName): Ctx;
@@ -18,12 +21,13 @@ export interface Runtime {
 export function createRuntime(cfg: AppConfig, o: { now?: () => number; dir?: string | ':memory:'; llm?: AIProvider | null; gateway?: CalendarGateway } = {}): Runtime {
   const now = o.now ?? Date.now;
   const offline = new OfflineProvider();
-  const llm = o.llm !== undefined ? o.llm : buildProvider(cfg);
+  const chatgpt = cfg.aiProvider === 'chatgpt' ? new ChatGPTConnection(join(cfg.dataDir, 'chatgpt-auth')) : undefined;
+  const llm = o.llm !== undefined ? o.llm : buildProvider(cfg, chatgpt);
   const demoGw = new MemoryGateway();
   const googleGw: CalendarGateway = o.gateway ?? (cfg.google ? new GoogleGateway(cfg.google) : new UnconfiguredGateway());
   let demoReady: Promise<void> | null = null;
   const rt: Runtime = {
-    cfg, now, llm, offline, googleGw, demoGw,
+    cfg, now, llm, chatgpt, offline, googleGw, demoGw,
     workspaces: new Workspaces(o.dir ?? cfg.dataDir),
     ensureDemo() {
       demoReady ??= (async () => {
@@ -40,7 +44,7 @@ export function createRuntime(cfg: AppConfig, o: { now?: () => number; dir?: str
         return { db, workspace: name, now, ai: offline, offline, cfg, calendar: demoGw };
       }
       const base: Ctx = { db, workspace: name, now, ai: offline, offline, cfg, calendar: googleGw };
-      return { ...base, ai: llm ? metered(base, llm) : offline };
+      return { ...base, ai: rt.llm ? metered(base, rt.llm) : offline };
     },
   };
   return rt;

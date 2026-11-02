@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { ApiError, post, put, setWorkspace, useApi, getWorkspace } from '../api';
-import { Chip, ErrorBox, Field, Spinner, Toggle, download } from '../ui';
+import { Chip, ErrorBox, Field, Modal, Spinner, Toggle, download } from '../ui';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WLABEL: Record<string, string> = { urgency: 'Deadline pressure', weakness: 'Needs work', overdue: 'Review overdue', prereq: 'Underpins other topics', unassessed: 'Not assessed yet', repair: 'Unresolved mistake' };
 
 export function Settings({ go, meta, hosted, onSignOut }: { go: (p: string) => void; meta: any; hosted?: any; onSignOut?: () => void }) {
-  const [tab, setTab] = useState<'setup' | 'profile' | 'priorities' | 'availability' | 'data' | 'account'>(() => (window.location.hash.includes('tab=') ? (window.location.hash.split('tab=')[1] as never) : 'setup'));
+  const [tab, setTab] = useState<'setup' | 'profile' | 'priorities' | 'availability' | 'data' | 'account'>(() => (window.location.hash.includes('tab=') ? (window.location.hash.split('tab=')[1].split('&')[0] as never) : 'setup'));
   return (
     <div className="narrow">
       <h1>Settings</h1>
@@ -165,7 +165,8 @@ function SetupTab() {
   const pctSpent = Math.min(100, (u.spentUsd / Math.max(u.budgetUsd, 0.0001)) * 100);
   return (<>
     <FirstUse key={ai.mode} />
-    <section className="card" aria-labelledby="ai-h"><h2 id="ai-h">AI</h2>
+    {ai.personalPlan && <ChatGPTAccount />}
+    {!ai.personalPlan && <section className="card" aria-labelledby="ai-h"><h2 id="ai-h">AI</h2>
       <p><Chip tone={m.tone}>{m.text}</Chip> <span className="muted small">{ai.label}</span></p>
       <p className="small muted">{ai.detail}</p>
       {!ai.live ? (
@@ -181,7 +182,7 @@ function SetupTab() {
         {vres?.error && <ErrorBox error={vres.error} />}
         {vres?.results?.map((r: any) => <p key={`${r.task}${r.model}`} className={`small ${r.ok ? '' : 'unknown'}`}>{r.ok ? '✓' : '✗'} {r.task ? `${r.task} · ` : ''}<span className="mono">{r.model}</span> — {r.ok ? `ok (${r.latencyMs} ms)` : r.error}</p>)}
       </>)}
-    </section>
+    </section>}
 
     <section className="card" aria-labelledby="ocr-h"><h2 id="ocr-h">Reading scans and screenshots</h2>
       <p><Chip tone={st.data.ocr?.available ? 'good' : 'neutral'}>{st.data.ocr?.available ? 'Available (Anthropic)' : 'Off'}</Chip> <span className="small muted">Live reading has not been verified in this build; fixtures only until you try it.</span></p>
@@ -190,7 +191,7 @@ function SetupTab() {
         : <><p className="small muted">{st.data.ocr?.reason} Without it you can always type a scanned page beside the original.</p>{st.data.ocr?.steps?.length > 0 && <ol className="small">{st.data.ocr.steps.map((x: string, i: number) => <li key={i}>{x}</li>)}</ol>}</>}
     </section>
 
-    {ai.live && (
+    {ai.live && !ai.personalPlan && (
       <section className="card" aria-labelledby="use-h"><h2 id="use-h">Usage & budget (last 24 hours)</h2>
         <p className="metric" style={{ fontSize: '1.5rem' }}>{usd(u.spentUsd)} <span className="small muted">spent (estimated) of {usd(u.budgetUsd)} budget{u.heldUsd > 0 && <> · <strong>{usd(u.heldUsd)}</strong> held</>}</span></p>
         <div className="bar" role="img" aria-label={`${Math.round(pctSpent)} percent of the daily budget`}><span style={{ width: `${pctSpent}%`, background: pctSpent > 85 ? 'var(--bad)' : undefined }} /></div>
@@ -332,4 +333,31 @@ function AccountTab({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void
       <div className="row mt-s"><button className="btn danger" disabled={confirm !== 'DELETE MY ACCOUNT' || busy === 'delete'} onClick={del}>{busy === 'delete' ? 'Deleting…' : 'Delete everything'}</button></div>
     </section>
   </>);
+}
+
+
+function ChatGPTAccount() {
+  const connection = useApi<any>('/chatgpt/status');
+  const models = useApi<{ slug: string; display_name: string }[]>(connection.data?.connected ? '/chatgpt/models' : null, [connection.data?.connected]);
+  const [busy, setBusy] = useState(false), [error, setError] = useState<ApiError | null>(null);
+  const run = async (fn: () => Promise<void>) => { setBusy(true); setError(null); try { await fn(); await connection.reload(); window.dispatchEvent(new Event('workspace-changed')); } catch (e) { setError(e as ApiError); } finally { setBusy(false); } };
+  if (!connection.data) return <Spinner />;
+  const c = connection.data;
+  return <section className="card">
+    <h2>Your ChatGPT account</h2>
+    <p>Use your ChatGPT plan for eligible study requests on this computer. This creates new answers; it cannot read this chat or your ChatGPT conversation history or memory.</p>
+    {window.location.hash.includes('chatgpt=failed') && <p className="notice warn">Sign-in was cancelled or could not be verified. Your previous account was not replaced. Try again and choose the original account and workspace.</p>}
+    {c.email && <p>Saved account: <strong>{c.email}</strong>. Check that this is the same account you use in ChatGPT.</p>}
+    {!c.connected ? <button className="btn primary" data-oai-siwc-button="" disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button> : <>
+      <p><strong>{c.model ? 'Using ChatGPT plan' : 'Connected — choose a model below to begin'}</strong> · <a href={c.manageUsageUrl} target="_blank" rel="noreferrer">Manage usage</a></p>
+      <Field label="ChatGPT model" hint="Only models returned for your authorized account are shown. Changing the model applies to new requests."><select value={c.model ?? ''} disabled={busy || !models.data} onChange={e => run(async () => { await post('/chatgpt/model', { model: e.target.value }); })}><option value="" disabled>Choose a model</option>{models.data?.map(m => <option key={m.slug} value={m.slug}>{m.display_name}</option>)}</select></Field>
+      {models.error && <ErrorBox error={models.error} onRetry={models.reload} />}
+      <button className="btn mt-s" data-oai-siwc-button="" disabled={busy} onClick={() => run(async () => { const r = await post('/chatgpt/connect'); window.location.assign(r.url); })}>Continue with ChatGPT</button>
+      <button className="btn mt-s" disabled={busy} onClick={() => run(async () => { await post('/chatgpt/disconnect'); })}>Disconnect ChatGPT on this computer</button>
+      <p className="small muted">Disconnect removes local tokens. To revoke the app’s permission, use Manage usage in ChatGPT. Your study notes stay on this computer.</p>
+    </>}
+    <p className="small muted">Your plan’s limits and eligibility apply. This app never switches to a paid API key or another account automatically. Your local request allowance still applies; no API dollar charge is estimated for plan requests.</p>
+    {error && <ErrorBox error={error} />}
+    {c.needsWelcome && <Modal title="You’re using your ChatGPT plan" onClose={() => run(async () => { await post('/chatgpt/welcome'); })}><p>Eligible AI requests in Study Helper use the connected account’s ChatGPT plan or credits. Review usage and access in ChatGPT settings.</p><a href={c.manageUsageUrl} target="_blank" rel="noreferrer">Manage usage</a><button className="btn primary" onClick={() => run(async () => { await post('/chatgpt/welcome'); })}>Got it</button></Modal>}
+  </section>;
 }

@@ -1,3 +1,4 @@
+import { mountChatGPT } from './personal/routes';
 import express, { NextFunction, Request, Response } from 'express';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -76,11 +77,14 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   // The server stores a student's records. Refuse cross-site writes and DNS-rebinding style requests.
   app.use((req, res, next) => {
     const origin = req.headers.origin, host = req.headers.host;
+    if (!hosted) { try { if (!host || !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(`http://${host}`).hostname)) return res.status(403).json({ error: { code: 'forbidden_host', message: 'Use the loopback address printed by the local server.' } }); } catch { return res.status(403).end(); } }
     if (origin && host) { try { if (new URL(origin).host !== host) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-origin requests are not allowed.' } }); } catch { return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Bad origin.' } }); } }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.is('application/json') === false && !(isUploadRoute(req) && req.is(UPLOAD_TYPES))) return res.status(415).json({ error: { code: 'unsupported', message: 'JSON only.' } });
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store');
     next();
   });
+
+  if (!hosted && rt.chatgpt) mountChatGPT(app, rt, rt.chatgpt);
 
   const wsOf = (req: Request): WorkspaceName => (req.headers['x-workspace'] === 'demo' ? 'demo' : 'real');
   hosted?.mountGuards(app);
@@ -359,7 +363,7 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
     if (err instanceof HttpError) return res.status(err.status).json({ error: { code: err.code, message: err.message, ...err.extra } });
     if (err instanceof AIError) {
       const status = err.code === 'rate_limited' || err.code === 'limit_reached' || err.code === 'budget_reached' ? 429 : err.code === 'timeout' ? 504 : err.code === 'not_configured' ? 503 : 502;
-      return res.status(status).json({ error: { code: `ai_${err.code}`, message: err.message, retryable: err.retryable, retryAfterMs: err.retryAfterMs ?? null, offlineFallback: true } });
+      return res.status(status).json({ error: { code: `ai_${err.code}`, message: err.message, retryable: err.retryable, retryAfterMs: err.retryAfterMs ?? null, offlineFallback: true, ...(!hosted && rt.cfg.aiProvider === 'chatgpt' ? { manageUsageUrl: 'https://chatgpt.com/settings/usage' } : {}) } });
     }
     if (err instanceof CalendarError) return res.status(err.code === 'reauth_required' ? 401 : err.code === 'rate_limited' ? 429 : err.code === 'org_blocked' || err.code === 'denied' ? 403 : err.code === 'not_configured' ? 503 : 502).json({ error: { code: `calendar_${err.code}`, message: err.message } });
     if (err instanceof ZodError) return res.status(400).json({ error: { code: 'invalid', message: `Invalid request: ${err.issues[0]?.path.join('.') || 'body'} ${err.issues[0]?.message ?? ''}`.trim() } });

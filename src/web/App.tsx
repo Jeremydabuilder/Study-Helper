@@ -78,6 +78,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
     <HostedContext.Provider value={!!hosted}>
     <div className="shell">
       <a className="skip" href="#main">Skip to content</a>
+      {!hosted && ws !== 'demo' && meta.data?.ai?.personalPlan && meta.data?.ai?.live && <div className="banner" role="status">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage</a> · <a href="#/settings">Account settings</a></div>}
       {hosted?.guest && <div className="banner" role="status">Guest mode · Work is private to this browser session. Export or delete it in Settings before leaving or clearing cookies.</div>}
       {ws === 'demo' && (
         <div className="banner" role="status">
