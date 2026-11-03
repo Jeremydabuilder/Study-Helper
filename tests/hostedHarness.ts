@@ -159,21 +159,21 @@ export class HostedHarness {
   hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
   now = () => this.clock.now;
   students: Student[] = []; idpQueue: Promise<void> = Promise.resolve();
-  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; port?: number; limits?: Record<string, string>; provider?: AIProvider; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
+  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; port?: number; limits?: Record<string, string>; provider?: AIProvider; owner?: { email: string; password: string | null }; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
     const h = new HostedHarness();
     h.db = o.db ?? await createTestDb(); h.idp = await new FakeIdp().start();
     h.port = o.port ?? await freePort(); h.url = `http://127.0.0.1:${h.port}`; h.dir = o.dir ?? mkdtempSync(join(tmpdir(), 'sh-hosted-'));
     const env: Record<string, string> = {
       APP_ENV: 'test', DATABASE_URL: h.db.url, PUBLIC_URL: h.url, BETTER_AUTH_SECRET: 'a'.repeat(20) + 'B'.repeat(20), APP_SECRET: 'c'.repeat(20) + 'D'.repeat(20),
-      ...(o.oidc === false ? {} : { AUTH_OIDC_CLIENT_ID: 'test-client', AUTH_OIDC_CLIENT_SECRET: 'test-secret', AUTH_OIDC_AUTHORIZATION_URL: `${h.idp.base}/authorize`, AUTH_OIDC_TOKEN_URL: `${h.idp.base}/token`, AUTH_OIDC_USERINFO_URL: `${h.idp.base}/userinfo` }),
-      ...(o.passwordSignIn ? { AUTH_PASSWORD: '1' } : {}), RATE_AUTH_PER_MIN: '100000', RATE_INVITE_PER_MIN: '100000', RATE_API_PER_MIN: '100000', ...(o.limits ?? {}),
+      ...((o.oidc === false || o.owner) ? {} : { AUTH_OIDC_CLIENT_ID: 'test-client', AUTH_OIDC_CLIENT_SECRET: 'test-secret', AUTH_OIDC_AUTHORIZATION_URL: `${h.idp.base}/authorize`, AUTH_OIDC_TOKEN_URL: `${h.idp.base}/token`, AUTH_OIDC_USERINFO_URL: `${h.idp.base}/userinfo` }),
+      ...(o.passwordSignIn ? { AUTH_PASSWORD: '1' } : {}), ...(o.owner ? { OWNER_ONLY: '1', OWNER_EMAIL: o.owner.email, ...(o.owner.password ? { OWNER_PASSWORD: o.owner.password } : {}) } : {}), RATE_AUTH_PER_MIN: '100000', RATE_INVITE_PER_MIN: '100000', RATE_API_PER_MIN: '100000', ...(o.limits ?? {}),
     };
     if (o.labelOverride) env.DATA_LABEL = o.labelOverride;
     const { cfg: hcfg, problems } = hostedConfigFromEnv(env as never);
     if (problems.length) throw new Error(problems.join('; '));
     h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, instanceLockWaitMs: 0, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : o.provider ?? new LLMProvider(h.llm) as AIProvider });
     h.server = await new Promise<Server>((res) => { const s = h.hosted.app.listen(h.port, '127.0.0.1', () => res(s)); });
-    if (o.pilot !== false) { await setSettingPg(h.db.pool, 'pilot_enabled', true); await setSettingPg(h.db.pool, 'pilot_max_users', o.maxUsers ?? 50); }
+    if (o.pilot !== false && !o.owner) { await setSettingPg(h.db.pool, 'pilot_enabled', true); await setSettingPg(h.db.pool, 'pilot_max_users', o.maxUsers ?? 50); }
     return h;
   }
   student(email: string) { const s = new Student(this, email); this.students.push(s); return s; }

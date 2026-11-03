@@ -28,6 +28,7 @@ import * as port from './services/portability';
 import * as items from './services/items';
 import * as cal from './services/calendar';
 import * as hw from './services/homework';
+import * as myhelper from './services/myhelper';
 import { CalendarError } from './services/calendarGoogle';
 
 const hhmm = z.string().regex(/^\d{2}:\d{2}$/);
@@ -194,7 +195,7 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   /* ---------------- academic items & schedule ---------------- */
   const ItemBody = z.object({
     title: z.string().optional(), type: z.string().optional(), subjectId: z.string().nullable().optional(), dueDate: z.string().nullable().optional(), dueTime: z.string().nullable().optional(),
-    topicsText: z.string().nullable().optional(), conceptIds: z.array(z.string()).optional(), format: z.string().optional(), estimateMin: z.number().int().min(0).max(6000).nullable().optional(), notes: z.string().optional(),
+    topicsText: z.string().nullable().optional(), conceptIds: z.array(z.string()).optional(), format: z.string().optional(), estimateMin: z.number().int().min(0).max(6000).nullable().optional(), notes: z.string().optional(), instructions: z.string().max(20000).optional(),
   });
   app.get('/api/items', h((ctx, req) => items.listItems(ctx, (['proposed', 'confirmed', 'dismissed'].includes(String(req.query.status)) ? req.query.status : 'confirmed') as 'confirmed')));
   app.post('/api/items', h((ctx, req) => items.createItem(ctx, ItemBody.parse(req.body))));
@@ -347,6 +348,18 @@ export function createApp(rt: Runtime, hosted?: HostedHooks) {
   app.post('/api/homework/questions/:id/fresh-check', h((ctx, req) => hw.requestFreshCheck(ctx, req.params.id)));
   app.post('/api/homework/checks/:id/challenge', h((ctx, req) => hw.challengeCheck(ctx, req.params.id, z.object({ reason: z.string(), note: z.string().optional() }).parse(req.body))));
 
+
+  /* ---------------- My Helper (owner's tasks, projects and the import of the old browser-only app) ---------------- */
+  app.get('/api/myhelper/state', h((ctx) => myhelper.state(ctx)));
+  app.post('/api/myhelper/tasks', h((ctx, req) => myhelper.addTask(ctx, z.object({ title: z.string(), category: z.string(), when: z.string() }).parse(req.body))));
+  app.post('/api/myhelper/tasks/:id/done', h((ctx, req) => myhelper.setTaskDone(ctx, req.params.id, z.object({ done: z.boolean() }).parse(req.body).done)));
+  app.delete('/api/myhelper/tasks/:id', h((ctx, req) => myhelper.deleteTask(ctx, req.params.id)));
+  app.post('/api/myhelper/projects', h((ctx, req) => myhelper.addProject(ctx, z.object({ name: z.string(), description: z.string().optional() }).parse(req.body))));
+  app.patch('/api/myhelper/projects/:id', h((ctx, req) => myhelper.updateProject(ctx, req.params.id, z.object({ name: z.string().optional(), description: z.string().optional(), notes: z.string().optional(), nextAction: z.string().optional(), stage: z.number().optional(), advance: z.boolean().optional() }).parse(req.body))));
+  app.delete('/api/myhelper/projects/:id', h((ctx, req) => myhelper.deleteProject(ctx, req.params.id)));
+  app.post('/api/myhelper/import/preview', h((ctx, req) => myhelper.previewImport(ctx, myhelper.ImportPayload.parse(req.body?.payload))));
+  app.post('/api/myhelper/import', h((ctx, req) => { if (req.body?.confirm !== true) throw new HttpError(400, 'confirm_needed', 'Review the preview and confirm the import first.'); return myhelper.applyImport(ctx, myhelper.ImportPayload.parse(req.body?.payload)); }));
+  app.post('/api/homework/from-item', h((ctx, req) => hw.openFromItem(ctx, z.object({ itemId: z.string() }).parse(req.body).itemId)));
   /* ---------------- static client ---------------- */
   const dist = resolve(process.cwd(), 'dist');
   if (existsSync(join(dist, 'index.html'))) {

@@ -20,6 +20,7 @@ import { Ctx, HttpError, clip, getProfile, parse } from './common';
 import { buildStudyContext } from './chat';
 import { stripInventedQuotes } from './annotations';
 import { createItem, computeSchedule, confirmProposal, listItems, serializeItem } from './items';
+import { addSource } from './content';
 import { addConcept } from './content';
 import { looksLikeTrait } from './teachingMemory';
 import { HomeworkCheck, HomeworkReply } from '../../ai/schemas';
@@ -95,10 +96,35 @@ export function createDraft(ctx: Ctx, b: { sourceId: string; title?: string }) {
   return { id, duplicate: false };
 }
 
+/**
+ * Start Study Helper from one School assignment. The assignment stays the single copy: the homework links to it (no second Plan entry is made), and the
+ * instructions saved on the assignment become the homework's original text. Asking again for the same assignment returns the same homework.
+ */
+export function openFromItem(ctx: Ctx, itemId: string) {
+  const it = ctx.db.get<any>("SELECT * FROM academic_items WHERE id = ? AND status = 'confirmed'", itemId);
+  if (!it) throw new HttpError(404, 'not_found', 'Assignment not found.');
+  const linked = ctx.db.get<any>('SELECT id, state FROM homework WHERE item_id = ?', itemId);
+  if (linked) return { homeworkId: linked.id as string, created: false, state: linked.state as string, needsInstructions: false };
+  const text = String(it.instructions ?? '').replace(/\r\n/g, '\n').trim();
+  if (text.length < 20) return { homeworkId: null, created: false, state: null, needsInstructions: true };
+  let subjectId: string | null = it.subject_id;
+  if (!subjectId) {
+    const existing = ctx.db.get<any>("SELECT id FROM subjects WHERE lower(name) = 'school' AND archived = 0");
+    subjectId = existing?.id ?? ctx.db.tx(() => { const id = uid(); ctx.db.run('INSERT INTO subjects (id,name,created_at) VALUES (?,?,?)', id, 'School', ctx.now()); return id; });
+  }
+  const src = addSource(ctx, subjectId!, { title: it.title, kind: 'teacher_instructions', text });
+  const draft = createDraft(ctx, { sourceId: src.id, title: it.title });
+  const owner = ctx.db.get<any>('SELECT item_id FROM homework WHERE id = ?', draft.id);
+  if (owner?.item_id && owner.item_id !== itemId) throw new HttpError(409, 'taken', 'These instructions are already used by homework for another assignment.');
+  ctx.db.run('UPDATE homework SET item_id = ?, subject_id = COALESCE(subject_id, ?) WHERE id = ?', itemId, subjectId, draft.id);
+  if (!it.subject_id) ctx.db.run('UPDATE academic_items SET subject_id = ?, updated_at = ? WHERE id = ?', subjectId, ctx.now(), itemId);
+  return { homeworkId: draft.id as string, created: !draft.duplicate, state: ctx.db.get<any>('SELECT state FROM homework WHERE id = ?', draft.id).state as string, needsInstructions: false };
+}
+
 /** Plan items that probably are this assignment, so the same homework is never planned twice. */
 export function planMatches(ctx: Ctx, h: any) {
   const t = new Set(norm(h.title).split(' ').filter((w) => w.length > 2 && !['homework', 'worksheet', 'assignment', 'the', 'and'].includes(w)));
-  return listItems(ctx, 'confirmed').concat(listItems(ctx, 'proposed')).filter((i) => i.type === 'homework' && !i.completed && !ctx.db.get('SELECT 1 FROM homework WHERE item_id = ? AND id != ?', i.id, h.id))
+  return listItems(ctx, 'confirmed').concat(listItems(ctx, 'proposed')).filter((i) => i.type === 'homework' && !i.completed && i.id !== h.item_id && !ctx.db.get('SELECT 1 FROM homework WHERE item_id = ? AND id != ?', i.id, h.id))
     .map((i) => {
       const w = new Set(norm(i.title).split(' ').filter((x) => x.length > 2));
       const common = [...t].filter((x) => w.has(x)).length;
@@ -256,7 +282,7 @@ export function getHomework(ctx: Ctx, id: string) {
     original: src ? { sourceId: src.id, title: src.title, fileId: src.file_id, pageCount: src.page_count, origin: src.origin, readFromScan: !!src.ocr } : null,
     plan: it ? { itemId: it.id, ...pickItem(ctx, it) } : null,
     dueHints: parse<any[]>(h.due_hints, []),
-    matches: h.state === 'draft' || !h.item_id ? planMatches(ctx, h) : [],
+    matches: !h.item_id ? planMatches(ctx, h) : [],
     questions: qs, summary: assignmentSummary(qs),
     estimate: suggestEstimate(ctx, h, Math.max(1, qs.length)), activeMinutes: Math.round(time),
     rubric: rubric ? { sourceId: rubric.id, title: rubric.title } : null,

@@ -18,6 +18,7 @@ import { HostedConfig } from './config';
 import { checkInvite, looksLikeCode, normalizeCode } from './invites';
 import { activeCapacity } from '../../ai/groqCapacity';
 import { mountOperator } from './operator';
+import { ensureOwner } from './owner';
 import { Gate, PgLedger, RateLimiter, assistantState, consumeQuota, refundQuota } from './limits';
 import { Logger, Metrics, makeLogger, requestObserver } from './ops';
 import { Pool, audit, createPool, getSettingPg, migrateControl } from './pg';
@@ -80,6 +81,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
   const auth = createAuth(pool, hcfg, now, authPool);
   await migrateAuth(auth);
   await bindEnvironment(pool, hcfg, d.dataDir);
+  if (hcfg.owner.enabled) await ensureOwner(auth, pool, hcfg);
 
   const tenants = new Tenants(d.dataDir, { now });
   const offline = new OfflineProvider();
@@ -132,7 +134,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         const { spendReport } = await import('./limits');
         res.json({ ...metrics.snapshot(), spend: await spendReport(pool, now()), openDatabases: tenants.openCount });
       });
-      mountOperator(app, { pool, now, ipOf });
+      if (!hcfg.owner.enabled) mountOperator(app, { pool, now, ipOf });
       // Browsers always send Origin on cross-site POSTs. Refuse state-changing authentication requests from any origin but this site, regardless of the library's own check.
       const siteOrigin = new URL(hcfg.publicUrl).origin;
       app.use('/api/auth', (req, res, next) => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin && req.headers.origin !== siteOrigin) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-site requests are not allowed.' } }); next(); });
@@ -144,6 +146,23 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         if (req.method === 'POST' && !(code && looksLikeCode(code))) return res.status(403).json({ error: { code: 'invite_required', message: 'Enter a valid invitation code first. Each code opens one private workspace.' } });
         next();
       });
+      if (hcfg.owner.enabled) {
+        // The owner's site has one door. Everything else the authentication library offers (sign-up, guests, social sign-in, password reset, account changes) answers 404.
+        const OPEN = new Set(['/sign-in/email', '/sign-out', '/get-session', '/list-sessions', '/revoke-session', '/revoke-sessions', '/revoke-other-sessions']);
+        const failures = new Map<string, number[]>();
+        app.use('/api/auth', (req, res, next) => {
+          if (!OPEN.has(req.path)) return res.status(404).json({ error: { code: 'not_found', message: 'Not available.' } });
+          if (req.path === '/sign-in/email') {
+            const key = ipOf(req), t = now(), recent = (failures.get(key) ?? []).filter((x) => t - x < 15 * 60_000);
+            if (recent.length >= 8) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many wrong passwords. Wait 15 minutes and try again.' } });
+            res.on('finish', () => { if (res.statusCode >= 400) { recent.push(now()); failures.set(key, recent); } });
+            if (failures.size > 2000) for (const [k, v] of failures) if (!v.some((x) => t - x < 15 * 60_000)) failures.delete(k);
+          }
+          next();
+        });
+        // there are no invitations here: the endpoints do not exist
+        app.use('/api/invite', (_req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Not available.' } }));
+      }
       app.all('/api/auth/*', (req, res, next) => { const r = authLimiter.check(ipOf(req)); if (!r.ok) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many attempts. Wait a minute and try again.' } }); next(); }, toNodeHandler(auth));
     },
 
@@ -153,7 +172,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg<boolean>(pool, 'pilot_enabled', false);
-          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled }, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
         } catch (e) { next(e); }
       });
       app.post('/api/invite/check', async (req, res, next) => {
@@ -245,7 +264,10 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
 
   async function sessionOf(req: Request): Promise<Student | null> {
     const r = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
-    return r?.user ? { id: r.user.id, email: r.user.email, guest: !!(r.user as any).isAnonymous } : null;
+    if (!r?.user) return null;
+    // On an owner-only site a session counts only if it belongs to the owner, whatever else might exist in the database.
+    if (hcfg.owner.enabled && (r.user.email.toLowerCase() !== hcfg.owner.email || (r.user as any).isAnonymous)) return null;
+    return { id: r.user.id, email: r.user.email, guest: !!(r.user as any).isAnonymous };
   }
 
   async function buildCtx(s: Student, ws: WorkspaceName): Promise<{ ctx: Ctx; release(): void }> {
