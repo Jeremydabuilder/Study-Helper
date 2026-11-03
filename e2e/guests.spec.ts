@@ -32,7 +32,7 @@ test('guest enters without identity, keeps work on reload and cannot see a secon
   try {
     const other = await second.newPage();
     await other.goto('/');
-    await other.getByLabel('Invitation code').fill(codes[1]);
+    await other.getByLabel('Invitation code').first().fill(codes[1]);
     await other.getByRole('button', { name: 'Open my workspace' }).click();
     await expect(other.getByRole('link', { name: 'Today' }).first()).toBeVisible();
     expect(JSON.stringify(await (await other.request.get('/api/subjects')).json())).not.toContain('Guest-only biology');

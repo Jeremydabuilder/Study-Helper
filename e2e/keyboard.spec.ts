@@ -11,7 +11,7 @@ test('keyboard only: invitation → sign in → paste → confirm → answer →
   const { codes } = await control('invites', { count: 1 }); await control('idp', { email: 'keys@example.test' });
   await page.goto('/#/join');
   await expect(page.getByRole('heading', { name: 'Join Study Helper' })).toBeFocused(); // focus starts on the page heading
-  await tabTo(page, page.getByLabel('Invitation code')); await page.keyboard.type(codes[0]); await page.keyboard.press('Enter'); // the form submits with Enter
+  await tabTo(page, page.getByLabel('Invitation code').last()); await page.keyboard.type(codes[0]); await page.keyboard.press('Enter'); // the form submits with Enter
   await expect(page.getByText('Code accepted')).toBeVisible();
   await tabTo(page, page.getByRole('button', { name: 'Continue with Google' })); await page.keyboard.press('Enter');
   await expect(page.getByRole('link', { name: 'Today' }).first()).toBeVisible();
