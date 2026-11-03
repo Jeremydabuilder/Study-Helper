@@ -29,6 +29,18 @@ export function Join({ session, onSignedIn }: { session: any; onSignedIn: () => 
     try { const r = await post('/invite/check', { code }); if (r.valid) { await post('/invite/start', { code }); setChecked('ok'); } else { setChecked(null); setErr(INVITE_PROBLEM[r.reason] ?? 'That invitation does not work.'); } }
     catch (e) { fail(e); } finally { setBusy(false); }
   };
+  // Guest entry: check the code, let the server remember it in an HttpOnly cookie, then sign in. The code is sent in the request body only, never in a URL.
+  const enterAsGuest = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await post('/invite/check', { code });
+      if (!r.valid) { setErr(INVITE_PROBLEM[r.reason] ?? 'That invitation does not work.'); return; }
+      await post('/invite/start', { code });
+      try { window.history.replaceState(null, '', '#/join'); } catch { /* the code stays in the address bar only until the next page */ }
+      await post('/auth/sign-in/anonymous', {});
+      setCode(''); onSignedIn();
+    } catch (e) { fail(e); } finally { setBusy(false); }
+  };
   const google = async () => {
     setBusy(true); setErr(null);
     try { const r = await post('/auth/sign-in/social', { provider: m.oidc.providerId, callbackURL: '/', errorCallbackURL: '/?signin=failed', newUserCallbackURL: '/' }); window.location.href = r.url; }
@@ -48,11 +60,14 @@ export function Join({ session, onSignedIn }: { session: any; onSignedIn: () => 
       <p className="muted">Study at your own pace. Study Helper turns your own notes and packets into practice, remembers what you find hard, and brings it back later.</p>
       {!session?.pilotOpen && <div className="notice info" role="status">Study Helper is paused right now. Please come back later.</div>}
       {err && <div className="notice bad" role="alert">{err}</div>}
-      {m.guest && <section className="card">
-        <h2>Start without signing in</h2>
-        <p>No email, password or Google account needed. Your work stays separate from everyone else’s.</p>
-        <p className="small muted">Work is saved on this server and accessed using a cookie in this browser. Clearing cookies, leaving your guest session or session expiry can permanently lose access. Unreachable guest workspaces are automatically deleted after a seven-day grace period. Guest work does not move into an account. Export or delete it in Settings. Google Calendar is unavailable in guest mode; enter homework and tests manually.</p>
-        <button className="btn primary big" disabled={busy || !session.pilotOpen} onClick={async () => { setBusy(true); setErr(null); try { await post('/auth/sign-in/anonymous', {}); onSignedIn(); } catch (e) { fail(e); } finally { setBusy(false); } }}>Continue without an account</button>
+      {m.guest && <section className="card" aria-labelledby="guest-h">
+        <h2 id="guest-h">Open your private workspace</h2>
+        <p>Enter your invitation code. No email, password or Google account is needed. Each code opens <strong>one</strong> workspace, and your work stays separate from everyone else’s.</p>
+        <form onSubmit={(e) => { e.preventDefault(); void enterAsGuest(); }}>
+          <Field label="Invitation code" hint="Looks like ABCD-EFGH-JKLM-NPQR. It works once, then your browser is your key."><input type="text" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" autoCapitalize="characters" spellCheck={false} /></Field>
+          <div className="notice warn small" role="note"><strong>Your browser is your key.</strong> Your work is saved on this server and reached through a cookie in this browser. If you clear cookies, use a private window, switch browser or device, or the session expires, <strong>you can permanently lose access to your workspace</strong>, and the code cannot be used again. Export a copy in Settings → Account now and then. Unreachable workspaces are deleted automatically after a seven-day grace period. Guest work does not move into an account, and Google Calendar is unavailable (enter homework and tests by hand).</div>
+          <div className="row mt-s"><button className="btn primary big" disabled={busy || !session.pilotOpen || code.trim().length < 16}>{busy ? 'Opening…' : 'Open my workspace'}</button></div>
+        </form>
       </section>}
       {(m.oidc || m.password) && <>
       <div className="seg mb" role="group" aria-label="Choose"><button aria-pressed={mode === 'join'} onClick={() => { setMode('join'); setErr(null); }}>I have an invitation</button><button aria-pressed={mode === 'signin'} onClick={() => { setMode('signin'); setErr(null); }}>I already have an account</button></div>

@@ -11,6 +11,8 @@ import type { CalendarGateway } from './calendarGoogle';
 export interface AppConfig {
   anthropicKey: string | null; model: string; anthropicBaseUrl: string;
   aiProvider: 'anthropic' | 'groq'; groqKey: string | null; groqModel: string | null;
+  /** pacing for the shared Groq allowance (requests/tokens per minute, simultaneous calls, longest wait) */
+  groqCapacity?: { rpm?: number; tpm?: number; maxConcurrent?: number; maxWaitMs?: number };
   /** per-task overrides (model / maxOutputTokens / effort) */
   aiTasks: Partial<Record<'extract' | 'generate' | 'grade', Partial<TaskConfig>>>;
   ocr: { enabled: boolean; model: string | null; maxOutputTokens?: number };

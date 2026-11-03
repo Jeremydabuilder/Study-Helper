@@ -146,13 +146,20 @@ export class Student {
   }
   async signInWithPassword(password = 'a-long-test-password') { const r = await this.post('/api/auth/sign-in/email', { email: this.email, password }); return { ok: r.status === 200, status: r.status, body: r.body }; }
   async signOut() { return this.post('/api/auth/sign-out', {}); }
+  /** Enter as a guest with one invitation code, exactly as the page does: remember the code (cookie), then sign in anonymously. */
+  async enterAsGuest(code: string) {
+    const s = await this.post('/api/invite/start', { code });
+    if (s.status !== 200) return { ok: false, status: s.status, body: s.body };
+    const r = await this.post('/api/auth/sign-in/anonymous', {});
+    return { ok: r.status === 200 && (await this.get('/api/session')).body?.signedIn === true, status: r.status, body: r.body };
+  }
 }
 
 export class HostedHarness {
   hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
   now = () => this.clock.now;
   students: Student[] = []; idpQueue: Promise<void> = Promise.resolve();
-  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; port?: number; limits?: Record<string, string>; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
+  static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; port?: number; limits?: Record<string, string>; provider?: AIProvider; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
     const h = new HostedHarness();
     h.db = o.db ?? await createTestDb(); h.idp = await new FakeIdp().start();
     h.port = o.port ?? await freePort(); h.url = `http://127.0.0.1:${h.port}`; h.dir = o.dir ?? mkdtempSync(join(tmpdir(), 'sh-hosted-'));
@@ -164,7 +171,7 @@ export class HostedHarness {
     if (o.labelOverride) env.DATA_LABEL = o.labelOverride;
     const { cfg: hcfg, problems } = hostedConfigFromEnv(env as never);
     if (problems.length) throw new Error(problems.join('; '));
-    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, instanceLockWaitMs: 0, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : new LLMProvider(h.llm) as AIProvider });
+    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, instanceLockWaitMs: 0, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : o.provider ?? new LLMProvider(h.llm) as AIProvider });
     h.server = await new Promise<Server>((res) => { const s = h.hosted.app.listen(h.port, '127.0.0.1', () => res(s)); });
     if (o.pilot !== false) { await setSettingPg(h.db.pool, 'pilot_enabled', true); await setSettingPg(h.db.pool, 'pilot_max_users', o.maxUsers ?? 50); }
     return h;
@@ -172,6 +179,13 @@ export class HostedHarness {
   student(email: string) { const s = new Student(this, email); this.students.push(s); return s; }
   async codes(n = 1, ttlDays = 7) { return createInvites(this.db.pool, { count: n, label: 'test', ttlDays, now: this.clock.now }); }
   /** Create, invite and sign in a synthetic student. */
+  /** A new invited guest (no email, no identity provider). */
+  async guest(name = 'guest'): Promise<Student> {
+    const s = this.student(name); const [code] = await this.codes(1);
+    const r = await s.enterAsGuest(code);
+    if (!r.ok) throw new Error(`could not enter as guest: ${r.status} ${JSON.stringify(r.body)}`);
+    return s;
+  }
   async join(email: string, via: 'idp' | 'password' = 'idp'): Promise<Student> {
     const s = this.student(email); const [code] = await this.codes(1);
     const r = via === 'idp' ? await s.signInWithIdp(code) : await s.signUpWithPassword(code);

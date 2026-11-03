@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useId, useRef } from 'react';
+import { ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { ApiError } from './api';
 
 export function Spinner({ label = 'Loading…' }: { label?: string }) {
@@ -7,10 +7,18 @@ export function Spinner({ label = 'Loading…' }: { label?: string }) {
 
 export function ErrorBox({ error, onRetry, children }: { error: ApiError | Error | string; onRetry?: () => void; children?: ReactNode }) {
   const msg = typeof error === 'string' ? error : error.message;
+  // When the server says how long to wait (the shared study assistant asked everyone to slow down), the retry button waits too, so nobody hammers it.
+  const wait = error instanceof ApiError && typeof error.extra?.retryAfterMs === 'number' && error.extra.retryAfterMs > 0 ? Math.min(Math.ceil(error.extra.retryAfterMs / 1000), 3600) : 0;
+  const [left, setLeft] = useState(wait);
+  useEffect(() => {
+    setLeft(wait); if (!wait) return;
+    const t = setInterval(() => setLeft((n) => (n <= 1 ? (clearInterval(t), 0) : n - 1)), 1000);
+    return () => clearInterval(t);
+  }, [error, wait]);
   return (
     <div className="notice bad" role="alert">
       <strong>That didn’t work.</strong> <span>{msg}</span>
-      <div className="row gap-s mt-s">{onRetry && <button className="btn" onClick={onRetry}>Try again</button>}{children}</div>
+      <div className="row gap-s mt-s">{onRetry && <button className="btn" disabled={left > 0} onClick={onRetry}>{left > 0 ? `Try again in ${left < 90 ? `${left}s` : `${Math.ceil(left / 60)} min`}` : 'Try again'}</button>}{children}</div>
     </div>
   );
 }
@@ -71,7 +79,6 @@ export function useHashRoute(): [string, (p: string) => void] {
   const [route, setRoute] = useHash(read);
   return [route, (p) => { window.location.hash = p; setRoute(p); }];
 }
-import { useState } from 'react';
 function useHash(read: () => string): [string, (s: string) => void] {
   const [r, setR] = useState(read);
   useEffect(() => { const h = () => setR(read()); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h); }, []);

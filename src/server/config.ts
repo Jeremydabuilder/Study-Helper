@@ -33,16 +33,19 @@ export function configFromEnv(env = process.env): AppConfig {
   return {
     anthropicKey: g('ANTHROPIC_API_KEY'), anthropicBaseUrl: safeBase(g('ANTHROPIC_BASE_URL')),
     model: g('AI_MODEL') ?? g('ANTHROPIC_MODEL') ?? 'claude-sonnet-5-5',
-    aiProvider: provider, groqKey: g('GROQ_API_KEY'), groqModel: g('GROQ_API_KEY') ? GROQ_DEFAULT_MODEL : null, // one fixed model: no choice to make
+    aiProvider: provider, groqKey: g('GROQ_API_KEY'), groqModel: g('GROQ_API_KEY') ? g('GROQ_MODEL') ?? GROQ_DEFAULT_MODEL : null, // chosen by the operator only; students never pick a model
+    groqCapacity: strip({ rpm: num('GROQ_RPM') ?? undefined, tpm: num('GROQ_TPM') ?? undefined, maxConcurrent: num('GROQ_MAX_CONCURRENT') ?? undefined, maxWaitMs: num('GROQ_QUEUE_WAIT_MS') ?? undefined }),
     aiTasks: { extract: strip(task('EXTRACT')) as never, generate: strip(task('GENERATE')) as never, grade: strip(task('GRADE')) as never },
     // Reading screenshots / scanned pages with a vision model is OFF unless the operator opts in explicitly (and uses Anthropic).
     ocr: { enabled: g('AI_OCR') === 'anthropic', model: g('AI_MODEL_OCR'), maxOutputTokens: num('AI_MAX_OUTPUT_OCR') ?? undefined },
     aiTimeoutMs: Number(env.AI_TIMEOUT_MS) || 45_000, aiDailyLimit: Number(env.AI_DAILY_CALL_LIMIT) || 150,
-    aiDailyBudgetUsd: num('AI_DAILY_BUDGET_USD') ?? 1, aiPriceOverride: { inPerM: num('AI_PRICE_IN_PER_MTOK') ?? undefined, outPerM: num('AI_PRICE_OUT_PER_MTOK') ?? undefined },
+    aiDailyBudgetUsd: num('AI_DAILY_BUDGET_USD') ?? 1, // Groq's Free tier costs nothing, so its dollar estimate is zero unless the operator states a paid price (then the usual dollar limits apply).
+    // Spend on Groq is bounded by the Free tier itself, by the request and token limits below, and by Groq's own console; this app cannot upgrade a plan.
+    aiPriceOverride: provider === 'groq' ? { inPerM: num('AI_PRICE_IN_PER_MTOK') ?? 0, outPerM: num('AI_PRICE_OUT_PER_MTOK') ?? 0 } : { inPerM: num('AI_PRICE_IN_PER_MTOK') ?? undefined, outPerM: num('AI_PRICE_OUT_PER_MTOK') ?? undefined },
     google: g('GOOGLE_CLIENT_ID') && g('GOOGLE_CLIENT_SECRET') && g('APP_SECRET')
       ? { clientId: g('GOOGLE_CLIENT_ID')!, clientSecret: g('GOOGLE_CLIENT_SECRET')!, redirectUri: g('GOOGLE_REDIRECT_URI') ?? `http://localhost:${port}/api/calendar/oauth/callback` } : null,
     googleRedirectUri: g('GOOGLE_REDIRECT_URI') ?? `http://localhost:${port}/api/calendar/oauth/callback`,
     googlePartial: [g('GOOGLE_CLIENT_ID'), g('GOOGLE_CLIENT_SECRET'), g('APP_SECRET')].filter(Boolean).length > 0 && !(g('GOOGLE_CLIENT_ID') && g('GOOGLE_CLIENT_SECRET') && g('APP_SECRET')),
-    appSecret: g('APP_SECRET'), dataDir: g('DATA_DIR') ?? './data', production: env.NODE_ENV === 'production',
+    appSecret: g('APP_SECRET'), dataDir: g('DATA_DIR') ?? g('RAILWAY_VOLUME_MOUNT_PATH') ?? './data', production: env.NODE_ENV === 'production',
   };
 }
