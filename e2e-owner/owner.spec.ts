@@ -45,7 +45,7 @@ test('owner sees Today / School / Projects / Study Helper (no AI Helpers tab) an
 
   await nav(page).getByRole('link', { name: 'School' }).click();
   await expect(page.getByText('Algebra worksheet 4')).toHaveCount(1);        // one copy
-  await expect(page.getByText('In Study Helper')).toBeVisible();
+  await expect(page.getByText('In Study Helper', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Continue in Study Helper' }).click();
   await expect(page).toHaveURL(/#\/homework\//);
   await nav(page).getByRole('link', { name: 'School' }).click();
@@ -58,6 +58,17 @@ test('owner sees Today / School / Projects / Study Helper (no AI Helpers tab) an
   await page.getByLabel('New assignment').fill('Read chapter 3'); await page.getByRole('button', { name: 'Add', exact: true }).click();
   await page.getByRole('button', { name: 'Open in Study Helper' }).click();
   await expect(page.getByText(/no instructions yet|Paste them/)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('Study Helper pages open inside the My Helper frame without errors (review, settings, chat, progress, memory, homework)', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', (e) => errors.push(e.message));
+  await signIn(page);
+  for (const p of ['/review', '/settings', '/chat', '/progress', '/memory', '/homework', '/subjects', '/plan', '/start']) {
+    await page.goto(`/#${p}`);
+    await expect(page.locator('#mh-main h1, #mh-main h2').first()).toBeVisible();
+    await expect(nav(page)).toBeVisible();
+  }
   expect(errors).toEqual([]);
 });
 

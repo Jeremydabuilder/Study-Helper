@@ -38,7 +38,7 @@ export function pageFor(path: string, route: string, go: (p: string) => void, { 
   else if (path === '/calendar') page = <CalendarPage guest={!!hosted?.guest} go={go} query={route.split('?')[1] ?? ''} />;
   else if (path === '/progress') page = <Progress go={go} />;
   else if (path === '/memory') page = <Memory go={go} />;
-  else if (path === '/settings') page = <Settings go={go} meta={meta.data} hosted={hosted} onSignOut={onSignOut} />;
-  else page = <Today go={go} meta={meta.data} />;
+  else if (path === '/settings') page = <Settings go={go} meta={meta} hosted={hosted} onSignOut={onSignOut} />;
+  else page = <Today go={go} meta={meta} />;
   return page;
 }
