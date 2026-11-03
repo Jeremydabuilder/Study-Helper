@@ -2092,7 +2092,7 @@ function chunkText(text, opts = {}) {
 function findQuote(text, quote) {
   const q = fold(quote).replace(/\s+/g, " ").trim();
   if (q.length < 6) return null;
-  let norm3 = "";
+  let norm4 = "";
   const map = [];
   let prevSpace = false;
   const f = fold(text);
@@ -2101,14 +2101,14 @@ function findQuote(text, quote) {
     if (/\s/.test(ch)) {
       if (prevSpace) continue;
       prevSpace = true;
-      norm3 += " ";
+      norm4 += " ";
     } else {
       prevSpace = false;
-      norm3 += ch;
+      norm4 += ch;
     }
     map.push(i);
   }
-  const at = norm3.indexOf(q);
+  const at = norm4.indexOf(q);
   if (at < 0) return null;
   return { start: map[at], end: map[at + q.length - 1] + 1 };
 }
@@ -2393,7 +2393,7 @@ var init_grounding = __esm({
 // src/server/pdf.ts
 import { Worker } from "node:worker_threads";
 function sniff(b) {
-  const s = (i, str) => str.split("").every((c, k) => b[i + k] === c.charCodeAt(0));
+  const s = (i, str2) => str2.split("").every((c, k) => b[i + k] === c.charCodeAt(0));
   if (b.length > 8 && b[0] === 137 && s(1, "PNG") && b[4] === 13) return "png";
   if (b.length > 4 && b[0] === 255 && b[1] === 216 && b[2] === 255) return "jpeg";
   if (b.length > 12 && s(0, "RIFF") && s(8, "WEBP")) return "webp";
@@ -4573,11 +4573,11 @@ var init_nextAction = __esm({
 });
 
 // src/core/stats.ts
-function wilson(k, n, z5 = 1.96) {
+function wilson(k, n, z7 = 1.96) {
   if (n === 0) return { rate: null, low: null, high: null, n };
-  const p = k / n, d = 1 + z5 * z5 / n;
-  const c = (p + z5 * z5 / (2 * n)) / d;
-  const m = z5 * Math.sqrt(p * (1 - p) / n + z5 * z5 / (4 * n * n)) / d;
+  const p = k / n, d = 1 + z7 * z7 / n;
+  const c = (p + z7 * z7 / (2 * n)) / d;
+  const m = z7 * Math.sqrt(p * (1 - p) / n + z7 * z7 / (4 * n * n)) / d;
   return { rate: p, low: Math.max(0, c - m), high: Math.min(1, c + m), n };
 }
 var init_stats = __esm({
@@ -4815,8 +4815,8 @@ function createItem(ctx, b) {
   const id = uid(), now = ctx.now();
   const d = dueFields(ctx, b);
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO academic_items (id,subject_id,type,title,due_kind,due_date,due_at,topics_text,format,notes,status,source,estimate_min,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.subjectId ?? null, b.type, title, d.due_kind, d.due_date, d.due_at, b.topicsText ? clip(b.topicsText, 400) : null, clip(b.format, 200), clip(b.notes, 500), "confirmed", "manual", b.estimateMin ?? null, now, now);
+    ctx.db.run(`INSERT INTO academic_items (id,subject_id,type,title,due_kind,due_date,due_at,topics_text,format,notes,status,source,estimate_min,created_at,updated_at,instructions)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.subjectId ?? null, b.type, title, d.due_kind, d.due_date, d.due_at, b.topicsText ? clip(b.topicsText, 400) : null, clip(b.format, 200), clip(b.notes, 500), "confirmed", "manual", b.estimateMin ?? null, now, now, clip(b.instructions, MAX_INSTRUCTIONS));
     setConcepts(ctx, id, b.conceptIds);
   });
   return { id };
@@ -4828,10 +4828,10 @@ function updateItem(ctx, id, b) {
   const edited = new Set(parse(it.user_edited, []));
   const d = b.dueDate !== void 0 ? dueFields(ctx, b) : { due_kind: it.due_kind, due_date: it.due_date, due_at: it.due_at };
   if (b.dueDate !== void 0) edited.add("due");
-  for (const k of ["title", "type", "subjectId", "topicsText", "conceptIds", "format", "estimateMin", "notes"]) if (b[k] !== void 0) edited.add(k);
+  for (const k of ["title", "type", "subjectId", "topicsText", "conceptIds", "format", "estimateMin", "notes", "instructions"]) if (b[k] !== void 0) edited.add(k);
   ctx.db.tx(() => {
     ctx.db.run(
-      `UPDATE academic_items SET title=?, type=?, subject_id=?, due_kind=?, due_date=?, due_at=?, topics_text=?, format=?, notes=?, estimate_min=?, user_edited=?, updated_at=? WHERE id=?`,
+      `UPDATE academic_items SET title=?, type=?, subject_id=?, due_kind=?, due_date=?, due_at=?, topics_text=?, format=?, notes=?, estimate_min=?, user_edited=?, updated_at=?, instructions=? WHERE id=?`,
       b.title !== void 0 ? clip(b.title, 120).trim() || it.title : it.title,
       b.type ?? it.type,
       b.subjectId === void 0 ? it.subject_id : b.subjectId,
@@ -4844,6 +4844,7 @@ function updateItem(ctx, id, b) {
       b.estimateMin === void 0 ? it.estimate_min : b.estimateMin,
       JSON.stringify([...edited]),
       ctx.now(),
+      b.instructions === void 0 ? it.instructions : clip(b.instructions, MAX_INSTRUCTIONS),
       id
     );
     setConcepts(ctx, id, b.conceptIds);
@@ -4911,6 +4912,7 @@ function serializeItem(ctx, it) {
     concepts,
     format: it.format,
     notes: it.notes,
+    instructions: it.instructions ?? "",
     estimateMin: it.estimate_min,
     doneMin: it.done_min,
     completed: !!it.completed_at,
@@ -4989,7 +4991,7 @@ function computeSchedule(ctx) {
     changes
   };
 }
-var TYPES, mustExist, pendingProposalCount, dueKeyOf, markChangesSeen;
+var TYPES, MAX_INSTRUCTIONS, mustExist, pendingProposalCount, dueKeyOf, markChangesSeen;
 var init_items = __esm({
   "src/server/services/items.ts"() {
     "use strict";
@@ -4999,6 +5001,7 @@ var init_items = __esm({
     init_db();
     init_common();
     TYPES = Object.keys(ACADEMIC_TYPE_LABEL);
+    MAX_INSTRUCTIONS = 2e4;
     mustExist = (ctx, id) => {
       if (!ctx.db.get("SELECT 1 FROM academic_items WHERE id=?", id)) throw new HttpError(404, "not_found", "Item not found.");
     };
@@ -5081,8 +5084,8 @@ function buildGoalSession(ctx, o) {
   }
   const inputs = buildPlanInputs(ctx, { minutes: 600 });
   const pool = new Set(ids);
-  const plan = planToday({ ...inputs, minutes: 600, concepts: inputs.concepts.filter((c) => pool.has(c.id)), maxTasks: 12, maxReviewsPerDay: 6 });
-  const order = plan.tasks.map((t) => t.conceptId);
+  const plan2 = planToday({ ...inputs, minutes: 600, concepts: inputs.concepts.filter((c) => pool.has(c.id)), maxTasks: 12, maxReviewsPerDay: 6 });
+  const order = plan2.tasks.map((t) => t.conceptId);
   for (const id of ids) if (!order.includes(id)) order.push(id);
   const noted = conceptsWithOpenNotes(ctx);
   order.sort((a, b) => Number(noted.has(b)) - Number(noted.has(a)));
@@ -5110,7 +5113,7 @@ function buildGoalSession(ctx, o) {
     }
   }
   openQ = slots.length;
-  const repair = new Set(plan.tasks.filter((t) => t.kind === "repair").map((t) => t.conceptId));
+  const repair = new Set(plan2.tasks.filter((t) => t.kind === "repair").map((t) => t.conceptId));
   const coreIds = order.filter((id) => !(stateOf2.get(id)?.level === "solid" && !repair.has(id) && o.goal !== "test")).slice(0, Math.max(1, Math.min(3, Math.ceil(coreQ / 2))));
   if (!coreIds.length) coreIds.push(order[0]);
   const per = Math.max(2, Math.round(coreQ / coreIds.length));
@@ -5127,7 +5130,7 @@ function buildGoalSession(ctx, o) {
   const subjectName = subjectId ? ctx.db.get("SELECT name FROM subjects WHERE id = ?", subjectId)?.name ?? null : null;
   return { slots, subjectId, minutes, title, subjectName, questions: slots.reduce((a, s) => a + s.n, 0) };
 }
-function recommend(ctx, minutes, active2) {
+function recommend(ctx, minutes, active3) {
   const now = ctx.now();
   const nSubjects = ctx.db.get("SELECT COUNT(*) n FROM subjects WHERE archived = 0").n;
   const nConfirmed = ctx.db.get("SELECT COUNT(*) n FROM concepts WHERE status = 'confirmed'").n;
@@ -5155,7 +5158,7 @@ function recommend(ctx, minutes, active2) {
   const annotate = (why) => ({ ...base, kind: "annotate", readingId: rt.sourceId, subjectName: rt.subjectName, itemId: rt.itemId, title: `Annotate \u201C${rt.title}\u201D`, reason: why, minutes: Math.min(minutes, 15), conceptNames: [] });
   const dueWhen = rt ? rt.daysLeft === 0 ? "today" : rt.daysLeft === 1 ? "tomorrow" : `in ${rt.daysLeft} days` : "";
   const rtReason = rt ? `\u201C${rt.itemTitle}\u201D (${rt.subjectName}) is due ${dueWhen}, and this reading in the same subject has ${rt.annotations === 0 ? "no highlights" : `only ${rt.annotations} highlight${rt.annotations === 1 ? "" : "s"}`} yet. About 15 minutes is an estimate; the app does not know this reading belongs to that assignment.` : "";
-  if (active2) return { ...base, kind: "resume", sessionId: active2.id, title: "Pick up where you left off", reason: "You have a session in progress. Your answers so far are saved." };
+  if (active3) return { ...base, kind: "resume", sessionId: active3.id, title: "Pick up where you left off", reason: "You have a session in progress. Your answers so far are saved." };
   if (!nSubjects) return { ...base, kind: "set_up", title: "Upload your review packet", reason: "Add a PDF, a screenshot or pasted notes. You will check what was read, then study for about 20 minutes." };
   if (!nConfirmed && rt) return annotate(rtReason);
   if (!nConfirmed) return { ...base, kind: "confirm_concepts", title: nProposed ? "Confirm what you want to learn" : "Add some class material", reason: nProposed ? "Concepts were found in your material. Nothing is assigned until you confirm them." : "Add a review packet or notes so there is something to study." };
@@ -5242,8 +5245,8 @@ function setOverride(ctx, conceptId, action) {
 function rebuildOverdue(ctx, perDay = 4) {
   const now = ctx.now();
   const inputs = buildPlanInputs(ctx, { minutes: 600 });
-  const plan = planToday({ ...inputs, minutes: 600, maxTasks: 100, maxReviewsPerDay: 100 });
-  const scores = new Map(plan.tasks.map((t) => [t.conceptId, t.score]));
+  const plan2 = planToday({ ...inputs, minutes: 600, maxTasks: 100, maxReviewsPerDay: 100 });
+  const scores = new Map(plan2.tasks.map((t) => [t.conceptId, t.score]));
   const overdue = ctx.db.all(`SELECT cs.concept_id, cs.due_at FROM concept_state cs JOIN concepts c ON c.id=cs.concept_id WHERE c.status='confirmed' AND cs.due_at IS NOT NULL AND cs.due_at <= ?`, now);
   const m = spreadOverdue(overdue.map((o) => ({ conceptId: o.concept_id, dueAt: o.due_at, score: scores.get(o.concept_id) ?? 0 })), now, perDay);
   ctx.db.tx(() => {
@@ -5259,7 +5262,7 @@ function getToday(ctx, o) {
   const tz = profile.timezone, dateKey = localDateKey(new Date(now), tz);
   const minutes = Math.max(3, Math.min(180, o.minutes ?? profile.default_minutes ?? 20));
   const inputs = buildPlanInputs(ctx, { minutes });
-  const plan = planToday(inputs);
+  const plan2 = planToday(inputs);
   const sched = computeSchedule(ctx);
   const nSubjects = ctx.db.get("SELECT COUNT(*) n FROM subjects WHERE archived=0").n;
   const nConfirmed = ctx.db.get("SELECT COUNT(*) n FROM concepts WHERE status='confirmed'").n;
@@ -5278,8 +5281,8 @@ function getToday(ctx, o) {
     studiedTodayMin: Math.round(studiedToday / 6e4),
     empty: nSubjects === 0 ? "no_subjects" : nConfirmed === 0 ? nProposed ? "unconfirmed_concepts" : "no_concepts" : null,
     plan: {
-      ...plan,
-      tasks: plan.tasks.map((t) => ({ ...t, verb: TASK_VERB[t.kind], levelLabel: LEVEL_LABEL[inputs.concepts.find((c) => c.id === t.conceptId).state.level] }))
+      ...plan2,
+      tasks: plan2.tasks.map((t) => ({ ...t, verb: TASK_VERB[t.kind], levelLabel: LEVEL_LABEL[inputs.concepts.find((c) => c.id === t.conceptId).state.level] }))
     },
     recommendation: recommend(ctx, minutes, act ? { id: act.id } : null),
     heuristicNote: "Priority scores are an ordering heuristic built from the rules below \u2014 not a prediction of how well you will do.",
@@ -5307,8 +5310,8 @@ function getProgress(ctx) {
   for (const c of concepts) {
     const attempts = ctx.db.all("SELECT a.id, a.question_id FROM attempts a WHERE concept_id=?", c.id);
     const trace = [];
-    const active2 = ctx.db.get("SELECT COUNT(*) n FROM misconceptions WHERE concept_id=? AND status='active'", c.id).n;
-    const st = replay(loadAttempts(ctx, c.id), { tz, params, activeMisconceptions: active2, trace });
+    const active3 = ctx.db.get("SELECT COUNT(*) n FROM misconceptions WHERE concept_id=? AND status='active'", c.id).n;
+    const st = replay(loadAttempts(ctx, c.id), { tz, params, activeMisconceptions: active3, trace });
     for (const t of trace) {
       if (!t.counted || t.kind === "hinted" || t.kind === "assisted") continue;
       if (t.kind === "delayed_unaided") {
@@ -5326,7 +5329,7 @@ function getProgress(ctx) {
         }
       }
     }
-    rows.push({ id: c.id, name: c.name, subject: c.subject, level: st.level, levelLabel: LEVEL_LABEL[st.level], counted: st.counted, ignored: st.ignored, independentSuccesses: st.independentSuccesses, independentAttempts: st.independentAttempts, dueAt: st.dueAt, activeMisconceptions: active2, delayedSuccesses: st.delayedUnaidedSuccesses });
+    rows.push({ id: c.id, name: c.name, subject: c.subject, level: st.level, levelLabel: LEVEL_LABEL[st.level], counted: st.counted, ignored: st.ignored, independentSuccesses: st.independentSuccesses, independentAttempts: st.independentAttempts, dueAt: st.dueAt, activeMisconceptions: active3, delayedSuccesses: st.delayedUnaidedSuccesses });
   }
   const dayMs = ctx.db.all("SELECT created_at, MIN(COALESCE(response_ms,0),600000) ms FROM attempts WHERE created_at > ?", now - 30 * DAY);
   const byDay = /* @__PURE__ */ new Map();
@@ -5396,18 +5399,18 @@ function loadAttempts(ctx, conceptId) {
   }));
 }
 function recomputeConcept(ctx, conceptId, trace) {
-  const active2 = ctx.db.get("SELECT COUNT(*) n FROM misconceptions WHERE concept_id = ? AND status = 'active'", conceptId).n;
-  const state = replay(loadAttempts(ctx, conceptId), { tz: getProfile(ctx.db).timezone, activeMisconceptions: active2, params: getSchedulerParams(ctx.db), trace });
+  const active3 = ctx.db.get("SELECT COUNT(*) n FROM misconceptions WHERE concept_id = ? AND status = 'active'", conceptId).n;
+  const state2 = replay(loadAttempts(ctx, conceptId), { tz: getProfile(ctx.db).timezone, activeMisconceptions: active3, params: getSchedulerParams(ctx.db), trace });
   ctx.db.run(
     `INSERT INTO concept_state (concept_id,state,level,due_at,updated_at) VALUES (?,?,?,?,?)
     ON CONFLICT(concept_id) DO UPDATE SET state=excluded.state, level=excluded.level, due_at=excluded.due_at, updated_at=excluded.updated_at`,
     conceptId,
-    JSON.stringify(state),
-    state.level,
-    state.dueAt,
+    JSON.stringify(state2),
+    state2.level,
+    state2.dueAt,
     ctx.now()
   );
-  return state;
+  return state2;
 }
 function activeSession(ctx) {
   return ctx.db.get("SELECT * FROM sessions WHERE status = 'active' ORDER BY started_at DESC LIMIT 1");
@@ -5458,8 +5461,8 @@ function startSession(ctx, o) {
     }
   } else {
     const inputs = buildPlanInputs(ctx, { minutes });
-    const plan = planToday({ ...inputs, minutes });
-    const only = o.conceptIds?.length ? plan.tasks.filter((t) => o.conceptIds.includes(t.conceptId)) : plan.tasks;
+    const plan2 = planToday({ ...inputs, minutes });
+    const only = o.conceptIds?.length ? plan2.tasks.filter((t) => o.conceptIds.includes(t.conceptId)) : plan2.tasks;
     for (const t of only) slots.push(mk2(t.conceptId, t.kind === "diagnose" ? "diagnostic" : t.kind === "repair" ? "repair" : t.kind === "practice" ? "practice" : "review", t.kind === "practice" ? 3 : t.kind === "repair" ? 2 : 1));
     if (!slots.length) throw new HttpError(409, "nothing_to_do", "There is nothing to study yet. Add material and confirm some concepts first.");
   }
@@ -6687,7 +6690,7 @@ var init_calendarGoogle = __esm({
       configured() {
         return true;
       }
-      authUrl(state, challenge) {
+      authUrl(state2, challenge) {
         const p = new URLSearchParams({
           client_id: this.cfg.clientId,
           redirect_uri: this.cfg.redirectUri,
@@ -6696,7 +6699,7 @@ var init_calendarGoogle = __esm({
           access_type: "offline",
           prompt: "consent",
           include_granted_scopes: "false",
-          state,
+          state: state2,
           code_challenge: challenge,
           code_challenge_method: "S256"
         });
@@ -6797,8 +6800,8 @@ var init_calendarGoogle = __esm({
       configured() {
         return true;
       }
-      authUrl(state) {
-        return `memory://authorize?state=${state}`;
+      authUrl(state2) {
+        return `memory://authorize?state=${state2}`;
       }
       async exchangeCode() {
         return { access_token: "memory", refresh_token: "memory", expires_at: Date.now() + 36e5, scope: READONLY_SCOPE };
@@ -6841,14 +6844,14 @@ function loadTokens(ctx) {
 function startConnect(ctx) {
   if (!ctx.calendar.configured()) throw new CalendarError("not_configured", FRIENDLY.not_configured);
   if (ctx.calendar.kind === "google") secret(ctx);
-  const state = randomToken(24), verifier = randomToken(48);
+  const state2 = randomToken(24), verifier = randomToken(48);
   for (const [k, v] of pending) if (ctx.now() - v.at > 10 * 6e4) pending.delete(k);
-  pending.set(state, { verifier, workspace: ctx.workspace, at: ctx.now(), userId: ctx.userId ?? null });
-  return { url: ctx.calendar.authUrl(state, sha256b64url(verifier)), state };
+  pending.set(state2, { verifier, workspace: ctx.workspace, at: ctx.now(), userId: ctx.userId ?? null });
+  return { url: ctx.calendar.authUrl(state2, sha256b64url(verifier)), state: state2 };
 }
-function consumeState(state) {
-  const p = pending.get(state);
-  pending.delete(state);
+function consumeState(state2) {
+  const p = pending.get(state2);
+  pending.delete(state2);
   return p ? { verifier: p.verifier, workspace: p.workspace, userId: p.userId } : null;
 }
 async function finishConnect(ctx, code, verifier) {
@@ -8317,9 +8320,33 @@ function createDraft(ctx, b) {
   });
   return { id, duplicate: false };
 }
+function openFromItem(ctx, itemId) {
+  const it = ctx.db.get("SELECT * FROM academic_items WHERE id = ? AND status = 'confirmed'", itemId);
+  if (!it) throw new HttpError(404, "not_found", "Assignment not found.");
+  const linked = ctx.db.get("SELECT id, state FROM homework WHERE item_id = ?", itemId);
+  if (linked) return { homeworkId: linked.id, created: false, state: linked.state, needsInstructions: false };
+  const text = String(it.instructions ?? "").replace(/\r\n/g, "\n").trim();
+  if (text.length < 20) return { homeworkId: null, created: false, state: null, needsInstructions: true };
+  let subjectId = it.subject_id;
+  if (!subjectId) {
+    const existing = ctx.db.get("SELECT id FROM subjects WHERE lower(name) = 'school' AND archived = 0");
+    subjectId = existing?.id ?? ctx.db.tx(() => {
+      const id = uid();
+      ctx.db.run("INSERT INTO subjects (id,name,created_at) VALUES (?,?,?)", id, "School", ctx.now());
+      return id;
+    });
+  }
+  const src = addSource(ctx, subjectId, { title: it.title, kind: "teacher_instructions", text });
+  const draft = createDraft(ctx, { sourceId: src.id, title: it.title });
+  const owner = ctx.db.get("SELECT item_id FROM homework WHERE id = ?", draft.id);
+  if (owner?.item_id && owner.item_id !== itemId) throw new HttpError(409, "taken", "These instructions are already used by homework for another assignment.");
+  ctx.db.run("UPDATE homework SET item_id = ?, subject_id = COALESCE(subject_id, ?) WHERE id = ?", itemId, subjectId, draft.id);
+  if (!it.subject_id) ctx.db.run("UPDATE academic_items SET subject_id = ?, updated_at = ? WHERE id = ?", subjectId, ctx.now(), itemId);
+  return { homeworkId: draft.id, created: !draft.duplicate, state: ctx.db.get("SELECT state FROM homework WHERE id = ?", draft.id).state, needsInstructions: false };
+}
 function planMatches(ctx, h) {
   const t = new Set(norm2(h.title).split(" ").filter((w) => w.length > 2 && !["homework", "worksheet", "assignment", "the", "and"].includes(w)));
-  return listItems(ctx, "confirmed").concat(listItems(ctx, "proposed")).filter((i) => i.type === "homework" && !i.completed && !ctx.db.get("SELECT 1 FROM homework WHERE item_id = ? AND id != ?", i.id, h.id)).map((i) => {
+  return listItems(ctx, "confirmed").concat(listItems(ctx, "proposed")).filter((i) => i.type === "homework" && !i.completed && i.id !== h.item_id && !ctx.db.get("SELECT 1 FROM homework WHERE item_id = ? AND id != ?", i.id, h.id)).map((i) => {
     const w = new Set(norm2(i.title).split(" ").filter((x) => x.length > 2));
     const common = [...t].filter((x) => w.has(x)).length;
     const overlap = t.size && w.size ? common / Math.min(t.size, w.size) : 0;
@@ -8508,7 +8535,7 @@ function getHomework(ctx, id) {
     original: src ? { sourceId: src.id, title: src.title, fileId: src.file_id, pageCount: src.page_count, origin: src.origin, readFromScan: !!src.ocr } : null,
     plan: it ? { itemId: it.id, ...pickItem(ctx, it) } : null,
     dueHints: parse(h.due_hints, []),
-    matches: h.state === "draft" || !h.item_id ? planMatches(ctx, h) : [],
+    matches: !h.item_id ? planMatches(ctx, h) : [],
     questions: qs,
     summary: assignmentSummary(qs),
     estimate: suggestEstimate(ctx, h, Math.max(1, qs.length)),
@@ -9103,6 +9130,7 @@ var init_homework = __esm({
     init_annotations();
     init_items();
     init_content();
+    init_content();
     init_teachingMemory();
     MAX_HOMEWORK = 150;
     MAX_QUESTIONS = 40;
@@ -9141,11 +9169,202 @@ var init_homework = __esm({
   }
 });
 
+// src/server/services/myhelper.ts
+import { createHash as createHash7 } from "node:crypto";
+import { z as z3 } from "zod";
+function dueFor(ctx, when, at = ctx.now()) {
+  const t = todayKey(ctx, at);
+  return when === "Today" ? t : when === "Tomorrow" ? addDaysKey(t, 1) : null;
+}
+function state(ctx) {
+  const tasks = ctx.db.all("SELECT * FROM mh_tasks ORDER BY (done_at IS NOT NULL), COALESCE(due_date, '9999'), created_at DESC").map((r) => taskView(ctx, r));
+  const assignments = listItems(ctx, "confirmed").map((i) => ({
+    id: i.id,
+    title: i.title,
+    subjectId: i.subjectId,
+    subjectName: i.subjectName,
+    type: i.type,
+    typeLabel: i.typeLabel,
+    dueDate: i.dueDate,
+    dueLabel: i.dueLabel,
+    daysLeft: i.daysLeft,
+    done: i.completed,
+    hasInstructions: (i.instructions ?? "").trim().length >= 20,
+    instructions: i.instructions ?? "",
+    estimateMin: i.estimateMin,
+    homework: ctx.db.get("SELECT id, state, work_status FROM homework WHERE item_id = ?", i.id) ?? null
+  }));
+  const projects = ctx.db.all("SELECT * FROM mh_projects ORDER BY updated_at DESC").map(projectView);
+  return { tasks, assignments: assignments.map((a) => ({ ...a, homework: a.homework ? { id: a.homework.id, state: a.homework.state, status: a.homework.work_status } : null })), projects };
+}
+function addTask(ctx, b) {
+  const title = clip(b.title, 200).trim();
+  if (!title) throw new HttpError(400, "invalid", "Give the task a name first.");
+  if (!CATEGORIES2.includes(b.category) || !WHEN.includes(b.when)) throw new HttpError(400, "invalid", "Choose a category and a time.");
+  if (b.category === "School") return { kind: "assignment", id: createItem(ctx, { title, type: "homework", dueDate: dueFor(ctx, b.when), notes: b.when === "This week" ? "Due sometime this week (date not set)." : "" }).id };
+  if (ctx.db.get("SELECT COUNT(*) n FROM mh_tasks").n >= MAX_TASKS) throw new HttpError(409, "limit", "That is a lot of tasks. Delete some you no longer need first.");
+  const id = uid(), now = ctx.now();
+  ctx.db.run("INSERT INTO mh_tasks (id,title,category,when_label,due_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", id, title, b.category, b.when, dueFor(ctx, b.when), now, now);
+  return { kind: "task", id };
+}
+function setTaskDone(ctx, id, done) {
+  if (!ctx.db.get("SELECT 1 FROM mh_tasks WHERE id = ?", id)) throw new HttpError(404, "not_found", "Task not found.");
+  ctx.db.run("UPDATE mh_tasks SET done_at = ?, updated_at = ? WHERE id = ?", done ? ctx.now() : null, ctx.now(), id);
+}
+function deleteTask(ctx, id) {
+  if (!ctx.db.get("SELECT 1 FROM mh_tasks WHERE id = ?", id)) throw new HttpError(404, "not_found", "Task not found.");
+  ctx.db.run("DELETE FROM mh_tasks WHERE id = ?", id);
+}
+function addProject(ctx, b) {
+  const name = clip(b.name, 120).trim();
+  if (!name) throw new HttpError(400, "invalid", "Give the project a name first.");
+  if (ctx.db.get("SELECT COUNT(*) n FROM mh_projects").n >= MAX_PROJECTS) throw new HttpError(409, "limit", "That is a lot of projects. Delete some first.");
+  const id = uid(), now = ctx.now();
+  ctx.db.run("INSERT INTO mh_projects (id,name,description,stage,created_at,updated_at) VALUES (?,?,?,?,?,?)", id, name, clip(b.description, 600).trim() || "A project in progress.", 1, now, now);
+  return { id };
+}
+function updateProject(ctx, id, b) {
+  const p = ctx.db.get("SELECT * FROM mh_projects WHERE id = ?", id);
+  if (!p) throw new HttpError(404, "not_found", "Project not found.");
+  let stage = b.stage !== void 0 ? Math.min(5, Math.max(1, Math.round(b.stage))) : p.stage;
+  if (b.advance) stage = p.stage >= 5 ? 1 : p.stage + 1;
+  ctx.db.run(
+    "UPDATE mh_projects SET name = ?, description = ?, notes = ?, next_action = ?, stage = ?, updated_at = ? WHERE id = ?",
+    b.name === void 0 ? p.name : clip(b.name, 120).trim() || p.name,
+    b.description === void 0 ? p.description : clip(b.description, 600).trim() || p.description,
+    b.notes === void 0 ? p.notes : clip(b.notes, 2e4),
+    b.nextAction === void 0 ? p.next_action : clip(b.nextAction, 300).trim(),
+    stage,
+    ctx.now(),
+    id
+  );
+  return projectView(ctx.db.get("SELECT * FROM mh_projects WHERE id = ?", id));
+}
+function deleteProject(ctx, id) {
+  if (!ctx.db.get("SELECT 1 FROM mh_projects WHERE id = ?", id)) throw new HttpError(404, "not_found", "Project not found.");
+  ctx.db.tx(() => {
+    ctx.db.run("DELETE FROM mh_projects WHERE id = ?", id);
+    ctx.db.run("DELETE FROM mh_import_keys WHERE kind = 'project' AND target_id = ?", id);
+  });
+}
+function plan(ctx, raw) {
+  const rows = [];
+  const seen = /* @__PURE__ */ new Set();
+  const known = (kind, key2) => !!ctx.db.get("SELECT 1 FROM mh_import_keys WHERE kind = ? AND legacy_key = ?", kind, key2);
+  const place = (kind, key2, label, ok, reason, where, make) => {
+    const dupe = seen.has(`${kind}|${key2}`);
+    seen.add(`${kind}|${key2}`);
+    rows.push({ kind, key: key2, label, where, plan: make, status: !ok ? "invalid" : dupe || known(kind, key2) ? "already_imported" : "new", reason: !ok ? reason : dupe ? "Appears twice in this file." : known(kind, key2) ? "Already imported earlier." : void 0 });
+  };
+  (raw.tasks ?? []).forEach((t, i) => {
+    const title = clip(str(t.title), 200).trim();
+    const cat = CATEGORIES2.includes(str(t.category)) ? str(t.category) : "Personal";
+    const when = WHEN.includes(str(t.due)) ? str(t.due) : "This week";
+    const done = t.done === true;
+    const createdAt = typeof t.id === "number" && t.id > 14e11 && t.id < 4e12 ? t.id : ctx.now();
+    place("task", keyOf("task", t.id, [title, cat], i), title || "(no title)", !!title, "Has no title.", cat === "School" ? "School assignments" : cat === "Project" ? "Tasks (project)" : "Tasks (personal)", () => {
+      const due = dueFor(ctx, when, createdAt);
+      if (cat === "School") {
+        const id2 = createItem(ctx, { title, type: "homework", dueDate: due, notes: `Imported from My Helper (${when}${due ? "" : ", date not set"}).` }).id;
+        if (done) ctx.db.run("UPDATE academic_items SET completed_at = ? WHERE id = ?", ctx.now(), id2);
+        return id2;
+      }
+      const id = uid();
+      ctx.db.run("INSERT INTO mh_tasks (id,title,category,when_label,due_date,done_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)", id, title, cat, when, due, done ? ctx.now() : null, createdAt, ctx.now());
+      return id;
+    });
+  });
+  (raw.projects ?? []).forEach((p, i) => {
+    const name = clip(str(p.name), 120).trim();
+    place("project", keyOf("project", p.id, [name], i), name || "(no name)", !!name, "Has no name.", "Projects", () => {
+      const id = uid();
+      const stage = typeof p.stage === "number" ? Math.min(5, Math.max(1, Math.round(p.stage))) : 1;
+      ctx.db.run("INSERT INTO mh_projects (id,name,description,stage,notes,next_action,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)", id, name, clip(str(p.desc), 600).trim() || "A project in progress.", stage, clip(str(p.notes), 2e4), clip(str(p.nextAction), 300).trim(), ctx.now(), ctx.now());
+      return id;
+    });
+  });
+  (raw.memory ?? []).forEach((m, i) => {
+    const text = clip(str(m.text), 400).trim();
+    const same2 = text ? ctx.db.all("SELECT id, text FROM memories WHERE deleted_at IS NULL").find((r) => norm3(r.text) === norm3(text)) : null;
+    const key2 = keyOf("memory", m.id, [norm3(text)], i);
+    place("memory", key2, text || "(empty)", text.length >= 3, "Too short to keep.", "Memory", () => {
+      if (same2) return same2.id;
+      const id = uid();
+      ctx.db.run("INSERT INTO memories (id,kind,text,subject_id,concept_id,provenance,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)", id, "student_stated", text, null, null, JSON.stringify({ origin: "student", note: "Imported from My Helper", pinned: m.pinned === true }), ctx.now(), ctx.now());
+      return id;
+    });
+    if (same2 && rows[rows.length - 1].status === "new") {
+      rows[rows.length - 1].status = "already_imported";
+      rows[rows.length - 1].reason = "The same note is already in Memory.";
+    }
+  });
+  return rows;
+}
+function previewImport2(ctx, payload) {
+  return summarize2(plan(ctx, payload));
+}
+function applyImport(ctx, payload) {
+  const rows = plan(ctx, payload);
+  ctx.db.tx(() => {
+    for (const r of rows) {
+      if (r.status === "new") {
+        const target2 = r.plan();
+        ctx.db.run("INSERT INTO mh_import_keys (kind,legacy_key,target_id,imported_at) VALUES (?,?,?,?)", r.kind, r.key, target2, ctx.now());
+        r.status = "imported";
+      } else if (r.status === "already_imported" && r.reason?.startsWith("The same note")) ctx.db.run("INSERT OR IGNORE INTO mh_import_keys (kind,legacy_key,target_id,imported_at) VALUES (?,?,?,?)", r.kind, r.key, r.plan(), ctx.now());
+    }
+  });
+  return { applied: true, ...summarize2(rows) };
+}
+function exportMyHelper(ctx) {
+  return {
+    tasks: ctx.db.all("SELECT * FROM mh_tasks ORDER BY created_at").map((r) => ({ title: r.title, category: r.category, when: r.when_label, dueDate: r.due_date, done: r.done_at != null })),
+    projects: ctx.db.all("SELECT * FROM mh_projects ORDER BY created_at").map((r) => ({ name: r.name, description: r.description, stage: r.stage, notes: r.notes, nextAction: r.next_action }))
+  };
+}
+var CATEGORIES2, WHEN, MAX_TASKS, MAX_PROJECTS, todayKey, taskView, projectView, Id, Legacy, ImportPayload, str, norm3, keyOf, summarize2;
+var init_myhelper = __esm({
+  "src/server/services/myhelper.ts"() {
+    "use strict";
+    init_time();
+    init_db();
+    init_common();
+    init_items();
+    CATEGORIES2 = ["School", "Personal", "Project"];
+    WHEN = ["Today", "Tomorrow", "This week"];
+    MAX_TASKS = 2e3;
+    MAX_PROJECTS = 300;
+    todayKey = (ctx, at = ctx.now()) => localDateKey(new Date(at), getProfile(ctx.db).timezone);
+    taskView = (ctx, r) => ({ id: r.id, title: r.title, category: r.category, when: r.when_label, dueDate: r.due_date, done: r.done_at != null, overdue: r.done_at == null && !!r.due_date && r.due_date < todayKey(ctx) });
+    projectView = (r) => ({ id: r.id, name: r.name, description: r.description, stage: r.stage, notes: r.notes, nextAction: r.next_action, updatedAt: r.updated_at });
+    Id = z3.union([z3.string().max(80), z3.number()]);
+    Legacy = z3.object({
+      tasks: z3.array(z3.object({ id: Id.optional(), title: z3.unknown(), category: z3.unknown().optional(), due: z3.unknown().optional(), done: z3.unknown().optional() }).passthrough()).max(5e3).optional(),
+      projects: z3.array(z3.object({ id: Id.optional(), name: z3.unknown(), desc: z3.unknown().optional(), notes: z3.unknown().optional(), nextAction: z3.unknown().optional(), stage: z3.unknown().optional() }).passthrough()).max(1e3).optional(),
+      memory: z3.array(z3.object({ id: Id.optional(), text: z3.unknown() }).passthrough()).max(1e3).optional()
+    }).passthrough();
+    ImportPayload = z3.union([z3.object({ format: z3.literal("my-helper-export"), version: z3.literal(1), state: Legacy }).passthrough().transform((x) => x.state), Legacy]);
+    str = (v) => typeof v === "string" ? v : "";
+    norm3 = (s) => s.toLowerCase().replace(/\s+/g, " ").trim();
+    keyOf = (kind, id, parts, index) => id !== void 0 && id !== null && String(id) !== "" ? `id:${String(id)}` : `h:${createHash7("sha256").update(`${kind}|${parts.join("|")}|${index}`).digest("hex").slice(0, 24)}`;
+    summarize2 = (rows) => {
+      const by = (s) => rows.filter((r) => r.status === s);
+      const count = (k, s) => rows.filter((r) => r.kind === k && r.status === s).length;
+      return {
+        totals: { new: by("new").length, imported: by("imported").length, alreadyImported: by("already_imported").length, invalid: by("invalid").length },
+        byKind: Object.fromEntries(["task", "project", "memory"].map((k) => [k, { new: count(k, "new"), imported: count(k, "imported"), alreadyImported: count(k, "already_imported"), invalid: count(k, "invalid") }])),
+        items: rows.slice(0, 200).map((r) => ({ kind: r.kind, label: r.label, status: r.status, reason: r.reason ?? null, where: r.where ?? null })),
+        truncated: rows.length > 200
+      };
+    };
+  }
+});
+
 // src/server/app.ts
 import express from "express";
 import { existsSync } from "node:fs";
 import { join as join2, resolve } from "node:path";
-import { z as z3, ZodError } from "zod";
+import { z as z4, ZodError } from "zod";
 function createApp(rt, hosted) {
   const app = express();
   app.disable("x-powered-by");
@@ -9211,7 +9430,7 @@ function createApp(rt, hosted) {
   });
   app.get("/api/profile", h((ctx) => getProfile(ctx.db)));
   app.put("/api/profile", h((ctx, req) => {
-    const b = z3.object({ name: z3.string().max(60).optional(), grade: z3.string().max(30).optional(), timezone: z3.string().refine(isValidTimeZone, "Unknown time zone").optional(), defaultMinutes: z3.number().optional(), about: z3.string().max(600).optional() }).parse(req.body);
+    const b = z4.object({ name: z4.string().max(60).optional(), grade: z4.string().max(30).optional(), timezone: z4.string().refine(isValidTimeZone, "Unknown time zone").optional(), defaultMinutes: z4.number().optional(), about: z4.string().max(600).optional() }).parse(req.body);
     updateProfile(ctx, b);
     return getProfile(ctx.db);
   }));
@@ -9225,7 +9444,7 @@ function createApp(rt, hosted) {
     ai: aiInfo(ctx)
   })));
   app.put("/api/settings", h((ctx, req) => {
-    const b = z3.object({ weights: WeightsSchema.optional(), availability: AvailabilitySchema.optional(), aiDailyLimit: z3.number().int().min(0).max(5e3).optional(), aiDailyBudgetUsd: z3.number().min(0).max(1e3).optional() }).parse(req.body);
+    const b = z4.object({ weights: WeightsSchema.optional(), availability: AvailabilitySchema.optional(), aiDailyLimit: z4.number().int().min(0).max(5e3).optional(), aiDailyBudgetUsd: z4.number().min(0).max(1e3).optional() }).parse(req.body);
     if (ctx.hosted && (b.aiDailyBudgetUsd !== void 0 || b.aiDailyLimit !== void 0)) throw new HttpError(403, "operator_only", "Spending limits are set by the person who runs this site.");
     if (b.aiDailyBudgetUsd !== void 0) setSetting(ctx.db, "ai_daily_budget_usd", b.aiDailyBudgetUsd, ctx.now());
     if (b.weights) setSetting(ctx.db, "priority_weights", b.weights, ctx.now());
@@ -9234,11 +9453,11 @@ function createApp(rt, hosted) {
     return { ok: true };
   }));
   app.get("/api/subjects", h((ctx) => listSubjects(ctx)));
-  app.post("/api/subjects", h((ctx, req) => createSubject(ctx, z3.object({ name: z3.string(), description: z3.string().optional(), aliases: z3.array(z3.string()).optional() }).parse(req.body))));
+  app.post("/api/subjects", h((ctx, req) => createSubject(ctx, z4.object({ name: z4.string(), description: z4.string().optional(), aliases: z4.array(z4.string()).optional() }).parse(req.body))));
   app.get("/api/subjects/:id", h((ctx, req) => subjectOverview(ctx, req.params.id)));
-  app.patch("/api/subjects/:id", h((ctx, req) => updateSubject(ctx, req.params.id, z3.object({ name: z3.string().optional(), description: z3.string().optional(), aliases: z3.array(z3.string()).optional(), archived: z3.boolean().optional() }).parse(req.body))));
+  app.patch("/api/subjects/:id", h((ctx, req) => updateSubject(ctx, req.params.id, z4.object({ name: z4.string().optional(), description: z4.string().optional(), aliases: z4.array(z4.string()).optional(), archived: z4.boolean().optional() }).parse(req.body))));
   app.delete("/api/subjects/:id", h((ctx, req) => deleteSubject(ctx, req.params.id)));
-  app.post("/api/subjects/:id/sources", h((ctx, req) => addSource(ctx, req.params.id, z3.object({ title: z3.string().optional(), kind: z3.string().optional(), text: z3.string(), origin: z3.string().optional() }).parse(req.body))));
+  app.post("/api/subjects/:id/sources", h((ctx, req) => addSource(ctx, req.params.id, z4.object({ title: z4.string().optional(), kind: z4.string().optional(), text: z4.string(), origin: z4.string().optional() }).parse(req.body))));
   app.post("/api/subjects/:id/files", rawUpload, h((ctx, req, res) => noDemoUpload(ctx) ?? uploadFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? ""), title: req.query.title, kind: req.query.kind })));
   app.post("/api/sources/:id/replace", rawUpload, h((ctx, req, res) => replaceFile(ctx, req.params.id, { signal: cancelOnClose(res), data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename: String(req.query.filename ?? "") })));
   app.get("/api/files/:id", h((ctx, req, res) => {
@@ -9248,11 +9467,11 @@ function createApp(rt, hosted) {
     res.setHeader("Cache-Control", ctx.hosted ? "no-store" : "private, max-age=3600");
     res.send(f.data);
   }));
-  app.post("/api/sources/:id/pages/reviewed", h((ctx, req) => markReviewed(ctx, req.params.id, z3.object({ pages: z3.array(z3.number().int()).max(200) }).parse(req.body).pages)));
+  app.post("/api/sources/:id/pages/reviewed", h((ctx, req) => markReviewed(ctx, req.params.id, z4.object({ pages: z4.array(z4.number().int()).max(200) }).parse(req.body).pages)));
   app.post("/api/sources/:id/discard-replacement", h((ctx, req) => discardPending(ctx, req.params.id)));
-  app.post("/api/sources/:id/ocr/preview", h((ctx, req) => ocrDisclosure(ctx, req.params.id, z3.object({ pages: z3.array(z3.number().int()).max(60).optional() }).parse(req.body ?? {}).pages)));
+  app.post("/api/sources/:id/ocr/preview", h((ctx, req) => ocrDisclosure(ctx, req.params.id, z4.object({ pages: z4.array(z4.number().int()).max(60).optional() }).parse(req.body ?? {}).pages)));
   app.post("/api/sources/:id/ocr", h((ctx, req) => {
-    const b = z3.object({ pages: z3.array(z3.number().int()).max(60).optional(), consentToken: z3.string(), overwrite: z3.boolean().optional() }).parse(req.body);
+    const b = z4.object({ pages: z4.array(z4.number().int()).max(60).optional(), consentToken: z4.string(), overwrite: z4.boolean().optional() }).parse(req.body);
     return runOcr(ctx, req.params.id, b);
   }));
   app.get("/api/sources/:id/review", h((ctx, req) => {
@@ -9260,35 +9479,35 @@ function createApp(rt, hosted) {
     return r ? { ...r, ocr: ocrAvailability(ctx) } : r;
   }));
   app.put("/api/sources/:id/pages/:n", h((ctx, req) => {
-    const b = z3.object({ text: z3.string(), baseRev: z3.number().int() }).parse(req.body);
+    const b = z4.object({ text: z4.string(), baseRev: z4.number().int() }).parse(req.body);
     return savePage(ctx, req.params.id, Number(req.params.n), b.text, b.baseRev);
   }));
   app.post("/api/sources/:id/confirm", h((ctx, req) => confirmSource(ctx, req.params.id, { acknowledgeEmptyPages: bool(req.body?.acknowledgeEmptyPages) })));
   app.get("/api/sources/:id", h((ctx, req) => getSource(ctx, req.params.id)));
-  app.put("/api/sources/:id/flags/:flagId", h((ctx, req) => setFlagDecision(ctx, req.params.id, req.params.flagId, z3.object({ decision: z3.enum(["include", "exclude"]).nullable() }).parse(req.body).decision)));
+  app.put("/api/sources/:id/flags/:flagId", h((ctx, req) => setFlagDecision(ctx, req.params.id, req.params.flagId, z4.object({ decision: z4.enum(["include", "exclude"]).nullable() }).parse(req.body).decision)));
   app.delete("/api/sources/:id", h((ctx, req) => deleteSource(ctx, req.params.id)));
   app.post("/api/sources/:id/extract", h((ctx, req) => extractConcepts(ctx, req.params.id, { useOffline: bool(req.body?.useOffline), force: bool(req.body?.force) })));
-  app.post("/api/subjects/:id/concepts", h((ctx, req) => addConcept(ctx, req.params.id, z3.object({ name: z3.string(), summary: z3.string().optional(), skillTag: z3.string().nullable().optional() }).parse(req.body))));
-  app.patch("/api/concepts/:id", h((ctx, req) => updateConcept(ctx, req.params.id, z3.object({ name: z3.string().optional(), summary: z3.string().optional(), status: z3.string().optional(), skillTag: z3.string().nullable().optional(), prereqIds: z3.array(z3.string()).optional() }).parse(req.body))));
+  app.post("/api/subjects/:id/concepts", h((ctx, req) => addConcept(ctx, req.params.id, z4.object({ name: z4.string(), summary: z4.string().optional(), skillTag: z4.string().nullable().optional() }).parse(req.body))));
+  app.patch("/api/concepts/:id", h((ctx, req) => updateConcept(ctx, req.params.id, z4.object({ name: z4.string().optional(), summary: z4.string().optional(), status: z4.string().optional(), skillTag: z4.string().nullable().optional(), prereqIds: z4.array(z4.string()).optional() }).parse(req.body))));
   app.post("/api/concepts/bulk", h((ctx, req) => {
-    const b = z3.object({ ids: z3.array(z3.string()), status: z3.enum(["confirmed", "rejected"]) }).parse(req.body);
+    const b = z4.object({ ids: z4.array(z4.string()), status: z4.enum(["confirmed", "rejected"]) }).parse(req.body);
     bulkConceptStatus(ctx, b.ids, b.status);
   }));
   app.delete("/api/concepts/:id", h((ctx, req) => deleteConcept(ctx, req.params.id)));
   app.get("/api/today", h((ctx, req) => getToday(ctx, { minutes: req.query.minutes ? Number(req.query.minutes) : void 0 })));
   app.post("/api/plan/override", h((ctx, req) => {
-    const b = z3.object({ conceptId: z3.string(), action: z3.enum(["pin", "skip"]).nullable() }).parse(req.body);
+    const b = z4.object({ conceptId: z4.string(), action: z4.enum(["pin", "skip"]).nullable() }).parse(req.body);
     setOverride(ctx, b.conceptId, b.action);
   }));
   app.post("/api/plan/rebuild", h((ctx) => rebuildOverdue(ctx)));
   app.get("/api/progress", h((ctx) => getProgress(ctx)));
-  app.post("/api/attempts/:id/clarify", h((ctx, req) => clarify(ctx, req.params.id, z3.object({ text: z3.string() }).parse(req.body).text)));
+  app.post("/api/attempts/:id/clarify", h((ctx, req) => clarify(ctx, req.params.id, z4.object({ text: z4.string() }).parse(req.body).text)));
   app.post("/api/questions/:id/report-support", h((ctx, req) => reportSupport(ctx, req.params.id)));
-  app.post("/api/questions/:id/resolve", h((ctx, req) => resolveQuestion(ctx, req.params.id, z3.object({ action: z3.enum(["accept", "discard"]) }).parse(req.body).action)));
-  app.post("/api/attempts/:id/cause", h((ctx, req) => setSelfCause(ctx, req.params.id, z3.object({ cause: z3.string() }).parse(req.body).cause)));
+  app.post("/api/questions/:id/resolve", h((ctx, req) => resolveQuestion(ctx, req.params.id, z4.object({ action: z4.enum(["accept", "discard"]) }).parse(req.body).action)));
+  app.post("/api/attempts/:id/cause", h((ctx, req) => setSelfCause(ctx, req.params.id, z4.object({ cause: z4.string() }).parse(req.body).cause)));
   app.post("/api/attempts/:id/report-unclear", h((ctx, req) => reportUnclear(ctx, req.params.id)));
   app.get("/api/history", h((ctx) => history(ctx)));
-  const Start = z3.object({ mode: z3.enum(["diagnostic", "practice", "review", "exam", "mixed"]).default("mixed"), goal: z3.enum(["test", "understand", "wrong", "review"]).optional(), sourceId: z3.string().nullable().optional(), subjectId: z3.string().nullable().optional(), minutes: z3.number(), conceptIds: z3.array(z3.string()).optional(), itemId: z3.string().nullable().optional(), abandonExisting: z3.boolean().optional() });
+  const Start = z4.object({ mode: z4.enum(["diagnostic", "practice", "review", "exam", "mixed"]).default("mixed"), goal: z4.enum(["test", "understand", "wrong", "review"]).optional(), sourceId: z4.string().nullable().optional(), subjectId: z4.string().nullable().optional(), minutes: z4.number(), conceptIds: z4.array(z4.string()).optional(), itemId: z4.string().nullable().optional(), abandonExisting: z4.boolean().optional() });
   app.post("/api/sessions", h(async (ctx, req) => startSession(ctx, Start.parse(req.body))));
   app.post("/api/sessions/:id/extend", h((ctx, req) => extendSession(ctx, req.params.id, Number(req.body?.minutes ?? 10))));
   app.get("/api/sessions/active", h((ctx) => {
@@ -9296,60 +9515,61 @@ function createApp(rt, hosted) {
     return { active: s ? { id: s.id, mode: s.mode, startedAt: s.started_at } : null };
   }));
   app.get("/api/sessions/:id", h((ctx, req) => sessionView(ctx, req.params.id, { useOffline: req.query.offline === "1" })));
-  app.post("/api/sessions/:id/hint", h((ctx, req) => requestHint(ctx, req.params.id, z3.object({ questionId: z3.string() }).parse(req.body).questionId)));
-  app.post("/api/sessions/:id/reveal", h((ctx, req) => revealAnswer(ctx, req.params.id, z3.object({ questionId: z3.string() }).parse(req.body).questionId)));
-  app.post("/api/sessions/:id/answer", h((ctx, req) => submitAnswer(ctx, req.params.id, z3.object({
-    questionId: z3.string(),
-    answer: z3.string().max(5e3).default(""),
-    reasoning: z3.string().max(5e3).optional(),
-    confidence: z3.number().nullable().optional(),
-    clientToken: z3.string().min(8).max(80),
-    idk: z3.boolean().optional(),
-    revealedOnly: z3.boolean().optional()
+  app.post("/api/sessions/:id/hint", h((ctx, req) => requestHint(ctx, req.params.id, z4.object({ questionId: z4.string() }).parse(req.body).questionId)));
+  app.post("/api/sessions/:id/reveal", h((ctx, req) => revealAnswer(ctx, req.params.id, z4.object({ questionId: z4.string() }).parse(req.body).questionId)));
+  app.post("/api/sessions/:id/answer", h((ctx, req) => submitAnswer(ctx, req.params.id, z4.object({
+    questionId: z4.string(),
+    answer: z4.string().max(5e3).default(""),
+    reasoning: z4.string().max(5e3).optional(),
+    confidence: z4.number().nullable().optional(),
+    clientToken: z4.string().min(8).max(80),
+    idk: z4.boolean().optional(),
+    revealedOnly: z4.boolean().optional()
   }).parse(req.body))));
   app.post("/api/sessions/:id/next", h((ctx, req) => nextQuestion(ctx, req.params.id, { useOffline: bool(req.body?.useOffline) })));
   app.post("/api/sessions/:id/finish", h((ctx, req) => finishSession(ctx, req.params.id)));
   app.post("/api/sessions/:id/abandon", h((ctx, req) => abandonSession(ctx, req.params.id)));
-  app.post("/api/attempts/:id/self-grade", h((ctx, req) => selfGrade(ctx, req.params.id, z3.object({ correctness: z3.number(), note: z3.string().max(300).optional() }).parse(req.body))));
+  app.post("/api/attempts/:id/self-grade", h((ctx, req) => selfGrade(ctx, req.params.id, z4.object({ correctness: z4.number(), note: z4.string().max(300).optional() }).parse(req.body))));
   app.post("/api/attempts/:id/regrade", h((ctx, req) => regrade(ctx, req.params.id)));
   app.get("/api/memory", h((ctx) => listMemory(ctx)));
-  app.post("/api/memory", h((ctx, req) => addMemory(ctx, z3.object({ text: z3.string(), subjectId: z3.string().nullable().optional(), conceptId: z3.string().nullable().optional() }).parse(req.body))));
-  app.patch("/api/memory/:id", h((ctx, req) => updateMemory(ctx, req.params.id, z3.object({ text: z3.string() }).parse(req.body))));
+  app.post("/api/memory", h((ctx, req) => addMemory(ctx, z4.object({ text: z4.string(), subjectId: z4.string().nullable().optional(), conceptId: z4.string().nullable().optional() }).parse(req.body))));
+  app.patch("/api/memory/:id", h((ctx, req) => updateMemory(ctx, req.params.id, z4.object({ text: z4.string() }).parse(req.body))));
   app.post("/api/memory/:id/status", h((ctx, req) => {
-    if (!memoryStatus(ctx, req.params.id, z3.object({ status: z3.enum(["active", "dismissed"]) }).parse(req.body).status)) throw new HttpError(404, "not_found", "Memory not found.");
+    if (!memoryStatus(ctx, req.params.id, z4.object({ status: z4.enum(["active", "dismissed"]) }).parse(req.body).status)) throw new HttpError(404, "not_found", "Memory not found.");
   }));
   app.delete("/api/memory/:id", h((ctx, req) => deleteMemory(ctx, req.params.id)));
-  app.patch("/api/misconceptions/:id", h((ctx, req) => setMisconceptionStatus(ctx, req.params.id, z3.object({ status: z3.enum(["active", "dismissed", "repaired"]) }).parse(req.body).status)));
+  app.patch("/api/misconceptions/:id", h((ctx, req) => setMisconceptionStatus(ctx, req.params.id, z4.object({ status: z4.enum(["active", "dismissed", "repaired"]) }).parse(req.body).status)));
   app.delete("/api/misconceptions/:id", h((ctx, req) => deleteMisconception(ctx, req.params.id)));
-  app.post("/api/export", h((ctx, req) => exportData(ctx, z3.object({ sections: z3.array(z3.string()), includeSourceText: z3.boolean().optional() }).parse(req.body))));
+  app.post("/api/export", h((ctx, req) => exportData(ctx, z4.object({ sections: z4.array(z4.string()), includeSourceText: z4.boolean().optional() }).parse(req.body))));
   app.post("/api/import/preview", h((ctx, req) => previewImport(ctx, req.body?.file)));
   app.post("/api/import/commit", h((ctx, req) => {
     if (ctx.workspace === "demo") throw new HttpError(409, "demo_workspace", "Importing into the sample workspace is disabled so sample and real records stay separate.");
-    return commitImport(ctx, req.body?.file, z3.object({ profile: z3.boolean().optional(), settings: z3.boolean().optional(), memoryIds: z3.array(z3.string()).optional(), subjectIds: z3.array(z3.string()).optional(), itemIds: z3.array(z3.string()).optional() }).parse(req.body?.selection ?? {}));
+    return commitImport(ctx, req.body?.file, z4.object({ profile: z4.boolean().optional(), settings: z4.boolean().optional(), memoryIds: z4.array(z4.string()).optional(), subjectIds: z4.array(z4.string()).optional(), itemIds: z4.array(z4.string()).optional() }).parse(req.body?.selection ?? {}));
   }));
-  const ItemBody = z3.object({
-    title: z3.string().optional(),
-    type: z3.string().optional(),
-    subjectId: z3.string().nullable().optional(),
-    dueDate: z3.string().nullable().optional(),
-    dueTime: z3.string().nullable().optional(),
-    topicsText: z3.string().nullable().optional(),
-    conceptIds: z3.array(z3.string()).optional(),
-    format: z3.string().optional(),
-    estimateMin: z3.number().int().min(0).max(6e3).nullable().optional(),
-    notes: z3.string().optional()
+  const ItemBody = z4.object({
+    title: z4.string().optional(),
+    type: z4.string().optional(),
+    subjectId: z4.string().nullable().optional(),
+    dueDate: z4.string().nullable().optional(),
+    dueTime: z4.string().nullable().optional(),
+    topicsText: z4.string().nullable().optional(),
+    conceptIds: z4.array(z4.string()).optional(),
+    format: z4.string().optional(),
+    estimateMin: z4.number().int().min(0).max(6e3).nullable().optional(),
+    notes: z4.string().optional(),
+    instructions: z4.string().max(2e4).optional()
   });
   app.get("/api/items", h((ctx, req) => listItems(ctx, ["proposed", "confirmed", "dismissed"].includes(String(req.query.status)) ? req.query.status : "confirmed")));
   app.post("/api/items", h((ctx, req) => createItem(ctx, ItemBody.parse(req.body))));
   app.patch("/api/items/:id", h((ctx, req) => updateItem(ctx, req.params.id, ItemBody.parse(req.body))));
   app.delete("/api/items/:id", h((ctx, req) => deleteItem(ctx, req.params.id)));
-  app.post("/api/items/:id/complete", h((ctx, req) => setCompleted(ctx, req.params.id, z3.object({ done: z3.boolean() }).parse(req.body).done)));
-  app.post("/api/items/:id/work", h((ctx, req) => logWork(ctx, req.params.id, z3.object({ minutes: z3.number() }).parse(req.body).minutes)));
+  app.post("/api/items/:id/complete", h((ctx, req) => setCompleted(ctx, req.params.id, z4.object({ done: z4.boolean() }).parse(req.body).done)));
+  app.post("/api/items/:id/work", h((ctx, req) => logWork(ctx, req.params.id, z4.object({ minutes: z4.number() }).parse(req.body).minutes)));
   app.post("/api/items/:id/confirm", h((ctx, req) => confirmProposal(ctx, req.params.id, ItemBody.parse(req.body ?? {}))));
   app.post("/api/items/:id/dismiss", h((ctx, req) => dismissProposal(ctx, req.params.id)));
-  app.post("/api/items/:id/ack", h((ctx, req) => acknowledgeSync(ctx, req.params.id, z3.object({ action: z3.enum(["accept", "keep_manual", "remove"]) }).parse(req.body).action)));
+  app.post("/api/items/:id/ack", h((ctx, req) => acknowledgeSync(ctx, req.params.id, z4.object({ action: z4.enum(["accept", "keep_manual", "remove"]) }).parse(req.body).action)));
   app.post("/api/items/bulk", h((ctx, req) => {
-    const b = z3.object({ ids: z3.array(z3.string()).max(200), action: z3.enum(["confirm", "dismiss"]) }).parse(req.body);
+    const b = z4.object({ ids: z4.array(z4.string()).max(200), action: z4.enum(["confirm", "dismiss"]) }).parse(req.body);
     ctx.db.tx(() => {
       for (const id of b.ids) {
         if (b.action === "confirm") confirmProposal(ctx, id);
@@ -9367,8 +9587,8 @@ function createApp(rt, hosted) {
     if (hosted) return hosted.calendarCallback(req, res);
     const go = (q) => res.redirect(`/#/calendar?${q}`);
     try {
-      const { code, state, error } = req.query;
-      const st = state ? consumeState(state) : null;
+      const { code, state: state2, error } = req.query;
+      const st = state2 ? consumeState(state2) : null;
       if (error) return go(`error=${error === "access_denied" ? "denied" : "org_blocked"}`);
       if (!st || !code) return go("error=denied");
       const ctx = rt.ctx(st.workspace);
@@ -9378,9 +9598,9 @@ function createApp(rt, hosted) {
       go(`error=${e instanceof CalendarError ? e.code : "unavailable"}`);
     }
   });
-  app.put("/api/calendar/calendars", h((ctx, req) => setCalendars(ctx, z3.object({ calendars: z3.array(z3.object({ id: z3.string(), selected: z3.boolean().optional(), label: z3.string().optional(), detectAcademic: z3.boolean().optional(), countsBusy: z3.boolean().optional(), allDayBusy: z3.boolean().optional() })) }).parse(req.body).calendars)));
+  app.put("/api/calendar/calendars", h((ctx, req) => setCalendars(ctx, z4.object({ calendars: z4.array(z4.object({ id: z4.string(), selected: z4.boolean().optional(), label: z4.string().optional(), detectAcademic: z4.boolean().optional(), countsBusy: z4.boolean().optional(), allDayBusy: z4.boolean().optional() })) }).parse(req.body).calendars)));
   app.post("/api/calendar/sync", h((ctx) => syncNow(ctx)));
-  app.post("/api/calendar/disconnect", h((ctx, req) => disconnect(ctx, z3.object({ deleteImported: z3.boolean(), keepItems: z3.boolean().default(true) }).parse(req.body))));
+  app.post("/api/calendar/disconnect", h((ctx, req) => disconnect(ctx, z4.object({ deleteImported: z4.boolean(), keepItems: z4.boolean().default(true) }).parse(req.body))));
   app.post("/api/calendar/changes/seen", h((ctx) => markChangesSeen(ctx)));
   app.get("/api/status", h((ctx) => {
     const c = connectionStatus(ctx);
@@ -9432,10 +9652,10 @@ function createApp(rt, hosted) {
     }
     return { level, results, ai: aiInfo(ctx) };
   }));
-  const Span = z3.object({ start: z3.number().int(), end: z3.number().int(), category: z3.string().optional(), note: z3.string().max(5e3).optional() });
+  const Span = z4.object({ start: z4.number().int(), end: z4.number().int(), category: z4.string().optional(), note: z4.string().max(5e3).optional() });
   app.get("/api/readings", h((ctx) => ({ readings: listReadings(ctx), categories: CATEGORIES.map((c) => ({ id: c, label: CATEGORY_LABEL[c] })), subjects: listSubjects(ctx) })));
   app.post("/api/readings", h((ctx, req) => {
-    const b = z3.object({ subjectId: z3.string().optional(), subjectName: z3.string().max(80).optional(), title: z3.string().max(120).optional(), text: z3.string() }).parse(req.body);
+    const b = z4.object({ subjectId: z4.string().optional(), subjectName: z4.string().max(80).optional(), title: z4.string().max(120).optional(), text: z4.string() }).parse(req.body);
     let subjectId = b.subjectId;
     if (!subjectId) {
       if (!b.subjectName?.trim()) throw new HttpError(400, "invalid", "Choose a subject or name a new one.");
@@ -9444,63 +9664,76 @@ function createApp(rt, hosted) {
     return addSource(ctx, subjectId, { title: b.title, kind: "passage", text: b.text, origin: "pasted reading" });
   }));
   app.get("/api/readings/:id", h((ctx, req) => getReading(ctx, req.params.id)));
-  app.put("/api/readings/:id/prompt", h((ctx, req) => setPrompt(ctx, req.params.id, z3.object({ kind: z3.enum(["prompt", "rubric"]), text: z3.string() }).parse(req.body))));
+  app.put("/api/readings/:id/prompt", h((ctx, req) => setPrompt(ctx, req.params.id, z4.object({ kind: z4.enum(["prompt", "rubric"]), text: z4.string() }).parse(req.body))));
   app.delete("/api/readings/:id/prompt", h((ctx, req) => setPrompt(ctx, req.params.id, null)));
   app.post("/api/readings/:id/annotations", h((ctx, req) => createAnnotation(ctx, req.params.id, Span.parse(req.body))));
-  app.patch("/api/readings/:id/annotations/:aid", h((ctx, req) => updateAnnotation(ctx, req.params.id, req.params.aid, z3.object({ category: z3.string().optional(), note: z3.string().max(5e3).optional() }).parse(req.body))));
+  app.patch("/api/readings/:id/annotations/:aid", h((ctx, req) => updateAnnotation(ctx, req.params.id, req.params.aid, z4.object({ category: z4.string().optional(), note: z4.string().max(5e3).optional() }).parse(req.body))));
   app.delete("/api/readings/:id/annotations/:aid", h((ctx, req) => deleteAnnotation(ctx, req.params.id, req.params.aid)));
-  app.post("/api/readings/:id/annotations/:aid/assist", h((ctx, req) => assist(ctx, req.params.id, req.params.aid, z3.object({ kind: z3.string(), term: z3.string().optional() }).parse(req.body))));
+  app.post("/api/readings/:id/annotations/:aid/assist", h((ctx, req) => assist(ctx, req.params.id, req.params.aid, z4.object({ kind: z4.string(), term: z4.string().optional() }).parse(req.body))));
   app.post("/api/readings/:id/annotations/:aid/feedback", h((ctx, req) => feedback(ctx, req.params.id, req.params.aid)));
   app.delete("/api/readings/:id/annotations/:aid/assists/:xid", h((ctx, req) => deleteAssist(ctx, req.params.id, req.params.aid, req.params.xid)));
-  app.post("/api/readings/:id/study", h((ctx, req) => makeStudyItems(ctx, req.params.id, z3.object({ annotationIds: z3.array(z3.string()).max(40), kinds: z3.array(z3.string()).max(5) }).parse(req.body))));
-  app.post("/api/readings/:id/study/start", h((ctx, req) => startReadingSession(ctx, req.params.id, z3.object({ minutes: z3.number().optional(), abandonExisting: z3.boolean().optional() }).parse(req.body ?? {}))));
-  app.post("/api/readings/:id/outlines", h((ctx, req) => makeOutline(ctx, req.params.id, z3.object({ annotationIds: z3.array(z3.string()).max(60), title: z3.string().optional() }).parse(req.body))));
+  app.post("/api/readings/:id/study", h((ctx, req) => makeStudyItems(ctx, req.params.id, z4.object({ annotationIds: z4.array(z4.string()).max(40), kinds: z4.array(z4.string()).max(5) }).parse(req.body))));
+  app.post("/api/readings/:id/study/start", h((ctx, req) => startReadingSession(ctx, req.params.id, z4.object({ minutes: z4.number().optional(), abandonExisting: z4.boolean().optional() }).parse(req.body ?? {}))));
+  app.post("/api/readings/:id/outlines", h((ctx, req) => makeOutline(ctx, req.params.id, z4.object({ annotationIds: z4.array(z4.string()).max(60), title: z4.string().optional() }).parse(req.body))));
   app.post("/api/readings/:id/skip-today", h((ctx, req) => skipReadingToday(ctx, req.params.id)));
   app.get("/api/outlines/:id", h((ctx, req) => getOutline(ctx, req.params.id)));
-  app.patch("/api/outlines/:id", h((ctx, req) => updateOutline(ctx, req.params.id, z3.object({ title: z3.string().optional(), thesis: z3.string().optional(), claims: z3.record(z3.string(), z3.string()).optional() }).parse(req.body))));
+  app.patch("/api/outlines/:id", h((ctx, req) => updateOutline(ctx, req.params.id, z4.object({ title: z4.string().optional(), thesis: z4.string().optional(), claims: z4.record(z4.string(), z4.string()).optional() }).parse(req.body))));
   app.delete("/api/outlines/:id", h((ctx, req) => deleteOutline(ctx, req.params.id)));
   app.get("/api/chat/status", h((ctx) => chatStatus(ctx)));
   app.get("/api/chat/context", h((ctx, req) => contextPreview(ctx, { mode: String(req.query.mode ?? ""), q: String(req.query.q ?? ""), subjectId: req.query.subjectId, sourceId: req.query.sourceId })));
   app.get("/api/conversations", h((ctx, req) => ({ conversations: listConversations(ctx, req.query.mode) })));
-  app.post("/api/conversations", h((ctx, req) => createConversation(ctx, z3.object({ mode: z3.string(), subjectId: z3.string().nullable().optional(), sourceId: z3.string().nullable().optional() }).parse(req.body))));
+  app.post("/api/conversations", h((ctx, req) => createConversation(ctx, z4.object({ mode: z4.string(), subjectId: z4.string().nullable().optional(), sourceId: z4.string().nullable().optional() }).parse(req.body))));
   app.get("/api/conversations/:id", h((ctx, req) => getConversation(ctx, req.params.id)));
   app.delete("/api/conversations/:id", h((ctx, req) => deleteConversation(ctx, req.params.id)));
-  app.post("/api/conversations/:id/messages", h((ctx, req) => sendMessage(ctx, req.params.id, z3.object({ text: z3.string(), direct: z3.boolean().optional() }).parse(req.body))));
+  app.post("/api/conversations/:id/messages", h((ctx, req) => sendMessage(ctx, req.params.id, z4.object({ text: z4.string(), direct: z4.boolean().optional() }).parse(req.body))));
   app.get("/api/homework", h((ctx) => ({ homework: listHomework(ctx) })));
   app.get("/api/homework/next", h((ctx) => nextHomeworkTask(ctx)));
-  app.post("/api/homework", h((ctx, req) => createDraft(ctx, z3.object({ sourceId: z3.string(), title: z3.string().optional() }).parse(req.body))));
+  app.post("/api/homework", h((ctx, req) => createDraft(ctx, z4.object({ sourceId: z4.string(), title: z4.string().optional() }).parse(req.body))));
   app.get("/api/homework/:id", h((ctx, req) => getHomework(ctx, req.params.id)));
-  app.post("/api/homework/:id/confirm", h((ctx, req) => confirmHomework(ctx, req.params.id, z3.object({
-    title: z3.string().optional(),
-    subjectId: z3.string().optional(),
-    kind: z3.string().optional(),
-    dueDate: z3.string().nullable().optional(),
-    dueTime: z3.string().nullable().optional(),
-    estMin: z3.number().nullable().optional(),
-    plan: z3.string().optional(),
-    acknowledgeUnsplit: z3.boolean().optional(),
-    assessment: z3.boolean().optional(),
-    questions: z3.array(z3.object({ id: z3.string().optional(), label: z3.string().optional(), prompt: z3.string().optional(), remove: z3.boolean().optional() })).max(60).optional()
+  app.post("/api/homework/:id/confirm", h((ctx, req) => confirmHomework(ctx, req.params.id, z4.object({
+    title: z4.string().optional(),
+    subjectId: z4.string().optional(),
+    kind: z4.string().optional(),
+    dueDate: z4.string().nullable().optional(),
+    dueTime: z4.string().nullable().optional(),
+    estMin: z4.number().nullable().optional(),
+    plan: z4.string().optional(),
+    acknowledgeUnsplit: z4.boolean().optional(),
+    assessment: z4.boolean().optional(),
+    questions: z4.array(z4.object({ id: z4.string().optional(), label: z4.string().optional(), prompt: z4.string().optional(), remove: z4.boolean().optional() })).max(60).optional()
   }).parse(req.body))));
-  app.patch("/api/homework/:id", h((ctx, req) => updateHomework(ctx, req.params.id, z3.object({ title: z3.string().optional(), estMin: z3.number().nullable().optional(), prioritize: z3.boolean().optional(), kind: z3.string().optional() }).parse(req.body))));
+  app.patch("/api/homework/:id", h((ctx, req) => updateHomework(ctx, req.params.id, z4.object({ title: z4.string().optional(), estMin: z4.number().nullable().optional(), prioritize: z4.boolean().optional(), kind: z4.string().optional() }).parse(req.body))));
   app.post("/api/homework/:id/complete", h((ctx, req) => completeHomework(ctx, req.params.id, { force: bool(req.body?.force) })));
   app.post("/api/homework/:id/reopen", h((ctx, req) => reopenHomework(ctx, req.params.id)));
-  app.post("/api/homework/:id/assessment", h((ctx, req) => setAssessmentMode(ctx, req.params.id, z3.object({ on: z3.boolean() }).parse(req.body).on)));
-  app.put("/api/homework/:id/rubric", h((ctx, req) => setRubric(ctx, req.params.id, z3.object({ sourceId: z3.string().nullable() }).parse(req.body).sourceId)));
-  app.post("/api/homework/:id/time", h((ctx, req) => logTime(ctx, req.params.id, z3.object({ minutes: z3.number(), questionId: z3.string().optional() }).parse(req.body))));
+  app.post("/api/homework/:id/assessment", h((ctx, req) => setAssessmentMode(ctx, req.params.id, z4.object({ on: z4.boolean() }).parse(req.body).on)));
+  app.put("/api/homework/:id/rubric", h((ctx, req) => setRubric(ctx, req.params.id, z4.object({ sourceId: z4.string().nullable() }).parse(req.body).sourceId)));
+  app.post("/api/homework/:id/time", h((ctx, req) => logTime(ctx, req.params.id, z4.object({ minutes: z4.number(), questionId: z4.string().optional() }).parse(req.body))));
   app.delete("/api/homework/:id", h((ctx, req) => deleteHomework(ctx, req.params.id)));
-  app.patch("/api/homework/questions/:id", h((ctx, req) => updateQuestion(ctx, req.params.id, z3.object({ prompt: z3.string().optional(), label: z3.string().optional(), acknowledge: z3.boolean().optional(), estMin: z3.number().nullable().optional(), kind: z3.string().optional() }).parse(req.body))));
-  app.put("/api/homework/questions/:id/work", h((ctx, req) => saveWork(ctx, req.params.id, z3.object({ text: z3.string(), baseVersion: z3.number().int().optional(), origin: z3.enum(["typed", "pasted"]).optional() }).parse(req.body))));
-  app.post("/api/homework/questions/:id/work/photo", h((ctx, req) => useTranscribedWork(ctx, req.params.id, z3.object({ sourceId: z3.string() }).parse(req.body).sourceId)));
-  app.post("/api/homework/questions/:id/status", h((ctx, req) => setQuestionStatus(ctx, req.params.id, z3.object({ status: z3.string(), note: z3.string().optional() }).parse(req.body).status, req.body?.note)));
-  app.post("/api/homework/questions/:id/help", h((ctx, req) => help(ctx, req.params.id, z3.object({ action: z3.string(), level: z3.number().optional(), ask: z3.string().optional(), confirm: z3.boolean().optional() }).parse(req.body))));
+  app.patch("/api/homework/questions/:id", h((ctx, req) => updateQuestion(ctx, req.params.id, z4.object({ prompt: z4.string().optional(), label: z4.string().optional(), acknowledge: z4.boolean().optional(), estMin: z4.number().nullable().optional(), kind: z4.string().optional() }).parse(req.body))));
+  app.put("/api/homework/questions/:id/work", h((ctx, req) => saveWork(ctx, req.params.id, z4.object({ text: z4.string(), baseVersion: z4.number().int().optional(), origin: z4.enum(["typed", "pasted"]).optional() }).parse(req.body))));
+  app.post("/api/homework/questions/:id/work/photo", h((ctx, req) => useTranscribedWork(ctx, req.params.id, z4.object({ sourceId: z4.string() }).parse(req.body).sourceId)));
+  app.post("/api/homework/questions/:id/status", h((ctx, req) => setQuestionStatus(ctx, req.params.id, z4.object({ status: z4.string(), note: z4.string().optional() }).parse(req.body).status, req.body?.note)));
+  app.post("/api/homework/questions/:id/help", h((ctx, req) => help(ctx, req.params.id, z4.object({ action: z4.string(), level: z4.number().optional(), ask: z4.string().optional(), confirm: z4.boolean().optional() }).parse(req.body))));
   app.get("/api/homework/questions/:id/help", h((ctx, req) => ({ help: helpHistory(ctx, req.params.id) })));
   app.post("/api/homework/questions/:id/check", h((ctx, req) => check(ctx, req.params.id, { recheck: bool(req.body?.recheck) })));
   app.get("/api/homework/questions/:id/checks", h((ctx, req) => ({ checks: checkHistory(ctx, req.params.id) })));
   app.get("/api/homework/questions/:id/topics", h((ctx, req) => ({ suggestions: suggestConcepts(ctx, req.params.id) })));
-  app.put("/api/homework/questions/:id/topics", h((ctx, req) => setQuestionConcepts(ctx, req.params.id, z3.object({ conceptIds: z3.array(z3.string()).max(10).optional(), newTopic: z3.string().optional() }).parse(req.body))));
+  app.put("/api/homework/questions/:id/topics", h((ctx, req) => setQuestionConcepts(ctx, req.params.id, z4.object({ conceptIds: z4.array(z4.string()).max(10).optional(), newTopic: z4.string().optional() }).parse(req.body))));
   app.post("/api/homework/questions/:id/fresh-check", h((ctx, req) => requestFreshCheck(ctx, req.params.id)));
-  app.post("/api/homework/checks/:id/challenge", h((ctx, req) => challengeCheck(ctx, req.params.id, z3.object({ reason: z3.string(), note: z3.string().optional() }).parse(req.body))));
+  app.post("/api/homework/checks/:id/challenge", h((ctx, req) => challengeCheck(ctx, req.params.id, z4.object({ reason: z4.string(), note: z4.string().optional() }).parse(req.body))));
+  app.get("/api/myhelper/state", h((ctx) => state(ctx)));
+  app.post("/api/myhelper/tasks", h((ctx, req) => addTask(ctx, z4.object({ title: z4.string(), category: z4.string(), when: z4.string() }).parse(req.body))));
+  app.post("/api/myhelper/tasks/:id/done", h((ctx, req) => setTaskDone(ctx, req.params.id, z4.object({ done: z4.boolean() }).parse(req.body).done)));
+  app.delete("/api/myhelper/tasks/:id", h((ctx, req) => deleteTask(ctx, req.params.id)));
+  app.post("/api/myhelper/projects", h((ctx, req) => addProject(ctx, z4.object({ name: z4.string(), description: z4.string().optional() }).parse(req.body))));
+  app.patch("/api/myhelper/projects/:id", h((ctx, req) => updateProject(ctx, req.params.id, z4.object({ name: z4.string().optional(), description: z4.string().optional(), notes: z4.string().optional(), nextAction: z4.string().optional(), stage: z4.number().optional(), advance: z4.boolean().optional() }).parse(req.body))));
+  app.delete("/api/myhelper/projects/:id", h((ctx, req) => deleteProject(ctx, req.params.id)));
+  app.post("/api/myhelper/import/preview", h((ctx, req) => previewImport2(ctx, ImportPayload.parse(req.body?.payload))));
+  app.post("/api/myhelper/import", h((ctx, req) => {
+    if (req.body?.confirm !== true) throw new HttpError(400, "confirm_needed", "Review the preview and confirm the import first.");
+    return applyImport(ctx, ImportPayload.parse(req.body?.payload));
+  }));
+  app.post("/api/homework/from-item", h((ctx, req) => openFromItem(ctx, z4.object({ itemId: z4.string() }).parse(req.body).itemId)));
   const dist = resolve(process.cwd(), "dist");
   if (existsSync(join2(dist, "index.html"))) {
     app.use(express.static(dist, { setHeaders: (r) => r.setHeader("Cache-Control", "no-cache") }));
@@ -9551,28 +9784,29 @@ var init_app = __esm({
     init_items();
     init_calendar2();
     init_homework();
+    init_myhelper();
     init_calendarGoogle();
-    hhmm = z3.string().regex(/^\d{2}:\d{2}$/);
-    AvailabilitySchema = z3.object({
-      dailyLimitMin: z3.array(z3.number().int().min(0).max(600)).length(7),
+    hhmm = z4.string().regex(/^\d{2}:\d{2}$/);
+    AvailabilitySchema = z4.object({
+      dailyLimitMin: z4.array(z4.number().int().min(0).max(600)).length(7),
       preferredStart: hhmm,
       preferredEnd: hhmm,
       bedtime: hhmm,
-      windDownMin: z3.number().int().min(0).max(180),
-      bufferBeforeMin: z3.number().int().min(0).max(120),
-      bufferAfterMin: z3.number().int().min(0).max(120),
-      protected: z3.array(z3.object({ label: z3.string().max(40), days: z3.array(z3.number().int().min(0).max(6)).max(7), start: hhmm, end: hhmm })).max(12),
-      minBlockMin: z3.number().int().min(5).max(60),
-      maxBlockMin: z3.number().int().min(10).max(120),
-      breakMin: z3.number().int().min(0).max(30),
-      heavyDayBusyMin: z3.number().int().min(30).max(1e3),
-      heavyDayLimitMin: z3.number().int().min(0).max(300),
-      testPrepDays: z3.number().int().min(1).max(21),
-      defaultTestPrepMin: z3.number().int().min(10).max(1200),
-      defaultHomeworkMin: z3.number().int().min(5).max(600),
-      homeworkBufferDays: z3.number().int().min(0).max(7)
+      windDownMin: z4.number().int().min(0).max(180),
+      bufferBeforeMin: z4.number().int().min(0).max(120),
+      bufferAfterMin: z4.number().int().min(0).max(120),
+      protected: z4.array(z4.object({ label: z4.string().max(40), days: z4.array(z4.number().int().min(0).max(6)).max(7), start: hhmm, end: hhmm })).max(12),
+      minBlockMin: z4.number().int().min(5).max(60),
+      maxBlockMin: z4.number().int().min(10).max(120),
+      breakMin: z4.number().int().min(0).max(30),
+      heavyDayBusyMin: z4.number().int().min(30).max(1e3),
+      heavyDayLimitMin: z4.number().int().min(0).max(300),
+      testPrepDays: z4.number().int().min(1).max(21),
+      defaultTestPrepMin: z4.number().int().min(10).max(1200),
+      defaultHomeworkMin: z4.number().int().min(5).max(600),
+      homeworkBufferDays: z4.number().int().min(0).max(7)
     });
-    WeightsSchema = z3.object(Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, z3.number().min(0).max(10)])));
+    WeightsSchema = z4.object(Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, z4.number().min(0).max(10)])));
     UPLOAD_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp", "application/octet-stream"];
     isUploadRoute = (req) => req.method === "POST" && (/^\/api\/subjects\/[^/]+\/files$/.test(req.path) || /^\/api\/sources\/[^/]+\/replace$/.test(req.path));
     cancelOnClose = (res) => {
@@ -9586,28 +9820,188 @@ var init_app = __esm({
   }
 });
 
+// src/ai/groqCapacity.ts
+function parseDuration(s) {
+  if (!s) return null;
+  const re = /(\d+(?:\.\d+)?)(ms|h|m|s)/g;
+  let total = 0, any = false, m;
+  while (m = re.exec(s.trim())) {
+    any = true;
+    const n = Number(m[1]);
+    total += m[2] === "ms" ? n : m[2] === "s" ? n * 1e3 : m[2] === "m" ? n * 6e4 : n * 36e5;
+  }
+  return any ? Math.ceil(total) : null;
+}
+function waitWords(ms) {
+  const s = Math.max(1, Math.ceil(ms / 1e3));
+  if (s < 90) return `${s <= 5 ? 5 : Math.ceil(s / 5) * 5} seconds`;
+  const m = Math.ceil(s / 60);
+  if (m < 90) return `${m} minutes`;
+  return `${Math.ceil(m / 60)} hours`;
+}
+var DEFAULT_CAPACITY, MAX_COOLDOWN_MS, GroqCapacity, active2, setActiveCapacity, activeCapacity;
+var init_groqCapacity = __esm({
+  "src/ai/groqCapacity.ts"() {
+    "use strict";
+    init_provider();
+    DEFAULT_CAPACITY = { rpm: 24, tpm: 6e3, maxConcurrent: 2, maxWaitMs: 1e4 };
+    MAX_COOLDOWN_MS = 6 * 36e5;
+    GroqCapacity = class {
+      o;
+      now;
+      sleep;
+      cooldownUntil = 0;
+      cooldownDaily = false;
+      strikes = 0;
+      starts = [];
+      tokens = [];
+      running = 0;
+      lock = Promise.resolve();
+      seq = 0;
+      constructor(o = {}) {
+        this.o = { ...DEFAULT_CAPACITY, ...o };
+        this.now = this.o.now ?? Date.now;
+        this.sleep = this.o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+      }
+      snapshot() {
+        const wait = Math.max(0, this.cooldownUntil - this.now());
+        return { cooling: wait > 0, waitMs: wait, daily: wait > 0 && this.cooldownDaily, running: this.running, recentRequests: this.recent(this.starts.map((t) => ({ t }))).length };
+      }
+      recent(a) {
+        const cut = this.now() - 6e4;
+        return a.filter((x) => x.t > cut);
+      }
+      refuseCooling() {
+        const wait = Math.max(1e3, this.cooldownUntil - this.now());
+        throw new AIError("rate_limited", this.cooldownDaily ? `The study assistant\u2019s shared free allowance is used up for now. It should be back in about ${waitWords(wait)}. Your work is saved; practice, notes and reviews still work.` : `The study assistant is catching its breath because many requests arrived at once. Try again in about ${waitWords(wait)}. Your work is saved.`, wait, "not_sent");
+      }
+      /**
+       * Take a place or refuse. Callers wait in order (first come, first served) for at most `maxWaitMs`. `estTokens` is an estimate of input + output.
+       * The returned `done(actualTokens)` must be called exactly once when the request ends, whatever the outcome.
+       */
+      async acquire(estTokens) {
+        if (estTokens > this.o.tpm) throw new AIError("rejected", "That task is too large for the study assistant\u2019s per-minute allowance. Use a shorter excerpt. Nothing was sent.", void 0, "not_sent");
+        const entered = this.now();
+        const turn = this.lock;
+        let release;
+        this.lock = new Promise((r) => release = r);
+        try {
+          await turn;
+          for (; ; ) {
+            const t2 = this.now();
+            if (t2 - entered > this.o.maxWaitMs) throw new AIError("rate_limited", "The study assistant is busy with other requests. Try again in about 10 seconds. Your work is saved.", 1e4, "not_sent");
+            if (this.cooldownUntil > t2) this.refuseCooling();
+            this.starts = this.recent(this.starts.map((x) => ({ t: x }))).map((x) => x.t);
+            this.tokens = this.recent(this.tokens);
+            let wait = 0;
+            if (this.running >= this.o.maxConcurrent) wait = 250;
+            if (this.starts.length >= this.o.rpm) wait = Math.max(wait, this.starts[0] + 6e4 - t2 + 25);
+            const used = this.tokens.reduce((a, x) => a + x.n, 0);
+            if (used + estTokens > this.o.tpm) {
+              let free = used;
+              for (const x of this.tokens) {
+                free -= x.n;
+                if (free + estTokens <= this.o.tpm) {
+                  wait = Math.max(wait, x.t + 6e4 - t2 + 25);
+                  break;
+                }
+              }
+            }
+            if (wait <= 0) break;
+            if (t2 - entered + wait > this.o.maxWaitMs && wait > 1e3) throw new AIError("rate_limited", `The study assistant is at its per-minute limit. Try again in about ${waitWords(wait)}. Your work is saved.`, wait, "not_sent");
+            await this.sleep(Math.min(wait, 1e3));
+          }
+          const id = ++this.seq, t = this.now();
+          this.running++;
+          this.starts.push(t);
+          this.tokens.push({ t, n: estTokens, id });
+          let finished = false;
+          return { done: (actual) => {
+            if (finished) return;
+            finished = true;
+            this.running--;
+            if (typeof actual === "number" && actual >= 0) {
+              const e = this.tokens.find((x) => x.id === id);
+              if (e) e.n = actual;
+            }
+          } };
+        } finally {
+          release();
+        }
+      }
+      /** Rate headers on every response: stop early when the provider says nothing is left, before it has to refuse us. */
+      noteHeaders(h) {
+        const num2 = (k) => {
+          const v = h.get(k);
+          const n = v === null ? NaN : Number(v);
+          return Number.isFinite(n) ? n : null;
+        };
+        const remReq = num2("x-ratelimit-remaining-requests"), remTok = num2("x-ratelimit-remaining-tokens");
+        if (remReq !== null && remReq <= 0) this.cool(parseDuration(h.get("x-ratelimit-reset-requests")) ?? 5e3, false, false);
+        else if (remTok !== null && remTok <= 200) this.cool(Math.min(parseDuration(h.get("x-ratelimit-reset-tokens")) ?? 5e3, 6e4), false, false);
+      }
+      /** A refusal (429): remember it for everyone. `retryAfterMs` comes from the provider when it says; otherwise back off 10 s, doubling up to 2 minutes (a long daily wait is kept as given). */
+      rateLimited(retryAfterMs, daily) {
+        this.strikes++;
+        const wait = Math.min(MAX_COOLDOWN_MS, Math.max(1e3, retryAfterMs ?? Math.min(12e4, 1e4 * 2 ** (this.strikes - 1))));
+        this.cool(wait, daily, true);
+        return wait;
+      }
+      /** A provider outage (5xx) or an unreadable answer: pause briefly instead of sending the next student's request into the same failure. */
+      serverError() {
+        this.strikes++;
+        const wait = Math.min(6e4, 5e3 * 2 ** Math.min(this.strikes - 1, 4));
+        this.cool(wait, false, true);
+        return wait;
+      }
+      success() {
+        this.strikes = 0;
+      }
+      cool(ms, daily, _force) {
+        const until = this.now() + ms;
+        if (until > this.cooldownUntil) {
+          this.cooldownUntil = until;
+          this.cooldownDaily = daily;
+        } else if (daily) this.cooldownDaily = true;
+      }
+    };
+    active2 = null;
+    setActiveCapacity = (c) => {
+      active2 = c;
+    };
+    activeCapacity = () => active2;
+  }
+});
+
 // src/ai/groq.ts
-var GROQ_DEFAULT_MODEL, GroqTransport;
+var GROQ_DEFAULT_MODEL, estimateTokens, GroqTransport;
 var init_groq = __esm({
   "src/ai/groq.ts"() {
     "use strict";
     init_provider();
     init_llm();
+    init_groqCapacity();
     GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b";
+    estimateTokens = (req) => Math.ceil((Buffer.byteLength(req.system) + Buffer.byteLength(req.user)) / 3) + Math.min(req.maxTokens, 1500);
     GroqTransport = class {
-      constructor(apiKey, defaultModel, fetchImpl = fetch) {
+      constructor(apiKey, defaultModel, fetchImpl = fetch, capacity = {}) {
         this.apiKey = apiKey;
         this.defaultModel = defaultModel;
         this.fetchImpl = fetchImpl;
         this.credentialFingerprint = credentialFingerprint("groq", apiKey, "https://api.groq.com");
+        this.capacity = capacity instanceof GroqCapacity ? capacity : new GroqCapacity(capacity);
+        setActiveCapacity(this.capacity);
       }
       apiKey;
       defaultModel;
       fetchImpl;
       provider = "groq";
       credentialFingerprint;
+      capacity;
       async complete(req) {
         if (req.attachments?.length) throw new AIError("rejected", "Groq is not configured to read images or PDFs here. Nothing was sent.", void 0, "not_sent");
+        const slot = await this.capacity.acquire(estimateTokens(req));
+        let actual = null;
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), req.timeoutMs);
         const model = req.model || this.defaultModel;
@@ -9618,21 +10012,43 @@ var init_groq = __esm({
             headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
             body: JSON.stringify({ model, max_completion_tokens: req.maxTokens, temperature: 0.2, response_format: { type: "json_object" }, messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] })
           });
-          if (res.status === 429) {
-            const ra = Number(res.headers.get("retry-after"));
-            throw new AIError("rate_limited", "The AI service is busy (rate limited). Try again in a moment.", Number.isFinite(ra) && ra > 0 ? ra * 1e3 : 15e3, "none_reported");
+          this.capacity.noteHeaders(res.headers);
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            let msg = "", code = "";
+            try {
+              const j2 = JSON.parse(body);
+              msg = String(j2?.error?.message ?? "");
+              code = String(j2?.error?.code ?? "");
+            } catch {
+            }
+            if (res.status === 429) {
+              const header = Number(res.headers.get("retry-after"));
+              const wait = Number.isFinite(header) && header > 0 ? header * 1e3 : parseDuration(msg.match(/try again in ([0-9hms.]+)/i)?.[1]);
+              const daily = /per day|\(TPD\)|\(RPD\)/i.test(msg);
+              const ms = this.capacity.rateLimited(wait, daily);
+              throw new AIError("rate_limited", daily ? `The study assistant\u2019s shared free allowance is used up for now. It should be back in about ${waitWords(ms)}. Your work is saved; practice, notes and reviews still work.` : `The study assistant is busy. Try again in about ${waitWords(ms)}. Your work is saved.`, ms, "none_reported");
+            }
+            if (res.status === 413) throw new AIError("rejected", "That task is too large for the study assistant\u2019s free allowance. Use a shorter excerpt.", void 0, "none_reported");
+            if (res.status === 400 && code === "json_validate_failed") return { text: "", model, stopReason: "stop", requestId: res.headers.get("x-request-id"), usage: null };
+            if (res.status === 401 || res.status === 403) throw new AIError("not_configured", "The AI provider rejected the API key.", void 0, "none_reported");
+            if (res.status >= 500) {
+              this.capacity.serverError();
+              throw new AIError("unavailable", "The AI service is temporarily unavailable. Your work is saved; try again in a minute.", 6e4, "none_reported");
+            }
+            throw new AIError("rejected", `The AI service rejected the request (${res.status}).`, void 0, "none_reported");
           }
-          if (res.status === 401 || res.status === 403) throw new AIError("not_configured", "The AI provider rejected the API key.", void 0, "none_reported");
-          if (res.status >= 500) throw new AIError("unavailable", "The AI service is temporarily unavailable.", void 0, "none_reported");
-          if (!res.ok) throw new AIError("rejected", `The AI service rejected the request (${res.status}).`, void 0, "none_reported");
           let j;
           try {
             j = await res.json();
           } catch {
+            this.capacity.serverError();
             throw new AIError("malformed", "The AI service sent an unreadable response.", void 0, "unknown");
           }
+          this.capacity.success();
           const c = j.choices?.[0];
           const u = j.usage;
+          if (u && typeof u.prompt_tokens === "number") actual = u.prompt_tokens + (u.completion_tokens ?? 0);
           return {
             text: c?.message?.content ?? "",
             model: j.model ?? model,
@@ -9643,9 +10059,11 @@ var init_groq = __esm({
         } catch (e) {
           if (e instanceof AIError) throw e;
           const f = classifyFetchFailure(e);
+          if (f.code === "unavailable") this.capacity.serverError();
           throw new AIError(f.code, f.message, void 0, f.billing);
         } finally {
           clearTimeout(timer);
+          slot.done(actual);
         }
       }
     };
@@ -9662,7 +10080,7 @@ function buildProvider(cfg2) {
   for (const k of ["extract", "generate", "grade"]) tasks[k] = { ...DEFAULT_TASKS[k], ...cfg2.aiTasks[k] };
   if (cfg2.aiProvider === "groq") {
     if (!cfg2.groqKey) return null;
-    return new LLMProvider(new GroqTransport(cfg2.groqKey, cfg2.groqModel ?? GROQ_DEFAULT_MODEL), { timeoutMs: cfg2.aiTimeoutMs, tasks });
+    return new LLMProvider(new GroqTransport(cfg2.groqKey, cfg2.groqModel ?? GROQ_DEFAULT_MODEL, void 0, cfg2.groqCapacity), { timeoutMs: cfg2.aiTimeoutMs, tasks });
   }
   if (!cfg2.anthropicKey) return null;
   return new LLMProvider(new AnthropicTransport(cfg2.anthropicKey, cfg2.model, fetch, cfg2.anthropicBaseUrl), { timeoutMs: cfg2.aiTimeoutMs, tasks, ocr: cfg2.ocr.enabled ? { model: cfg2.ocr.model ?? void 0, maxOutputTokens: cfg2.ocr.maxOutputTokens } : void 0 });
@@ -10181,6 +10599,9 @@ async function getSettingPg(pool, key2, fallback) {
   const r = await pool.query("SELECT value FROM app_settings WHERE key = $1", [key2]);
   return r.rows.length ? r.rows[0].value : fallback;
 }
+async function setSettingPg(pool, key2, value) {
+  await pool.query("INSERT INTO app_settings (key, value, updated_at) VALUES ($1,$2,now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()", [key2, JSON.stringify(value)]);
+}
 var here2;
 var init_pg = __esm({
   "src/server/hosted/pg.ts"() {
@@ -10204,13 +10625,13 @@ __export(limits_exports, {
   spendReport: () => spendReport
 });
 import { randomUUID as randomUUID3 } from "node:crypto";
-async function assistantState(pool, userId, limits, now) {
+async function assistantState(pool, userId, limits, now, cooldownMs = 0) {
   const since = new Date(now - DAY_MS2);
-  const mine = (await pool.query("SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held FROM ai_requests WHERE user_id = $1 AND created_at > $2", [userId, since])).rows[0];
-  const all = (await pool.query("SELECT COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held FROM ai_requests WHERE created_at > $1", [since])).rows[0];
-  const globalPaused = limits.globalDailyUsd - all.held < MIN_REQUEST_USD;
-  const userPaused = mine.n >= limits.userDailyRequests || limits.userDailyUsd - mine.held < MIN_REQUEST_USD;
-  return { state: globalPaused ? "paused_global" : userPaused ? "paused_user" : "available", usedRequests: mine.n, dailyRequests: limits.userDailyRequests };
+  const mine = (await pool.query(`SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, ${TOKENS_SQL} AS tokens FROM ai_requests WHERE user_id = $1 AND created_at > $2`, [userId, since])).rows[0];
+  const all = (await pool.query(`SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, ${TOKENS_SQL} AS tokens FROM ai_requests WHERE created_at > $1`, [since])).rows[0];
+  const globalPaused = limits.globalDailyUsd - all.held < MIN_REQUEST_USD || limits.globalDailyRequests > 0 && all.n >= limits.globalDailyRequests || limits.globalDailyTokens > 0 && all.tokens + ASSUMED_TOKENS > limits.globalDailyTokens;
+  const userPaused = mine.n >= limits.userDailyRequests || limits.userDailyUsd - mine.held < MIN_REQUEST_USD || limits.userDailyTokens > 0 && mine.tokens + ASSUMED_TOKENS > limits.userDailyTokens;
+  return { state: globalPaused ? "paused_global" : userPaused ? "paused_user" : cooldownMs > 0 ? "cooling" : "available", usedRequests: mine.n, dailyRequests: limits.userDailyRequests, waitMs: cooldownMs > 0 ? cooldownMs : null };
 }
 async function spendReport(pool, now) {
   const since = new Date(now - DAY_MS2);
@@ -10235,7 +10656,7 @@ async function refundQuota(pool, userId, kind, o) {
   const day = new Date(o.now).toISOString().slice(0, 10);
   await pool.query("UPDATE usage_counters SET n = GREATEST(n - 1, 0), bytes = GREATEST(bytes - $4, 0) WHERE user_id = $1 AND day = $2 AND kind = $3", [userId, day, kind, Math.max(0, Math.floor(o.bytes ?? 0))]);
 }
-var DEFAULT_LIMITS, DAY_MS2, LOCK_LEDGER, MIN_REQUEST_USD, MSG, PgLedger, Gate, RateLimiter;
+var DEFAULT_LIMITS, DAY_MS2, LOCK_LEDGER, MIN_REQUEST_USD, ASSUMED_TOKENS, TOKENS_SQL, MSG, PgLedger, Gate, RateLimiter;
 var init_limits = __esm({
   "src/server/hosted/limits.ts"() {
     "use strict";
@@ -10248,6 +10669,9 @@ var init_limits = __esm({
       userDailyRequests: 60,
       userDailyUsd: 0.3,
       globalDailyUsd: 5,
+      globalDailyRequests: 0,
+      globalDailyTokens: 0,
+      userDailyTokens: 0,
       userConcurrentAi: 2,
       globalConcurrentAi: 6,
       userDailyUploads: 12,
@@ -10262,10 +10686,14 @@ var init_limits = __esm({
     DAY_MS2 = 864e5;
     LOCK_LEDGER = 727002;
     MIN_REQUEST_USD = 0.01;
+    ASSUMED_TOKENS = 3e3;
+    TOKENS_SQL = `COALESCE(SUM(CASE WHEN status = 'settled' AND input_tokens IS NOT NULL THEN COALESCE(input_tokens,0) + COALESCE(output_tokens,0) WHEN status IN ('reserved','abandoned') OR billing = 'unknown' THEN ${ASSUMED_TOKENS} ELSE 0 END),0)::int`;
     MSG = {
       userRequests: "You have used today\u2019s study-assistant allowance. Everything else keeps working, and it resets within 24 hours.",
       userBudget: "You have used today\u2019s study-assistant allowance. Everything else keeps working, and it resets within 24 hours.",
       global: "The study assistant is paused for everyone for now to keep costs under control. Practice, notes and reviews still work; try again later.",
+      sharedAllowance: "The study assistant\u2019s shared free allowance for today is used up. Practice, notes and reviews still work, your work is saved, and it should be back within 24 hours.",
+      userTokens: "You have used your share of today\u2019s study-assistant allowance so that everyone gets some. Everything else keeps working, and it resets within 24 hours.",
       off: "The study assistant is switched off for now. Practice, notes and reviews still work.",
       busy: "Your study assistant is already working on other requests. Wait a moment and try again.",
       busyGlobal: "The study assistant is busy right now. Try again in a minute."
@@ -10295,8 +10723,17 @@ var init_limits = __esm({
           await c.query("UPDATE ai_requests SET status = 'abandoned', unknown_usd = worst_usd, reserved_usd = 0, outcome = 'abandoned', billing = 'unknown' WHERE status = 'reserved' AND created_at < $1", [new Date(now.getTime() - L.reservationTtlMs)]);
           const since = new Date(now.getTime() - DAY_MS2);
           const mine = (await c.query("SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, COUNT(*) FILTER (WHERE status = 'reserved')::int inflight FROM ai_requests WHERE user_id = $1 AND created_at > $2", [this.userId, since])).rows[0];
-          const all = (await c.query("SELECT COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, COUNT(*) FILTER (WHERE status = 'reserved')::int inflight FROM ai_requests WHERE created_at > $1", [since])).rows[0];
+          const all = (await c.query("SELECT COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, COUNT(*)::int n, COUNT(*) FILTER (WHERE status = 'reserved')::int inflight FROM ai_requests WHERE created_at > $1", [since])).rows[0];
           if (all.held + worst > L.globalDailyUsd) throw new AIError("budget_reached", MSG.global);
+          if (L.globalDailyRequests > 0 && all.n >= L.globalDailyRequests) throw new AIError("limit_reached", MSG.sharedAllowance);
+          if (L.globalDailyTokens > 0 || L.userDailyTokens > 0) {
+            const tk = (await c.query(`SELECT ${TOKENS_SQL} AS global, COALESCE(SUM(CASE WHEN user_id = $2 THEN 1 ELSE 0 END),0)::int AS mine_n FROM ai_requests WHERE created_at > $1`, [since, this.userId])).rows[0];
+            if (L.globalDailyTokens > 0 && tk.global + ASSUMED_TOKENS > L.globalDailyTokens) throw new AIError("limit_reached", MSG.sharedAllowance);
+            if (L.userDailyTokens > 0) {
+              const mineTok = (await c.query(`SELECT ${TOKENS_SQL} AS n FROM ai_requests WHERE created_at > $1 AND user_id = $2`, [since, this.userId])).rows[0].n;
+              if (mineTok + ASSUMED_TOKENS > L.userDailyTokens) throw new AIError("limit_reached", MSG.userTokens);
+            }
+          }
           if (all.inflight >= L.globalConcurrentAi) throw new AIError("rate_limited", MSG.busyGlobal, 3e3);
           if (mine.n >= L.userDailyRequests) throw new AIError("limit_reached", MSG.userRequests);
           if (mine.held + worst > L.userDailyUsd) throw new AIError("budget_reached", MSG.userBudget);
@@ -10405,7 +10842,8 @@ function hostedConfigFromEnv(env = process.env) {
   };
   const environment = g("APP_ENV") ?? (env.NODE_ENV === "production" ? "production" : "test");
   const problems = [];
-  const publicUrl = (g("PUBLIC_URL") ?? g("RENDER_EXTERNAL_URL") ?? "").replace(/\/+$/, "");
+  const ownerEnabled = g("OWNER_ONLY") === "1";
+  const publicUrl = (g("PUBLIC_URL") ?? (g("RAILWAY_PUBLIC_DOMAIN") ? `https://${g("RAILWAY_PUBLIC_DOMAIN")}` : "")).replace(/\/+$/, "");
   const authSecret = g("BETTER_AUTH_SECRET") ?? "";
   if (!["production", "staging", "test"].includes(environment)) problems.push("APP_ENV must be production, staging or test.");
   if (!g("DATABASE_URL")) problems.push("DATABASE_URL is required in hosted mode.");
@@ -10420,7 +10858,7 @@ function hostedConfigFromEnv(env = process.env) {
   if (!g("APP_SECRET") || g("APP_SECRET").length < 32) problems.push("APP_SECRET must be at least 32 random characters (it protects stored Calendar tokens).");
   if (g("APP_SECRET") && g("APP_SECRET") === authSecret) problems.push("APP_SECRET and BETTER_AUTH_SECRET must be different values.");
   const clientId = g("AUTH_OIDC_CLIENT_ID") ?? g("GOOGLE_CLIENT_ID"), clientSecret = g("AUTH_OIDC_CLIENT_SECRET") ?? g("GOOGLE_CLIENT_SECRET");
-  const oidc = clientId && clientSecret ? {
+  const oidc = !ownerEnabled && clientId && clientSecret ? {
     providerId: g("AUTH_OIDC_PROVIDER_ID") ?? "google",
     clientId,
     clientSecret,
@@ -10429,13 +10867,19 @@ function hostedConfigFromEnv(env = process.env) {
     userInfoUrl: g("AUTH_OIDC_USERINFO_URL") ?? GOOGLE.userInfoUrl,
     scopes: ["openid", "email"]
   } : null;
-  const passwordSignIn = g("AUTH_PASSWORD") === "1";
-  const guestEnabled = g("AUTH_GUESTS") === "1";
-  if (!oidc && !passwordSignIn && !guestEnabled) problems.push("Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.");
-  if (environment === "production" && passwordSignIn && g("AUTH_PASSWORD_ALLOW_IN_PRODUCTION") !== "1") problems.push("AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).");
+  const ownerEmail = (g("OWNER_EMAIL") ?? "").toLowerCase(), ownerPassword = g("OWNER_PASSWORD");
+  const passwordSignIn = ownerEnabled ? true : g("AUTH_PASSWORD") === "1";
+  const guestEnabled = ownerEnabled ? false : g("AUTH_GUESTS") === "1";
+  if (ownerEnabled) {
+    if (g("AUTH_GUESTS") === "1") problems.push("OWNER_ONLY=1 cannot be combined with AUTH_GUESTS=1: an owner-only site has no guest entry.");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ownerEmail)) problems.push("OWNER_EMAIL must be the email address you sign in with.");
+    if (ownerPassword !== null && ownerPassword.length < 12) problems.push("OWNER_PASSWORD must be at least 12 characters.");
+  }
+  if (!ownerEnabled && !oidc && !passwordSignIn && !guestEnabled) problems.push("Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.");
+  if (!ownerEnabled && environment === "production" && passwordSignIn && g("AUTH_PASSWORD_ALLOW_IN_PRODUCTION") !== "1") problems.push("AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).");
   const dataLabel = g("DATA_LABEL") ?? environment;
   const operator = { name: g("OPERATOR_NAME") ?? "", contact: g("OPERATOR_CONTACT") ?? "" };
-  if (environment === "production" && (!operator.name || !operator.contact)) problems.push("OPERATOR_NAME and OPERATOR_CONTACT are required in production: the privacy notice must say who runs the site and how to reach them.");
+  if (!ownerEnabled && environment === "production" && (!operator.name || !operator.contact)) problems.push("OPERATOR_NAME and OPERATOR_CONTACT are required in production: the privacy notice must say who runs the site and how to reach them.");
   const limits = {
     ...DEFAULT_LIMITS,
     userDailyRequests: num2("LIMIT_USER_DAILY_AI_REQUESTS", DEFAULT_LIMITS.userDailyRequests),
@@ -10448,9 +10892,12 @@ function hostedConfigFromEnv(env = process.env) {
     userStorageMb: num2("LIMIT_USER_STORAGE_MB", DEFAULT_LIMITS.userStorageMb),
     userDailyChat: num2("LIMIT_USER_DAILY_CHAT", DEFAULT_LIMITS.userDailyChat),
     userDailyExtractions: num2("LIMIT_USER_DAILY_EXTRACTIONS", DEFAULT_LIMITS.userDailyExtractions),
-    globalConcurrentExtractions: num2("LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS", DEFAULT_LIMITS.globalConcurrentExtractions)
+    globalConcurrentExtractions: num2("LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS", DEFAULT_LIMITS.globalConcurrentExtractions),
+    globalDailyRequests: num2("LIMIT_GLOBAL_DAILY_AI_REQUESTS", DEFAULT_LIMITS.globalDailyRequests),
+    globalDailyTokens: num2("LIMIT_GLOBAL_DAILY_TOKENS", DEFAULT_LIMITS.globalDailyTokens),
+    userDailyTokens: num2("LIMIT_USER_DAILY_TOKENS", DEFAULT_LIMITS.userDailyTokens)
   };
-  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", ownerEnabled ? 30 : 7), owner: { enabled: ownerEnabled, email: ownerEmail, password: ownerPassword, name: (g("OWNER_NAME") ?? "Jeremy").slice(0, 40) }, dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 var GOOGLE;
 var init_config = __esm({
@@ -10462,7 +10909,25 @@ var init_config = __esm({
 });
 
 // src/server/hosted/invites.ts
-import { createHash as createHash7, randomInt } from "node:crypto";
+import { createHash as createHash8, randomInt } from "node:crypto";
+function newCode() {
+  const c = Array.from({ length: 16 }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
+  return `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8, 12)}-${c.slice(12)}`;
+}
+async function createInvites(pool, o) {
+  const count = Math.max(1, Math.min(200, Math.floor(o.count)));
+  const ttl = Math.max(1, Math.min(60, Math.floor(o.ttlDays ?? 7)));
+  const codes = [];
+  await tx(pool, async (c) => {
+    for (let i = 0; i < count; i++) {
+      const code = newCode();
+      codes.push(code);
+      await c.query("INSERT INTO invites (code_hash, label, created_at, expires_at) VALUES ($1,$2,$3,$4)", [hashCode(code), (o.label ?? "").slice(0, 60), new Date(o.now), new Date(o.now + ttl * 864e5)]);
+    }
+  });
+  await audit(pool, "invites_created", null, { count, ttlDays: ttl, label: (o.label ?? "").slice(0, 60) });
+  return codes;
+}
 async function checkInvite(pool, code, now) {
   if (!looksLikeCode(code)) return { valid: false, reason: "unknown" };
   const r = (await pool.query("SELECT expires_at, claimed_at, used_at, revoked_at FROM invites WHERE code_hash = $1", [hashCode(code)])).rows[0];
@@ -10486,20 +10951,35 @@ async function finishInvite(pool, inviteId, userId, now) {
   await pool.query("UPDATE invites SET used_at = $2, used_by = $3 WHERE id = $1", [inviteId, new Date(now), userId]);
   await audit(pool, "invite_used", userId, { inviteId });
 }
+async function listInvites(pool, now) {
+  return (await pool.query("SELECT id, label, created_at, expires_at, used_at, revoked_at, claimed_at FROM invites ORDER BY created_at DESC LIMIT 500")).rows.map((r) => ({
+    id: String(r.id).slice(0, 8),
+    label: r.label,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+    status: r.revoked_at ? "revoked" : r.used_at ? "used" : r.expires_at.getTime() <= now ? "expired" : "open"
+  }));
+}
+async function revokeInvites(pool, o) {
+  const r = await pool.query("UPDATE invites SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL AND (($1::text IS NOT NULL AND id::text LIKE $1 || '%') OR ($2::text IS NOT NULL AND label = $2))", [o.idPrefix ?? null, o.label ?? null]);
+  await audit(pool, "invites_revoked", null, { count: r.rowCount });
+  return r.rowCount ?? 0;
+}
 async function admissionOpen(pool) {
   if (!await getSettingPg(pool, "pilot_enabled", false) || !await getSettingPg(pool, "signups_open", true)) return { open: false, reason: "paused" };
   const max = await getSettingPg(pool, "pilot_max_users", 30);
   const n = (await pool.query('SELECT COUNT(*)::int n FROM "user"')).rows[0].n;
   return n >= max ? { open: false, reason: "full" } : { open: true };
 }
-var CLAIM_TTL_MS, normalizeCode, hashCode, looksLikeCode;
+var ALPHABET, CLAIM_TTL_MS, normalizeCode, hashCode, looksLikeCode;
 var init_invites = __esm({
   "src/server/hosted/invites.ts"() {
     "use strict";
     init_pg();
+    ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     CLAIM_TTL_MS = 3 * 6e4;
     normalizeCode = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    hashCode = (s) => createHash7("sha256").update(`study-helper-invite:${normalizeCode(s)}`).digest("hex");
+    hashCode = (s) => createHash8("sha256").update(`study-helper-invite:${normalizeCode(s)}`).digest("hex");
     looksLikeCode = (s) => /^[A-HJ-NP-Z2-9]{16}$/.test(normalizeCode(s));
   }
 });
@@ -10548,7 +11028,7 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
     baseURL: cfg2.publicUrl,
     basePath: "/api/auth",
     trustedOrigins: [cfg2.publicUrl],
-    emailAndPassword: { enabled: cfg2.passwordSignIn, minPasswordLength: 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
+    emailAndPassword: { enabled: cfg2.passwordSignIn, disableSignUp: cfg2.owner.enabled, minPasswordLength: cfg2.owner.enabled ? 12 : 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
     account: { accountLinking: { enabled: false } },
     session: { expiresIn: cfg2.sessionDays * 86400, updateAge: 86400, cookieCache: { enabled: false } },
     advanced: { useSecureCookies: secure, cookiePrefix: "sh", defaultCookieAttributes: { httpOnly: true, sameSite: "lax", secure }, ipAddress: { ipAddressHeaders: ["x-forwarded-for"] }, disableCSRFCheck: false },
@@ -10557,9 +11037,10 @@ function createAuth(pool, cfg2, now = Date.now, authPool = pool) {
       validateUserInfo: async ({ source }, ctx) => {
         if (source.action === "link-account") return { error: "linking_disabled", errorDescription: "Linking sign-in methods is not supported." };
         if (source.action !== "create-user") return;
+        if (cfg2.owner.enabled) return { error: "registration_closed", errorDescription: "This site has one owner and does not create accounts." };
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
-        if (source.method === "anonymous") return cfg2.guestEnabled ? void 0 : { error: "guest_disabled", errorDescription: "Guest entry is disabled." };
+        if (source.method === "anonymous" && !cfg2.guestEnabled) return { error: "guest_disabled", errorDescription: "Guest entry is disabled." };
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
@@ -10602,6 +11083,115 @@ var init_auth = __esm({
   }
 });
 
+// src/server/hosted/operator.ts
+import { timingSafeEqual } from "node:crypto";
+import express2 from "express";
+import { z as z5 } from "zod";
+function mountOperator(app, o) {
+  const guesses = new RateLimiter(10, 6e4, o.now);
+  const same2 = (a, b) => {
+    const x = Buffer.from(a), y = Buffer.from(b);
+    return x.length === y.length && timingSafeEqual(x, y);
+  };
+  const guard2 = (req, res, next) => {
+    const token = process.env.OPERATOR_TOKEN ?? "";
+    if (token.length < 24) return res.status(404).end();
+    const given = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
+    if (!given || !same2(given, token)) {
+      const r2 = guesses.check(o.ipOf(req));
+      return res.status(r2.ok ? 401 : 429).json({ error: { code: r2.ok ? "bad_token" : "rate_limited", message: r2.ok ? "That operator key is not right." : "Too many attempts. Wait a minute." } });
+    }
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  };
+  const wrap = (fn) => async (req, res, next) => {
+    try {
+      res.json(await fn(req));
+    } catch (e) {
+      next(e);
+    }
+  };
+  const r = express2.Router();
+  r.use(express2.json({ limit: "10kb" }), guard2);
+  r.get("/status", wrap(async () => {
+    const [pilot, signups, ai, max] = await Promise.all([getSettingPg(o.pool, "pilot_enabled", false), getSettingPg(o.pool, "signups_open", true), getSettingPg(o.pool, "ai_enabled", true), getSettingPg(o.pool, "pilot_max_users", 30)]);
+    const users = (await o.pool.query('SELECT COUNT(*)::int n, COUNT(*) FILTER (WHERE "isAnonymous")::int guests FROM "user"')).rows[0];
+    const spend = await spendReport(o.pool, o.now());
+    return { switches: { pilot, signups, ai }, maxUsers: max, people: users.n, guests: users.guests, last24h: { assistantRequests: spend.last24h.n }, invites: await listInvites(o.pool, o.now()) };
+  }));
+  r.post("/invites", wrap(async (req) => {
+    const b = z5.object({ count: z5.number().int().min(1).max(20), label: z5.string().max(60).optional(), days: z5.number().int().min(1).max(60).optional() }).parse(req.body);
+    return { codes: await createInvites(o.pool, { count: b.count, label: b.label, ttlDays: b.days, now: o.now() }) };
+  }));
+  r.post("/invites/revoke", wrap(async (req) => {
+    const b = z5.object({ idPrefix: z5.string().max(36).optional(), label: z5.string().max(60).optional() }).refine((x) => x.idPrefix || x.label).parse(req.body);
+    return { revoked: await revokeInvites(o.pool, b) };
+  }));
+  r.post("/switch", wrap(async (req) => {
+    const b = z5.object({ name: z5.enum(["pilot", "signups", "ai"]), on: z5.boolean() }).parse(req.body);
+    await setSettingPg(o.pool, SWITCHES[b.name], b.on);
+    await audit(o.pool, `switch_${SWITCHES[b.name]}`, null, { value: b.on, via: "operator_page" });
+    return { ok: true };
+  }));
+  r.post("/max-users", wrap(async (req) => {
+    const n = z5.object({ n: z5.number().int().min(1).max(500) }).parse(req.body).n;
+    await setSettingPg(o.pool, "pilot_max_users", n);
+    await audit(o.pool, "max_users", null, { n, via: "operator_page" });
+    return { ok: true };
+  }));
+  app.use("/internal/operator", r);
+  void HttpError;
+}
+var SWITCHES;
+var init_operator = __esm({
+  "src/server/hosted/operator.ts"() {
+    "use strict";
+    init_invites();
+    init_limits();
+    init_pg();
+    init_common();
+    SWITCHES = { pilot: "pilot_enabled", signups: "signups_open", ai: "ai_enabled" };
+  }
+});
+
+// src/server/hosted/owner.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
+async function ensureOwner(auth, pool, cfg2) {
+  const o = cfg2.owner;
+  const others = (await pool.query('SELECT COUNT(*)::int n FROM "user" WHERE lower(email) <> $1', [o.email])).rows[0].n;
+  if (others > 0) throw new Error(`This database already has ${others} other account(s). An owner-only site must use a database of its own; refusing to start so nobody else can be reached.`);
+  const ctx = await auth.$context;
+  const found = await ctx.internalAdapter.findUserByEmail(o.email, { includeAccounts: true });
+  let created = false, passwordChanged = false;
+  if (!found) {
+    if (!o.password) throw new Error("No owner account exists yet. Set OWNER_PASSWORD (at least 12 characters) in the host settings for the first start.");
+    const id = randomUUID4(), hash = await ctx.password.hash(o.password);
+    await pool.query('INSERT INTO "user" (id, name, email, "emailVerified", "isAnonymous", "createdAt", "updatedAt") VALUES ($1,$2,$3,true,false,now(),now())', [id, "Owner", o.email]);
+    await pool.query('INSERT INTO account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt") VALUES ($1,$2,$3,$4,$5,now(),now())', [randomUUID4(), id, "credential", id, hash]);
+    created = true;
+  } else if (o.password) {
+    const cred = found.accounts.find((a) => a.providerId === "credential");
+    const same2 = cred?.password ? await ctx.password.verify({ hash: cred.password, password: o.password }) : false;
+    if (!same2) {
+      const hash = await ctx.password.hash(o.password);
+      if (cred) await pool.query('UPDATE account SET password = $1, "updatedAt" = now() WHERE "userId" = $2 AND "providerId" = $3', [hash, found.user.id, "credential"]);
+      else await pool.query('INSERT INTO account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt") VALUES ($1,$2,$3,$4,$5,now(),now())', [randomUUID4(), found.user.id, "credential", found.user.id, hash]);
+      await pool.query('DELETE FROM session WHERE "userId" = $1', [found.user.id]);
+      passwordChanged = true;
+    }
+  }
+  await setSettingPg(pool, "pilot_enabled", true);
+  await setSettingPg(pool, "signups_open", false);
+  if (created || passwordChanged) await audit(pool, created ? "owner_created" : "owner_password_changed", null, {});
+  return { created, passwordChanged };
+}
+var init_owner = __esm({
+  "src/server/hosted/owner.ts"() {
+    "use strict";
+    init_pg();
+  }
+});
+
 // src/server/hosted/ops.ts
 var ops_exports = {};
 __export(ops_exports, {
@@ -10611,7 +11201,7 @@ __export(ops_exports, {
   routeTemplate: () => routeTemplate,
   stdoutSink: () => stdoutSink
 });
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 function makeLogger(sink = stdoutSink, now = Date.now) {
   const log = (level, event, fields = {}) => {
     const safe = { t: new Date(now()).toISOString(), level, event };
@@ -10628,7 +11218,7 @@ function routeTemplate(req) {
 function requestObserver(metrics, logger) {
   return (req, res, next) => {
     const t0 = Date.now();
-    const reqId = randomUUID4().slice(0, 8);
+    const reqId = randomUUID5().slice(0, 8);
     res.setHeader("X-Request-Id", reqId);
     res.on("finish", () => {
       if (!req.path.startsWith("/api")) return;
@@ -10826,6 +11416,7 @@ function exportAccount(ctx, o) {
     study,
     conversations,
     homework: exportHomework(ctx),
+    myHelper: exportMyHelper(ctx),
     uploadedFiles: files,
     calendar: { connected: conn.status === "connected", calendars: conn.calendars.filter((c) => c.selected).map((c) => ({ name: c.label || c.name })), note: 'Imported calendar events and connection tokens are not exported. Assignments you confirmed are in "study.sections.items".' },
     notes: ['The "study" section can be imported again in Settings \u2192 Data.', "Chat conversations and homework (every version of your working, the help you asked for and each check) are included here only; they are not part of the importable study file."]
@@ -10861,6 +11452,7 @@ var init_account = __esm({
     init_portability();
     init_calendar2();
     init_homework();
+    init_myhelper();
     init_pg();
     ({ DatabaseSync: DatabaseSync2 } = createRequire2(import.meta.url)("node:sqlite"));
     MB = 1024 * 1024;
@@ -10930,7 +11522,7 @@ import { hkdfSync as hkdfSync2 } from "node:crypto";
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync, existsSync as existsSync5 } from "node:fs";
 import { join as join5 } from "node:path";
 import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
-import { z as z4 } from "zod";
+import { z as z6 } from "zod";
 async function acquireInstanceLock(pool, waitMs) {
   const c = await pool.connect();
   const deadline = Date.now() + waitMs;
@@ -10975,6 +11567,7 @@ async function buildHostedApp(d, pool, instance) {
   const auth = createAuth(pool, hcfg, now, authPool);
   await migrateAuth(auth);
   await bindEnvironment(pool, hcfg, d.dataDir);
+  if (hcfg.owner.enabled) await ensureOwner(auth, pool, hcfg);
   const tenants = new Tenants(d.dataDir, { now });
   const offline = new OfflineProvider();
   const googleGw = d.gateway ?? (cfg2.google ? new GoogleGateway(cfg2.google) : new UnconfiguredGateway());
@@ -11033,15 +11626,40 @@ async function buildHostedApp(d, pool, instance) {
         const { spendReport: spendReport2 } = await Promise.resolve().then(() => (init_limits(), limits_exports));
         res.json({ ...metrics.snapshot(), spend: await spendReport2(pool, now()), openDatabases: tenants.openCount });
       });
+      if (!hcfg.owner.enabled) mountOperator(app2, { pool, now, ipOf });
       const siteOrigin = new URL(hcfg.publicUrl).origin;
       app2.use("/api/auth", (req, res, next) => {
         if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.headers.origin && req.headers.origin !== siteOrigin) return res.status(403).json({ error: { code: "forbidden_origin", message: "Cross-site requests are not allowed." } });
         next();
       });
-      app2.use("/api/auth/sign-in/anonymous", (_req, res, next) => {
+      app2.use("/api/auth/sign-in/anonymous", (req, res, next) => {
         if (!hcfg.guestEnabled) return res.status(404).json({ error: { code: "not_found", message: "Guest entry is disabled." } });
+        const code = readCookie(req.headers.cookie, INVITE_COOKIE);
+        if (req.method === "POST" && !(code && looksLikeCode(code))) return res.status(403).json({ error: { code: "invite_required", message: "Enter a valid invitation code first. Each code opens one private workspace." } });
         next();
       });
+      if (hcfg.owner.enabled) {
+        const OPEN = /* @__PURE__ */ new Set(["/sign-in/email", "/sign-out", "/get-session", "/list-sessions", "/revoke-session", "/revoke-sessions", "/revoke-other-sessions"]);
+        const failures = /* @__PURE__ */ new Map();
+        app2.use("/api/auth", (req, res, next) => {
+          if (!OPEN.has(req.path)) return res.status(404).json({ error: { code: "not_found", message: "Not available." } });
+          if (req.path === "/sign-in/email") {
+            const key2 = ipOf(req), t = now(), recent = (failures.get(key2) ?? []).filter((x) => t - x < 15 * 6e4);
+            if (recent.length >= 8) return res.status(429).json({ error: { code: "rate_limited", message: "Too many wrong passwords. Wait 15 minutes and try again." } });
+            res.on("finish", () => {
+              if (res.statusCode >= 400) {
+                recent.push(now());
+                failures.set(key2, recent);
+              }
+            });
+            if (failures.size > 2e3) {
+              for (const [k, v] of failures) if (!v.some((x) => t - x < 15 * 6e4)) failures.delete(k);
+            }
+          }
+          next();
+        });
+        app2.use("/api/invite", (_req, res) => res.status(404).json({ error: { code: "not_found", message: "Not available." } }));
+      }
       app2.all("/api/auth/*", (req, res, next) => {
         const r = authLimiter.check(ipOf(req));
         if (!r.ok) return res.status(429).json({ error: { code: "rate_limited", message: "Too many attempts. Wait a minute and try again." } });
@@ -11053,7 +11671,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg(pool, "pilot_enabled", false);
-          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn, guest: hcfg.guestEnabled } });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled }, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
         } catch (e) {
           next(e);
         }
@@ -11062,7 +11680,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const r = inviteLimiter.check(ipOf(req));
           if (!r.ok) throw new HttpError(429, "rate_limited", "Too many attempts. Wait a minute and try again.");
-          const code = z4.object({ code: z4.string().max(64) }).parse(req.body).code;
+          const code = z6.object({ code: z6.string().max(64) }).parse(req.body).code;
           res.json(await checkInvite(pool, code, now()));
         } catch (e) {
           next(e);
@@ -11072,7 +11690,7 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const r = inviteLimiter.check(ipOf(req));
           if (!r.ok) throw new HttpError(429, "rate_limited", "Too many attempts. Wait a minute and try again.");
-          const code = z4.object({ code: z4.string().max(64) }).parse(req.body).code;
+          const code = z6.object({ code: z6.string().max(64) }).parse(req.body).code;
           const chk = await checkInvite(pool, code, now());
           if (!chk.valid) throw new HttpError(400, "invite_invalid", inviteMessage(chk.reason));
           res.cookie(INVITE_COOKIE, normalizeCode(code), { httpOnly: true, sameSite: "lax", secure: secureCookie, maxAge: 15 * 6e4, path: "/" });
@@ -11105,7 +11723,7 @@ async function buildHostedApp(d, pool, instance) {
       });
       app2.get("/api/account/assistant", async (req, res, next) => {
         try {
-          res.json(await assistantState(pool, studentOf(req).id, hcfg.limits, now()));
+          res.json(await assistantState(pool, studentOf(req).id, hcfg.limits, now(), activeCapacity()?.snapshot().waitMs ?? 0));
         } catch (e) {
           next(e);
         }
@@ -11126,7 +11744,7 @@ async function buildHostedApp(d, pool, instance) {
       app2.post("/api/account/delete", async (req, res, next) => {
         try {
           const s = studentOf(req);
-          const b = z4.object({ confirm: z4.string() }).parse(req.body);
+          const b = z6.object({ confirm: z6.string() }).parse(req.body);
           if (b.confirm !== "DELETE MY ACCOUNT") throw new HttpError(400, "confirm_required", "Type DELETE MY ACCOUNT to confirm.");
           await deleteAccount({ pool, tenants, userId: s.id, now });
           demoGws.delete(s.id);
@@ -11140,7 +11758,7 @@ async function buildHostedApp(d, pool, instance) {
       app2.post("/api/report", async (req, res, next) => {
         try {
           const s = studentOf(req);
-          const b = z4.object({ message: z4.string().max(2e3), include: z4.array(z4.string()).max(5).optional(), attach: z4.object({ kind: z4.string().max(30), text: z4.string().max(4e3) }).optional(), previewOnly: z4.boolean().optional(), confirmed: z4.boolean().optional() }).parse(req.body);
+          const b = z6.object({ message: z6.string().max(2e3), include: z6.array(z6.string()).max(5).optional(), attach: z6.object({ kind: z6.string().max(30), text: z6.string().max(4e3) }).optional(), previewOnly: z6.boolean().optional(), confirmed: z6.boolean().optional() }).parse(req.body);
           res.json(await submitReport(pool, s.id, b, now()));
         } catch (e) {
           next(e);
@@ -11155,8 +11773,8 @@ async function buildHostedApp(d, pool, instance) {
       try {
         const s = studentOf(req);
         if (s.guest) return go("error=denied");
-        const { code, state, error } = req.query;
-        const st = state ? consumeState(state) : null;
+        const { code, state: state2, error } = req.query;
+        const st = state2 ? consumeState(state2) : null;
         if (error) return go(`error=${error === "access_denied" ? "denied" : "org_blocked"}`);
         if (!st || !code || st.userId !== s.id) return go("error=denied");
         const lease = await buildCtx(s, st.workspace);
@@ -11186,7 +11804,9 @@ async function buildHostedApp(d, pool, instance) {
   };
   async function sessionOf(req) {
     const r = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
-    return r?.user ? { id: r.user.id, email: r.user.email, guest: !!r.user.isAnonymous } : null;
+    if (!r?.user) return null;
+    if (hcfg.owner.enabled && (r.user.email.toLowerCase() !== hcfg.owner.email || r.user.isAnonymous)) return null;
+    return { id: r.user.id, email: r.user.email, guest: !!r.user.isAnonymous };
   }
   async function buildCtx(s, ws) {
     const lease = tenants.lease(s.id, ws);
@@ -11289,7 +11909,11 @@ async function bindEnvironment(pool, hcfg, dataDir) {
   if (existsSync5(f)) {
     const l = readFileSync4(f, "utf8").trim();
     if (l !== hcfg.dataLabel) throw new Error(`The data folder belongs to "${l}" but this server is configured as "${hcfg.dataLabel}". Refusing to start.`);
-  } else writeFileSync(f, hcfg.dataLabel);
+  } else {
+    const people = (await pool.query('SELECT COUNT(*)::int n FROM "user"')).rows[0].n;
+    if (people > 0 && process.env.ALLOW_EMPTY_DATA_DIR !== "1") throw new Error(`The database has ${people} account(s) but the data folder (${dataDir}) is empty and new. Their files are missing: is the persistent volume attached and mounted at DATA_DIR? Refusing to start, so nothing is written to a disk that may be erased. (Restoring from a backup? Use the restore command, which prepares the folder.)`);
+    writeFileSync(f, hcfg.dataLabel);
+  }
 }
 var MB2, deriveUserSecret, inviteMessage;
 var init_hosted = __esm({
@@ -11303,6 +11927,9 @@ var init_hosted = __esm({
     init_calendar2();
     init_auth();
     init_invites();
+    init_groqCapacity();
+    init_operator();
+    init_owner();
     init_limits();
     init_ops();
     init_pg();
@@ -11361,20 +11988,23 @@ function configFromEnv(env = process.env) {
     model: g("AI_MODEL") ?? g("ANTHROPIC_MODEL") ?? "claude-sonnet-5-5",
     aiProvider: provider,
     groqKey: g("GROQ_API_KEY"),
-    groqModel: g("GROQ_API_KEY") ? GROQ_DEFAULT_MODEL : null,
-    // one fixed model: no choice to make
+    groqModel: g("GROQ_API_KEY") ? g("GROQ_MODEL") ?? GROQ_DEFAULT_MODEL : null,
+    // chosen by the operator only; students never pick a model
+    groqCapacity: strip({ rpm: num2("GROQ_RPM") ?? void 0, tpm: num2("GROQ_TPM") ?? void 0, maxConcurrent: num2("GROQ_MAX_CONCURRENT") ?? void 0, maxWaitMs: num2("GROQ_QUEUE_WAIT_MS") ?? void 0 }),
     aiTasks: { extract: strip(task("EXTRACT")), generate: strip(task("GENERATE")), grade: strip(task("GRADE")) },
     // Reading screenshots / scanned pages with a vision model is OFF unless the operator opts in explicitly (and uses Anthropic).
     ocr: { enabled: g("AI_OCR") === "anthropic", model: g("AI_MODEL_OCR"), maxOutputTokens: num2("AI_MAX_OUTPUT_OCR") ?? void 0 },
     aiTimeoutMs: Number(env.AI_TIMEOUT_MS) || 45e3,
     aiDailyLimit: Number(env.AI_DAILY_CALL_LIMIT) || 150,
     aiDailyBudgetUsd: num2("AI_DAILY_BUDGET_USD") ?? 1,
-    aiPriceOverride: { inPerM: num2("AI_PRICE_IN_PER_MTOK") ?? void 0, outPerM: num2("AI_PRICE_OUT_PER_MTOK") ?? void 0 },
+    // Groq's Free tier costs nothing, so its dollar estimate is zero unless the operator states a paid price (then the usual dollar limits apply).
+    // Spend on Groq is bounded by the Free tier itself, by the request and token limits below, and by Groq's own console; this app cannot upgrade a plan.
+    aiPriceOverride: provider === "groq" ? { inPerM: num2("AI_PRICE_IN_PER_MTOK") ?? 0, outPerM: num2("AI_PRICE_OUT_PER_MTOK") ?? 0 } : { inPerM: num2("AI_PRICE_IN_PER_MTOK") ?? void 0, outPerM: num2("AI_PRICE_OUT_PER_MTOK") ?? void 0 },
     google: g("GOOGLE_CLIENT_ID") && g("GOOGLE_CLIENT_SECRET") && g("APP_SECRET") ? { clientId: g("GOOGLE_CLIENT_ID"), clientSecret: g("GOOGLE_CLIENT_SECRET"), redirectUri: g("GOOGLE_REDIRECT_URI") ?? `http://localhost:${port2}/api/calendar/oauth/callback` } : null,
     googleRedirectUri: g("GOOGLE_REDIRECT_URI") ?? `http://localhost:${port2}/api/calendar/oauth/callback`,
     googlePartial: [g("GOOGLE_CLIENT_ID"), g("GOOGLE_CLIENT_SECRET"), g("APP_SECRET")].filter(Boolean).length > 0 && !(g("GOOGLE_CLIENT_ID") && g("GOOGLE_CLIENT_SECRET") && g("APP_SECRET")),
     appSecret: g("APP_SECRET"),
-    dataDir: g("DATA_DIR") ?? "./data",
+    dataDir: g("DATA_DIR") ?? g("RAILWAY_VOLUME_MOUNT_PATH") ?? "./data",
     production: env.NODE_ENV === "production"
   };
 }

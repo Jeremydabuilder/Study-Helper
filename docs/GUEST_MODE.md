@@ -1,11 +1,23 @@
-# No-sign-in mode
+# Friends mode: invitation-only private workspaces (3–5 people)
 
-Set AUTH_GUESTS=1 and open pilot admissions using the existing operator controls. The staging and production Blueprints enable it. Existing deployments keep their current behavior until explicitly enabled. Production Google credentials are optional; only add them if offering account sign-in.
+This is the configuration for the owner **plus a few friends**. The owner-only site ([DEPLOYMENT.md](DEPLOYMENT.md)) is a different setting of the same app (`OWNER_ONLY=1`); the two cannot be switched on together.
 
-Continue without an account creates a random server identity with a secure session cookie. No email, password, Google account or invitation is requested. Each guest uses the same isolated storage, rate limits, AI spending ledger, global budget and deletion/export controls as an account user. Guest creation respects the pilot pause, admissions switch and total user capacity. Guests count toward that capacity. Clearing cookies can create another identity and reset per-user quotas; the global spend ceiling and address-based authentication limits remain essential. This mode is unsuitable as a way to enforce one allocation per person.
+## What it does
+- `AUTH_GUESTS=1` lets a person open a private workspace **only with a single-use invitation code**. There is no email, Google or password step.
+- Codes look like `XXXX-XXXX-XXXX-XXXX`. They are stored only as hashes, work once, expire (7 days by default) and can be revoked. A code is never put in a URL; it travels in a request body and a short-lived HttpOnly cookie. Using a code uses it atomically: twelve simultaneous attempts produce exactly one workspace.
+- The server enforces this, including a direct call to `/api/auth/sign-in/anonymous` (rejected without a valid code cookie). The page is not the gate.
+- Each person gets a separate server identity and a separate private database file, with their own export and delete controls.
+- **Clearing cookies, using a private window or switching browser loses access** to that workspace (there is no account to recover it). People are told this on the entry page. Export first (Settings → Download my data).
+- Unreachable guests (no valid session) are deleted after a seven-day grace period; the operator tools do the same deletion on request.
 
-Guest work persists across ordinary browser visits while the session remains valid (SESSION_DAYS, seven days by default). Leaving, cookie removal or expiry loses access. Work never migrates to an account. Export or delete it before leaving. Maintenance runs at startup and hourly. When a guest has no unexpired session, a seven-day grace period starts; after that the workspace and identity are deleted using the same tenant-aware deletion as explicit deletion. Active sessions and in-flight work are protected. Restarts and backups preserve the grace clock. Earlier encrypted backups retain data until the operator expires them. Disabling new guest entry does not bypass retention or turn existing guests into account users. No-sign-in does not make submitted schoolwork anonymous to the host or AI provider. The privacy notice and existing launch review still apply.
+## Making codes without a terminal
+Set `OPERATOR_TOKEN` (24+ random characters) as a service variable and open `https://YOUR-ADDRESS/#/operator`. Paste the token (kept only in that tab) to create or revoke invitations, pause admissions, or switch the study assistant off. Codes are shown once; send them yourself. This page does not exist in owner-only mode.
 
-Guest Google Calendar connections are rejected. Assignments and tests can be entered manually. Optional account users retain their existing Calendar behavior. No site has been deployed by this change.
+## Groq limits shared by everyone
+All people share one Groq key and therefore one allowance. The app paces requests (per-minute and concurrent), stops sending after Groq refuses, and shows "try again in about …" instead of retrying in a loop. `LIMIT_USER_DAILY_AI_REQUESTS`, `LIMIT_GLOBAL_DAILY_AI_REQUESTS`, `LIMIT_USER_DAILY_TOKENS` and `LIMIT_GLOBAL_DAILY_TOKENS` cap use per person and overall. The Free tier is **not** guaranteed to support many people at once; mocked tests prove the rules, not capacity.
 
-Validation: hostedGuests.test.ts exercises real Better Auth and PostgreSQL for guest entry, isolation, export/deletion, admission limits, and disabled-by-default behavior. The full CI suite must pass before staging.
+## Calendar and OCR
+Off. Guests cannot connect Google Calendar. Screenshot/OCR reading needs a separate provider and stays off unless configured.
+
+## Validation
+`tests/hostedGuests.test.ts` (real Better Auth and PostgreSQL): invitation bypass attempts, reuse, expiry, revocation, concurrency, rate limits, no code in logs, isolation, export and deletion. No site has been deployed and no invitation has been sent.

@@ -7,3 +7,5 @@ data
 *.db-journal
 *.log
 eval-out
+test-results
+playwright-report

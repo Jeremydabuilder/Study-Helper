@@ -1,19 +1,18 @@
-# Live checks: what is still unverified, and the shortest way to verify it
+# Live checks (only you can do these)
 
-Everything here needs something only you can provide. Never paste a secret into chat; enter secrets in the Render dashboard (they are `sync: false`). Use fictional material only. Mark each line only after you saw it work.
+Everything here needs something only you can provide: a hosting account, the owner password, a Groq key. Never paste a secret into chat; type secrets into the hosting dashboard's variable screen. Use fictional or low-stakes material first. Mark a line only after you saw it work.
 
-**One-time setup (about 20 minutes)**
-1. Render: create the staging blueprint (`DEPLOYMENT.md`). Open the `…onrender.com` address; `/readyz` should say ready.
-2. Google (optional for both staging and production): OAuth client, redirect URI `https://<staging address>/api/auth/callback/google`, add your own account as a test user. Put `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` in the dashboard and redeploy.
-3. Anthropic (optional): put `ANTHROPIC_API_KEY` in the dashboard; set a provider-side spend cap first; keep `LIMIT_GLOBAL_DAILY_USD=0.5`.
+## Owner site (see DEPLOYMENT.md for the steps)
+- [ ] Deploy on Railway (or another Docker + Postgres + volume host). `https://YOUR-ADDRESS/readyz` says ready.
+- [ ] Private window: only the sign-in box is shown. Signed out, `/api/myhelper/state` and `/api/items` return 401.
+- [ ] Sign in with `OWNER_EMAIL` / `OWNER_PASSWORD` over HTTPS and stay signed in after a reload (this proves the secure cookie works behind the host's proxy).
+- [ ] Sign in from a second device or browser.
+- [ ] Study Helper tab: the live assistant is shown as on. Ask for a hint on a homework question; a real Groq answer comes back. (Not tested anywhere else.)
+- [ ] School → Open in Study Helper shows the instructions you typed; School still lists one copy.
+- [ ] Export from the original HTML → Import old data → preview → Import. Import again: nothing new.
+- [ ] Redeploy / restart the service in the dashboard; reload; everything is still there (proves the volume and database persist).
+- [ ] Open the address from the school network (unknown until tried).
 
-**Checks (about 20 minutes, with made-up notes)**
-- [ ] In a fresh browser choose **Continue without an account**. No email, Google login or invitation is requested. Create fictional homework. In a second private browser create another guest and confirm it sees none of the first guest’s work.
-- [ ] Reload the first browser: the same guest workspace remains. Export it from Settings; delete the second guest’s workspace and confirm the first is unaffected.
-- [ ] Optional account sign-in: sign in with Google using a staging invitation (`npm run seed:staging -- --count 2` in the Render shell). A second **account sign-up** without a code is refused; guest entry remains available when enabled.
-- [ ] Paste a few made-up notes, let the assistant propose concepts, answer one question in words: you get graded feedback.
-- [ ] Homework: paste a made-up worksheet, type working with one wrong step, Check my work (exact), then Give me a hint (assistant).
-- [ ] Upload a photo of a printed made-up page; compare what was read with the original (only if you enabled OCR).
-- [ ] Restart the service in Render; reload; everything is still there.
-- [ ] Run `npm run smoke:ai -- --confirm-spend` in the shell once; it reports usage and cost.
-Until a line is ticked, the matching feature is described as **unverified** everywhere, including to your friends.
+## Friends mode (only if you use it)
+- [ ] `AUTH_GUESTS=1`, `OPERATOR_TOKEN` set; create a code at `#/operator`; a friend's browser opens a private workspace with it; the same code fails the second time.
+- [ ] Two friends use the assistant at once and see friendly "try again in …" messages, not errors, when Groq's shared allowance is tight.

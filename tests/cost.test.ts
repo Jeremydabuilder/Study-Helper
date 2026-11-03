@@ -177,8 +177,9 @@ describe('optional Groq transport (opt-in, unverified against the live API)', ()
     expect(buildProvider(baseCfg({ groqKey: 'g', groqModel: 'm' }))).toBeNull(); // provider defaults to anthropic, which has no key
     expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: null, anthropicKey: 'a' }))).toBeNull(); // groq selected but no key => off, NOT anthropic
     expect(buildProvider(baseCfg({ aiProvider: 'groq', groqKey: 'g', groqModel: null }))!.name).toBe('groq:openai/gpt-oss-120b');
-    const c = configFromEnv({ AI_PROVIDER: 'groq', GROQ_API_KEY: 'g', GROQ_MODEL: 'user-choice' } as any);
-    expect(c.groqModel).toBe('openai/gpt-oss-120b'); // GROQ_MODEL is ignored: there is no model choice
+    expect(configFromEnv({ AI_PROVIDER: 'groq', GROQ_API_KEY: 'g' } as any).groqModel).toBe('openai/gpt-oss-120b');
+    // the operator (server variable only; there is no way for a student to choose) may name another model if Groq renames the default
+    expect(configFromEnv({ AI_PROVIDER: 'groq', GROQ_API_KEY: 'g', GROQ_MODEL: 'operator-choice' } as any).groqModel).toBe('operator-choice');
   });
 });
 
