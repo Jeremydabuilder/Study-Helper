@@ -7,7 +7,7 @@ import { PG_AVAILABLE } from './pgHarness';
 const OWNER = { email: 'owner@example.test', password: 'correct horse battery staple' };
 const open: HostedHarness[] = [];
 afterEach(async () => { for (const h of open.splice(0)) await h.stop(); });
-const start = async (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => { const h = await HostedHarness.start({ owner: OWNER, limits: { PUBLIC_GUEST: '1', ...env }, ...extra }); open.push(h); return h; };
+const start = async (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => { const h = await HostedHarness.start({ owner: OWNER, limits: { PUBLIC_GUEST: '1', PUBLIC_OPERATOR_AI: '1', ...env }, ...extra }); open.push(h); return h; };
 const from = (h: HostedHarness, ip: string) => { const s = h.student('visitor'); return { post: (p: string, b: unknown) => s.post(p, b, { headers: { 'x-forwarded-for': ip } }), get: (p: string) => s.get(p, { headers: { 'x-forwarded-for': ip } }) }; };
 const HINT = { question: 'Solve 2x + 3 = 11', attempt: 'x = 7', excerpts: [{ label: 'Notes', text: 'Undo addition by subtracting from both sides.' }] };
 
