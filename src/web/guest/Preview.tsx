@@ -13,7 +13,7 @@ export function Preview({ value, onChange, onSave, onCancel, saveLabel = 'Save t
   const Flags = ({ c }: { c: Candidate<unknown> }) => <>{c.flags.map((f, i) => <div key={i} className="mh-notice" style={{ marginTop: 6 }}>{f}</div>)}</>;
   return (
     <div aria-label="Preview of what was found">
-      <div className="mh-panel tint"><h3>Check what was found</h3><p className="mh-sub" style={{ fontSize: 13 }}>Nothing is saved yet. Untick anything wrong, fix any text, and check every date marked as a guess. Items the assistant or the rules only <strong>guessed about you</strong> are unticked; tick them only if they are true.</p></div>
+      <div className="mh-panel tint"><h3>Review each item</h3><p className="mh-sub" style={{ fontSize: 13 }}>Nothing is saved yet. Untick anything wrong, fix any text, and check every date marked as a guess. Items the assistant or the rules only <strong>guessed about you</strong> are unticked; tick them only if they are true.</p></div>
       {total === 0 && <div className="mh-panel" style={{ marginTop: 14 }}><div className="mh-empty">Nothing recognisable was found. You can add things by hand in <a href="#/memory">My profile</a>, or try the questions instead.</div></div>}
 
       {value.classes.length > 0 && <section className="mh-panel" style={{ marginTop: 14 }}><h3>Classes</h3><div className="mh-list" style={{ marginTop: 10 }}>{value.classes.map((c) => (

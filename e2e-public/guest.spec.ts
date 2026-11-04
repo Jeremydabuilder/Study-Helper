@@ -37,7 +37,7 @@ test('anyone can open the app without an account and sees Build my study profile
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Build my study profile' }).first()).toBeVisible();
   for (const b of ['Paste notes', 'Answer questions', 'Skip for now']) await expect(page.getByRole('link', { name: b }).or(page.getByRole('button', { name: b })).first()).toBeVisible();
-  await expect(page.getByText(/sign in|log in|create an account/i)).toHaveCount(1);                // only the "Owner sign-in" link
+  await expect(page.getByText(/sign.in|log.in|create an account/i)).toHaveCount(1);                // only the "Owner sign-in" link
   await page.getByRole('button', { name: 'Owner sign-in' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await page.getByRole('link', { name: /Back to Study Helper/ }).click();
@@ -101,7 +101,7 @@ test('large paste: the limit is shown and enforced, and a big document is still 
   const { ctx, page } = await visitor(browser);
   await page.goto('/#/build/paste');
   const big = (NOTES + '\n').repeat(1200);                                                           // ~ 250k characters, over the 200,000 limit
-  await page.getByLabel(/Paste anything/).fill(big);
+  await page.getByLabel(/Paste anything/).evaluate((el, v) => { const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!; set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); }, big);
   await expect(page.getByText(/of 200,000 characters — only the first part will be read/)).toBeVisible();
   await page.getByRole('button', { name: 'Find items' }).click();
   await expect(page.getByRole('heading', { name: 'Check what was found' })).toBeVisible({ timeout: 20_000 });
