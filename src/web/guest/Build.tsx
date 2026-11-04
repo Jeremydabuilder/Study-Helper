@@ -89,6 +89,7 @@ function Interview({ go }: { go: (p: string) => void }) {
   const { profile, update, replace, today } = useGuest();
   const [answer, setAnswer] = useState(''); const [cands, setCands] = useState<Candidates | null>(null); const [pendingId, setPendingId] = useState<string | null>(null);
   const q = nextQuestion(profile); const prog = interviewProgress(profile);
+  const more = nextQuestion(resumeInterview(profile)); // is there anything left to ask if the person wants to go on?
   const done = profile.interview.status === 'finished' || profile.interview.status === 'skipped' || !q;
   const advance = (id: string, ans: string | null) => { update((p) => markAsked(resumeIfNeeded(p), id, ans)); setAnswer(''); };
   const resumeIfNeeded = (p: typeof profile) => (p.interview.status === 'finished' || p.interview.status === 'skipped' ? resumeInterview(p) : p);
@@ -102,8 +103,8 @@ function Interview({ go }: { go: (p: string) => void }) {
     <Preview value={cands} onChange={setCands} saveLabel="Save and continue" onCancel={() => { setCands(null); setPendingId(null); }}
       onSave={() => { update((p) => markAsked(applyCandidates(resumeIfNeeded(p), cands, Date.now(), 'answer').profile, pendingId, answer.trim())); setCands(null); setPendingId(null); setAnswer(''); }} /></>);
   if (done) return (<><PageTop eyebrow="Questions" title={profile.interview.asked.length ? 'That’s enough for now' : 'No questions needed'} />
-    <section className="mh-panel"><p style={{ marginTop: 0 }}>{profile.interview.asked.length ? `You answered or skipped ${profile.interview.asked.length} question${profile.interview.asked.length === 1 ? '' : 's'}. ` : 'Your profile already holds what the questions would ask. '}{q ? 'You can answer more later; each one makes the plan a little better.' : 'There is nothing more to ask right now.'}</p>
-      <div className="mh-row end">{q && <button className="mh-secondary" onClick={() => replace(resumeInterview(profile))}>Keep going</button>}<button className="mh-primary" onClick={() => go('/')}>See my plan</button></div></section></>);
+    <section className="mh-panel"><p style={{ marginTop: 0 }}>{profile.interview.asked.length ? `You answered or skipped ${profile.interview.asked.length} question${profile.interview.asked.length === 1 ? '' : 's'}. ` : 'Your profile already holds what the questions would ask. '}{more ? 'You can answer more later; each one makes the plan a little better.' : 'There is nothing more to ask right now.'}</p>
+      <div className="mh-row end">{more && <button className="mh-secondary" onClick={() => replace(resumeInterview(profile))}>Keep going</button>}<button className="mh-primary" onClick={() => go('/')}>See my plan</button></div></section></>);
   const total = Math.min(MAX_QUESTIONS, prog.asked + prog.remaining);
   return (<>
     <PageTop eyebrow={`Question ${prog.asked + 1} of up to ${total}`} title="Answer questions" />

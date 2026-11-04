@@ -37,6 +37,13 @@ describe('the owner-site settings in docs/DEPLOYMENT.md', () => {
     expect(hostedConfigFromEnv({ ...vars, OWNER_PASSWORD: 'short' } as never).problems.join()).toMatch(/OWNER_PASSWORD/);
     expect(hostedConfigFromEnv({ ...vars, OWNER_EMAIL: '' } as never).problems.join()).toMatch(/OWNER_EMAIL/);
   });
+  it('the public study-profile settings are documented and accepted', () => {
+    const pubDoc = readFileSync('docs/PUBLIC_STUDY_PROFILE.md', 'utf8');
+    for (const k of ['PUBLIC_GUEST', 'PUBLIC_MAX_PASTE_CHARS', 'PUBLIC_AI_CHUNK_CHARS', 'PUBLIC_AI_MAX_CHUNKS', 'PUBLIC_IP_PER_MIN', 'PUBLIC_IP_DAILY', 'PUBLIC_GLOBAL_DAILY']) expect(pubDoc, k).toContain(k);
+    const { problems, cfg } = hostedConfigFromEnv({ ...vars, PUBLIC_GUEST: '1' } as never);
+    expect(problems).toEqual([]); expect(cfg.publicGuest).toMatchObject({ enabled: true, maxPasteChars: 200000, perIpDaily: 40, globalDaily: 400 });
+    expect(hostedConfigFromEnv({ ...vars } as never).cfg.publicGuest.enabled).toBe(false);
+  });
   it('no Render files are left', () => {
     for (const f of ['render.staging.yaml', 'render.production.yaml']) expect(() => readFileSync(f)).toThrow();
   });

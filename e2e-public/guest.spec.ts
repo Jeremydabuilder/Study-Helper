@@ -69,8 +69,9 @@ test('paste flow: read in the browser only, preview with flags, edit, duplicate 
   await expect(page.getByLabel(/Save goal/)).not.toBeChecked();
   // edit a title, set a real date (clears the guess), untick one item
   const row = page.locator('.mh-task', { has: page.getByLabel('Save: Biology test') });
-  await row.getByLabel('Title').fill('Biology unit test'); await row.getByLabel('Due date').fill('2026-12-01');
+  await row.getByLabel('Due date').fill('2026-12-01');
   await expect(row.getByText('Date is a guess')).toHaveCount(0);
+  await row.getByLabel('Title').fill('Biology unit test');   // (the row is found by its old name, so rename last)
   await page.getByLabel(/Save: Lab report/).uncheck();
   await page.getByLabel(/Save: Sleep about 7 hours/).check();
   await expect(page.getByRole('button', { name: /Save the ticked items/ })).toBeEnabled();
@@ -201,7 +202,6 @@ test('two browsers never share a profile; export has the data; clearing erases i
   expect(await stored(b.page)).toBeNull();
   // view, edit, export
   await a.page.goto('/#/memory'); await expect(a.page.getByText(/holds: .*assignments/)).toBeVisible();
-  await a.page.getByLabel('Goal').count();
   const dl = a.page.waitForEvent('download'); await a.page.getByRole('button', { name: 'Export a copy' }).click();
   const file = test.info().outputPath('profile.json'); await (await dl).saveAs(file);
   const json = JSON.parse((await import('node:fs')).readFileSync(file, 'utf8')); expect(json.format).toBe('study-helper-guest-profile'); expect(json.profile.assignments.length).toBeGreaterThan(2);
@@ -214,7 +214,9 @@ test('two browsers never share a profile; export has the data; clearing erases i
   await a.page.reload(); await expect(a.page.getByText('Biology test')).toHaveCount(0);
   // import restores
   await a.page.goto('/#/memory'); a.page.once('dialog', (d) => d.accept()); await a.page.getByLabel('Import a profile file').setInputFiles(file);
-  await expect(a.page.getByText('Imported.')).toBeVisible(); await expect(a.page.getByText('Biology test').first()).toBeVisible().catch(() => {});
+  await expect(a.page.getByText('Imported.')).toBeVisible();
+  expect(JSON.parse((await stored(a.page))!).assignments.length).toBeGreaterThan(2);                 // the copy restored everything
+  await expect(a.page.getByLabel('Title').first()).toHaveValue(/.+/);
   await a.ctx.close(); await b.ctx.close();
 });
 
