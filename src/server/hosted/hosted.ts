@@ -36,7 +36,7 @@ export interface HostedApp {
 }
 export interface HostedDeps {
   cfg: AppConfig; hcfg: HostedConfig; dataDir: string;
-  llm?: AIProvider | null; gateway?: CalendarGateway; now?: () => number; pool?: Pool; logger?: Logger; instanceLockWaitMs?: number;
+  llm?: AIProvider | null; byokFetch?: typeof fetch; gateway?: CalendarGateway; now?: () => number; pool?: Pool; logger?: Logger; instanceLockWaitMs?: number;
 }
 
 type Student = { id: string; email: string; guest: boolean };
@@ -175,10 +175,10 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg<boolean>(pool, 'pilot_enabled', false);
-          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled, publicGuest: hcfg.publicGuest.enabled }, publicGuest: hcfg.publicGuest.enabled ? { maxPasteChars: hcfg.publicGuest.maxPasteChars, aiChunkChars: hcfg.publicGuest.aiChunkChars, aiMaxChunks: hcfg.publicGuest.aiMaxChunks } : null, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled, publicGuest: hcfg.publicGuest.enabled }, publicGuest: hcfg.publicGuest.enabled ? { operatorAi: hcfg.publicGuest.operatorAi, byok: hcfg.publicGuest.byok, maxPasteChars: hcfg.publicGuest.maxPasteChars, aiChunkChars: hcfg.publicGuest.aiChunkChars, aiMaxChunks: hcfg.publicGuest.aiMaxChunks } : null, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
         } catch (e) { next(e); }
       });
-      if (hcfg.publicGuest.enabled) mountPublic(app, { pool, now, cfg: hcfg, llm: d.llm ?? null, ipOf });
+      if (hcfg.publicGuest.enabled) mountPublic(app, { pool, now, cfg: hcfg, llm: d.llm ?? null, ipOf, byokFetch: d.byokFetch });
       app.post('/api/invite/check', async (req, res, next) => {
         try {
           const r = inviteLimiter.check(ipOf(req)); if (!r.ok) throw new HttpError(429, 'rate_limited', 'Too many attempts. Wait a minute and try again.');

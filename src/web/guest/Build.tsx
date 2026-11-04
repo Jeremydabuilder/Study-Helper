@@ -7,7 +7,8 @@ import { applyCandidates, markDuplicates } from '../../core/guest/profile';
 import { cardsFromNotes } from '../../core/guest/practice';
 import { Candidates } from '../../core/guest/types';
 import { PageTop } from '../myhelper/Shell';
-import { aiExtract, chunkText, useGuest } from './store';
+import { aiExtract, chunkText, needsSetup, useGuest, useProvider } from './store';
+import { SetupNotice } from './Setup';
 import { Preview } from './Preview';
 
 /** The entry point: three honest choices. */
@@ -37,14 +38,14 @@ export function Build({ go, mode }: { go: (p: string) => void; mode: 'entry' | '
 function usePasteLimits() { const { status } = useGuest(); return { max: status?.limits.maxPasteChars ?? 200_000, chunk: status?.limits.aiChunkChars ?? 6000, chunks: status?.limits.aiMaxChunks ?? 6 }; }
 
 function PasteFlow({ go }: { go: (p: string) => void }) {
-  const { profile, update, today, status } = useGuest();
+  const { profile, update, today, status } = useGuest(); const prov = useProvider();
   const lim = usePasteLimits();
   const [text, setText] = useState(''); const [title, setTitle] = useState('My notes'); const [keep, setKeep] = useState(true); const [cands, setCands] = useState<Candidates | null>(null);
   const [useAi, setUseAi] = useState(false); const [busy, setBusy] = useState<string | null>(null); const [msg, setMsg] = useState<string | null>(null);
   const over = text.length > lim.max;
-  const aiOk = !!status?.ai.available;
+  const aiOk = prov.ready; const [setupLink, setSetupLink] = useState(false);
   const analyse = async () => {
-    setMsg(null); setBusy('Reading your notes…');
+    setMsg(null); setSetupLink(false); setBusy('Reading your notes…');
     const body = over ? text.slice(0, lim.max) : text;
     let c = extractLocal(body, today, { maxChars: lim.max }); if (over) c.truncated = true;
     if (useAi && aiOk) {
@@ -53,7 +54,7 @@ function PasteFlow({ go }: { go: (p: string) => void }) {
       for (let i = 0; i < chunks.length; i++) {
         setBusy(`Asking the assistant… (part ${i + 1} of ${chunks.length})`);
         try { const r = await aiExtract(chunks[i]); const parsed = AiExtraction.safeParse(r.result); if (parsed.success) c = mergeCandidates(c, candidatesFromAi(parsed.data, today)); else failed = 'The assistant gave an answer that could not be used.'; }
-        catch (e) { failed = e instanceof ApiError ? e.message : 'The assistant could not be reached.'; break; }
+        catch (e) { failed = e instanceof ApiError ? e.message : 'The assistant could not be reached.'; if (needsSetup(e)) setSetupLink(true); break; }
       }
       const rest = body.length - covered;
       setMsg(failed ? `${failed} The results below come from the rules in your browser${chunks.length ? ' plus any parts the assistant finished' : ''}.` : rest > 0 ? `The assistant read the first ${covered.toLocaleString()} characters. The remaining ${rest.toLocaleString()} were read only by the rules in your browser.` : null);
@@ -69,7 +70,7 @@ function PasteFlow({ go }: { go: (p: string) => void }) {
     });
     go('/');
   };
-  if (cands) return (<><PageTop eyebrow="Paste notes" title="Check what was found" />{msg && <div className="mh-notice" role="status" style={{ marginBottom: 12 }}>{msg}</div>}<Preview value={cands} onChange={setCands} onSave={save} onCancel={() => setCands(null)} saveLabel="Save the ticked items" /></>);
+  if (cands) return (<><PageTop eyebrow="Paste notes" title="Check what was found" />{msg && <div className="mh-notice" role="status" style={{ marginBottom: 12 }}>{msg}{setupLink && <> <a href="#/settings">Open Settings</a>.</>}</div>}<Preview value={cands} onChange={setCands} onSave={save} onCancel={() => setCands(null)} saveLabel="Save the ticked items" /></>);
   return (<>
     <PageTop eyebrow="Build my study profile" title="Paste notes" />
     <section className="mh-panel">
@@ -78,7 +79,8 @@ function PasteFlow({ go }: { go: (p: string) => void }) {
       <div className="mh-field" style={{ marginTop: 12 }}><label htmlFor="paste-title">Keep these notes in this browser for hints and practice? Give them a name</label><div className="mh-row"><input type="checkbox" style={{ width: 'auto' }} checked={keep} onChange={(e) => setKeep(e.target.checked)} aria-label="Keep these notes in this browser" /><input id="paste-title" value={title} onChange={(e) => setTitle(e.target.value)} disabled={!keep} style={{ flex: 1, width: 'auto' }} /></div></div>
       <fieldset className="mh-notice" style={{ border: 0 }}><legend className="mh-eyebrow">Who reads your text?</legend>
         <label className="mh-row"><input type="radio" style={{ width: 'auto' }} name="reader" checked={!useAi} onChange={() => setUseAi(false)} /><span><strong>Only this browser</strong>: simple rules find dates, assignments, times and goals. Nothing is sent anywhere.</span></label>
-        <label className="mh-row" style={{ marginTop: 6 }}><input type="radio" style={{ width: 'auto' }} name="reader" checked={useAi} disabled={!aiOk} onChange={() => setUseAi(true)} /><span><strong>This browser and the assistant</strong>: also sends your pasted text to this site’s server and on to the AI provider (Groq) to find more. It is sent in up to {lim.chunks} parts of about {lim.chunk.toLocaleString()} characters, is not stored, and counts against a shared daily limit{status ? ` (${status.limits.perDay} assistant requests a day from this connection)` : ''}. {aiOk ? '' : status?.ai.cooling ? 'The assistant is resting for a moment.' : 'The assistant is not available right now.'}</span></label></fieldset>
+        <label className="mh-row" style={{ marginTop: 6 }}><input type="radio" style={{ width: 'auto' }} name="reader" checked={useAi} disabled={!aiOk} onChange={() => setUseAi(true)} /><span><strong>This browser and the assistant</strong>: also sends your pasted text to this site’s server and on to Groq ({prov.mode === 'visitor' ? 'with your own Groq key, so it counts against your Groq account' : 'using the site’s shared assistant'}) to find more. It is sent in up to {lim.chunks} parts of about {lim.chunk.toLocaleString()} characters, is not stored{prov.mode === 'operator' && status ? `, and counts against a shared daily limit (${status.limits.perDay} assistant requests a day from this connection)` : ''}. {aiOk ? '' : 'Needs an assistant: see below.'}</span></label></fieldset>
+      {!aiOk && <SetupNotice what="Reading notes with the assistant" />}
       {busy && <div className="mh-notice" role="status">{busy}</div>}
       <div className="mh-row end" style={{ marginTop: 14 }}><a className="mh-secondary" href="#/build" style={{ textDecoration: 'none' }}>Back</a><button className="mh-primary" disabled={!text.trim() || !!busy} onClick={analyse}>{useAi ? 'Find items with the assistant' : 'Find items'}</button></div>
     </section>

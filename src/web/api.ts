@@ -10,10 +10,10 @@ export class ApiError extends Error {
   get offlineFallback() { return this.extra.offlineFallback === true; }
 }
 
-export async function api<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+export async function api<T = any>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, { method, headers: { 'content-type': 'application/json', 'x-workspace': getWorkspace() }, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(`/api${path}`, { method, headers: { 'content-type': 'application/json', 'x-workspace': getWorkspace(), ...(extraHeaders ?? {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch { throw new ApiError(0, 'network', 'Could not reach the Study Helper server. Check that it is running, then try again.'); }
   let data: any = null;
   try { data = await res.json(); } catch { /* empty */ }

@@ -50,6 +50,43 @@ export class FakeIdp {
   stop() { return new Promise<void>((r) => this.server.close(() => r())); }
 }
 
+/**
+ * Stands in for Groq's network for the "bring your own key" relay: NO real request is ever made. It records exactly what the server tried to send
+ * (address, redirect policy, headers, body) so tests can prove the key goes only to the fixed address, and answers in the ways Groq documents or is reported to.
+ */
+export const VISITOR_KEY = 'gsk_' + 'Visitor1234567890'.repeat(3);
+export class FakeGroq {
+  calls: { url: string; redirect: string | undefined; key: string; body: any; headers: Record<string, string> }[] = [];
+  mode: 'ok' | 'invalid_key' | 'forbidden' | 'model' | 'rate' | 'server' | 'network' | 'hang' | 'redirect' = 'ok';
+  valid = new Set([VISITOR_KEY]); delayMs = 0;
+  fetch: typeof fetch = async (url, init) => {
+    const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), String(v)]));
+    const key = (headers.authorization ?? '').replace(/^Bearer /, '');
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    this.calls.push({ url: String(url), redirect: init?.redirect, key, body, headers });
+    const json = (status: number, o: unknown, h: Record<string, string> = {}) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json', ...h } });
+    if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
+    if (this.mode === 'network') throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    if (this.mode === 'hang') return new Promise((_r, rej) => init?.signal?.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+    if (this.mode === 'redirect' && init?.redirect === 'error') throw new TypeError('fetch failed: redirect');
+    if (this.mode === 'invalid_key' || !this.valid.has(key)) return json(401, { error: { message: `Invalid API Key sk-should-never-be-echoed ${key}`, type: 'invalid_request_error', code: 'invalid_api_key' } });
+    if (this.mode === 'forbidden') return json(403, { error: { message: 'forbidden', code: 'permission_denied' } });
+    if (this.mode === 'model') return json(404, { error: { message: `The model \`${body?.model}\` does not exist`, code: 'model_not_found' } });
+    if (this.mode === 'rate') return json(429, { error: { message: 'Rate limit reached. Please try again in 7s', code: 'rate_limit_exceeded' } }, { 'retry-after': '7' });
+    if (this.mode === 'server') return json(503, { error: { message: 'overloaded' } });
+    const user: string = body?.messages?.at(-1)?.content ?? '';
+    const task = user.match(/PUBLIC_TASK: (\w+)/)?.[1];
+    const out: Record<string, unknown> = {
+      extract_profile: { classes: ['Biology'], assignments: [{ title: 'Cell quiz', class: 'Biology', due_text: 'Friday', type: 'test' }], commitments: [], preferences: [], goals: ['remember more for tests'] },
+      hint: { hint: 'Hint from the visitor’s own key: undo the addition first.', level: 'nudge' },
+      quiz: { questions: [{ prompt: 'What stores DNA?', answer: 'The nucleus', hint: '' }] },
+      check: { verdict: 'correct', feedback: 'Yes.' }, chat: { reply: 'Chat reply from the visitor’s own key.' },
+    };
+    const content = task ? JSON.stringify(out[task] ?? {}) : 'OK';
+    return json(200, { id: 'x', model: body?.model, choices: [{ message: { content }, finish_reason: 'stop' }], usage: { prompt_tokens: 50, completion_tokens: 10 } });
+  };
+}
+
 /** Scripted model: answers by recognising which task the prompt is for. Tests can read `calls` and override `replies`. */
 export class ScriptedLlm implements LLMTransport {
   provider = 'fake'; defaultModel = 'claude-sonnet-5-5'; calls: LLMRequest[] = []; failNext: Error | null = null; delayMs = 0;
@@ -65,6 +102,7 @@ export class ScriptedLlm implements LLMTransport {
         hint: { hint: 'What is being done to x? Undo it one step at a time.', level: 'nudge' },
         quiz: { questions: [{ prompt: 'What stores DNA?', answer: 'The nucleus', hint: 'Think of the control centre.' }] },
         check: { verdict: 'partly', feedback: 'You have the main idea; add where it happens.' },
+        chat: { reply: 'Chat reply from the site’s assistant.' },
       };
       return { text: JSON.stringify(this.replies['public_' + pub] ?? dflt[pub] ?? {}), model: 'fake', stopReason: 'end_turn', requestId: null, usage: { input: 400, output: 120, cacheRead: 0, cacheWrite: 0 } };
     }
@@ -166,7 +204,7 @@ export class Student {
 }
 
 export class HostedHarness {
-  hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
+  hosted!: HostedApp; db!: TestDb; idp!: FakeIdp; server!: Server; port = 0; url = ''; dir = ''; llm = new ScriptedLlm(); byok = new FakeGroq(); logs: string[] = []; clock = { now: Date.UTC(2026, 9, 29, 15, 0, 0) };
   now = () => this.clock.now;
   students: Student[] = []; idpQueue: Promise<void> = Promise.resolve();
   static async start(o: { passwordSignIn?: boolean; oidc?: boolean; llm?: boolean; gateway?: CalendarGateway; labelOverride?: string; port?: number; limits?: Record<string, string>; provider?: AIProvider; owner?: { email: string; password: string | null }; pilot?: boolean; maxUsers?: number; dir?: string; db?: TestDb } = {}) {
@@ -181,7 +219,7 @@ export class HostedHarness {
     if (o.labelOverride) env.DATA_LABEL = o.labelOverride;
     const { cfg: hcfg, problems } = hostedConfigFromEnv(env as never);
     if (problems.length) throw new Error(problems.join('; '));
-    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, instanceLockWaitMs: 0, now: h.now, gateway: o.gateway, logger: { info() {}, warn() {}, error() {} }, llm: o.llm === false ? null : o.provider ?? new LLMProvider(h.llm) as AIProvider });
+    h.hosted = await createHostedApp({ cfg: baseCfg({ dataDir: h.dir, appSecret: env.APP_SECRET, anthropicKey: o.llm === false ? null : 'test-key-not-real' }), hcfg, dataDir: h.dir, pool: h.db.pool, instanceLockWaitMs: 0, byokFetch: h.byok.fetch, now: h.now, gateway: o.gateway, logger: { info: (e, f) => h.logs.push(JSON.stringify(['info', e, f])), warn: (e, f) => h.logs.push(JSON.stringify(['warn', e, f])), error: (e, f) => h.logs.push(JSON.stringify(['error', e, f])) }, llm: o.llm === false ? null : o.provider ?? new LLMProvider(h.llm) as AIProvider });
     h.server = await new Promise<Server>((res) => { const s = h.hosted.app.listen(h.port, '127.0.0.1', () => res(s)); });
     if (o.pilot !== false && !o.owner) { await setSettingPg(h.db.pool, 'pilot_enabled', true); await setSettingPg(h.db.pool, 'pilot_max_users', o.maxUsers ?? 50); }
     return h;

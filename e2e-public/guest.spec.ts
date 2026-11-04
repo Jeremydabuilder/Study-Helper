@@ -186,7 +186,7 @@ test('assistant trouble never blocks the app: a failed hint keeps the work and o
   await page.goto('/#/help'); await page.getByLabel('The question or instructions').fill('Solve 2x + 3 = 11');
   await control('llm-fail', { code: 'unavailable' });
   await page.getByRole('button', { name: 'Get a hint' }).click();
-  await expect(page.getByRole('alert')).toContainText(/Your question and attempt are still here/); await expect(page.getByText('Not from the assistant: general steps')).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText(/What you typed is still here/); await expect(page.getByText('Not from the assistant: general steps')).toBeVisible();
   await expect(page.getByLabel('The question or instructions')).toHaveValue('Solve 2x + 3 = 11');
   for (let i = 0; i < 5; i++) { await page.getByRole('button', { name: 'Get a hint' }).click().catch(() => {}); await page.waitForTimeout(150); }
   await expect(page.getByRole('alert')).toContainText(/today’s assistant help from this connection/);   // the per-connection daily limit (5) was reached

@@ -25,6 +25,8 @@ createServer((req, res) => {
     const b = raw ? JSON.parse(raw) : {}; const path = new URL(req.url!, 'http://x').pathname;
     try {
       if (path === '/control/restart') { const { db, dir } = h; await h.stop({ keepDb: true }); h = await HostedHarness.start({ ...startOpts, db, dir }); return json(res, { ok: true }); }
+      if (path === '/control/byok-mode') { h.byok.mode = b.mode; h.byok.delayMs = b.delayMs ?? 0; return json(res, { ok: true }); }
+      if (path === '/control/byok-calls') return json(res, { calls: h.byok.calls.map((c) => ({ url: c.url, last4: c.key.slice(-4), redirect: c.redirect })), siteAiCalls: h.llm.calls.length, logsHaveKey: h.logs.join('\n').includes('Visitor1234567890') });
       if (path === '/control/invites') return json(res, { codes: await h.codes(b.count ?? 1, b.days ?? 7) });
       if (path === '/control/idp') { h.idp.nextEmail = b.email; return json(res, { ok: true }); }
       if (path === '/control/advance') { h.clock.now += b.ms; return json(res, { now: h.clock.now }); }

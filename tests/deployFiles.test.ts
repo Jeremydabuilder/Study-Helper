@@ -39,7 +39,10 @@ describe('the owner-site settings in docs/DEPLOYMENT.md', () => {
   });
   it('the public study-profile settings are documented and accepted', () => {
     const pubDoc = readFileSync('docs/PUBLIC_STUDY_PROFILE.md', 'utf8');
-    for (const k of ['PUBLIC_GUEST', 'PUBLIC_MAX_PASTE_CHARS', 'PUBLIC_AI_CHUNK_CHARS', 'PUBLIC_AI_MAX_CHUNKS', 'PUBLIC_IP_PER_MIN', 'PUBLIC_IP_DAILY', 'PUBLIC_GLOBAL_DAILY']) expect(pubDoc, k).toContain(k);
+    for (const k of ['PUBLIC_GUEST', 'PUBLIC_MAX_PASTE_CHARS', 'PUBLIC_AI_CHUNK_CHARS', 'PUBLIC_AI_MAX_CHUNKS', 'PUBLIC_IP_PER_MIN', 'PUBLIC_IP_DAILY', 'PUBLIC_GLOBAL_DAILY', 'PUBLIC_OPERATOR_AI', 'PUBLIC_BYOK']) expect(pubDoc, k).toContain(k);
+    const byokDoc = readFileSync('docs/BRING_YOUR_OWN_KEY.md', 'utf8'); for (const k of ['PUBLIC_OPERATOR_AI', 'PUBLIC_BYOK', 'PUBLIC_BYOK_PER_MIN', 'PUBLIC_BYOK_TEST_PER_MIN', 'https://api.groq.com/openai/v1/chat/completions']) expect(byokDoc, k).toContain(k);
+    expect(hostedConfigFromEnv({ ...vars, PUBLIC_GUEST: '1' } as never).cfg.publicGuest).toMatchObject({ operatorAi: false, byok: true });
+    expect(hostedConfigFromEnv({ ...vars, PUBLIC_GUEST: '1', PUBLIC_OPERATOR_AI: '1', PUBLIC_BYOK: '0' } as never).cfg.publicGuest).toMatchObject({ operatorAi: true, byok: false });
     const { problems, cfg } = hostedConfigFromEnv({ ...vars, PUBLIC_GUEST: '1' } as never);
     expect(problems).toEqual([]); expect(cfg.publicGuest).toMatchObject({ enabled: true, maxPasteChars: 200000, perIpDaily: 40, globalDaily: 400 });
     expect(hostedConfigFromEnv({ ...vars } as never).cfg.publicGuest.enabled).toBe(false);

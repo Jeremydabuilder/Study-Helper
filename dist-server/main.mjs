@@ -10903,7 +10903,7 @@ function hostedConfigFromEnv(env = process.env) {
     globalDailyTokens: num2("LIMIT_GLOBAL_DAILY_TOKENS", DEFAULT_LIMITS.globalDailyTokens),
     userDailyTokens: num2("LIMIT_USER_DAILY_TOKENS", DEFAULT_LIMITS.userDailyTokens)
   };
-  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", ownerEnabled ? 30 : 7), publicGuest: { enabled: publicEnabled && ownerEnabled, maxPasteChars: Math.min(5e5, Math.max(5e3, num2("PUBLIC_MAX_PASTE_CHARS", 2e5))), aiChunkChars: Math.min(12e3, Math.max(1e3, num2("PUBLIC_AI_CHUNK_CHARS", 6e3))), aiMaxChunks: Math.min(12, Math.max(1, num2("PUBLIC_AI_MAX_CHUNKS", 6))), perIpPerMin: num2("PUBLIC_IP_PER_MIN", 8), perIpDaily: num2("PUBLIC_IP_DAILY", 40), globalDaily: num2("PUBLIC_GLOBAL_DAILY", 400) }, owner: { enabled: ownerEnabled, email: ownerEmail, password: ownerPassword, name: (g("OWNER_NAME") ?? "Jeremy").slice(0, 40) }, dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num2("SESSION_DAYS", ownerEnabled ? 30 : 7), publicGuest: { enabled: publicEnabled && ownerEnabled, operatorAi: g("PUBLIC_OPERATOR_AI") === "1", byok: g("PUBLIC_BYOK") !== "0", byokPerMin: num2("PUBLIC_BYOK_PER_MIN", 20), byokTestPerMin: num2("PUBLIC_BYOK_TEST_PER_MIN", 6), maxPasteChars: Math.min(5e5, Math.max(5e3, num2("PUBLIC_MAX_PASTE_CHARS", 2e5))), aiChunkChars: Math.min(12e3, Math.max(1e3, num2("PUBLIC_AI_CHUNK_CHARS", 6e3))), aiMaxChunks: Math.min(12, Math.max(1, num2("PUBLIC_AI_MAX_CHUNKS", 6))), perIpPerMin: num2("PUBLIC_IP_PER_MIN", 8), perIpDaily: num2("PUBLIC_IP_DAILY", 40), globalDaily: num2("PUBLIC_GLOBAL_DAILY", 400) }, owner: { enabled: ownerEnabled, email: ownerEmail, password: ownerPassword, name: (g("OWNER_NAME") ?? "Jeremy").slice(0, 40) }, dataLabel, rate: { apiPerMin: num2("RATE_API_PER_MIN", 300), authPerMin: num2("RATE_AUTH_PER_MIN", 40), invitePerMin: num2("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 var GOOGLE;
 var init_config = __esm({
@@ -11269,6 +11269,105 @@ var init_ops = __esm({
   }
 });
 
+// src/ai/byok.ts
+function classify2(status, code) {
+  if (status === 401) return "invalid_key";
+  if (status === 403) return "forbidden";
+  if (status === 404 || /model_not_found|model_decommissioned|model_not_active|model_terms_required/i.test(code)) return "model_unavailable";
+  if (status === 429) return "rate_limited";
+  if (status >= 500) return "service";
+  return "rejected";
+}
+async function post(fetchImpl, key2, body, timeoutMs) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(GROQ_CHAT_URL, { method: "POST", redirect: "error", signal: ctl.signal, headers: { "content-type": "application/json", authorization: `Bearer ${key2}` }, body: JSON.stringify(body) });
+    let code = "";
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      try {
+        code = String(JSON.parse(t)?.error?.code ?? "");
+      } catch {
+      }
+    }
+    return { res, code };
+  } catch (e) {
+    return { fail: e instanceof Error && e.name === "AbortError" ? "timeout" : "network" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function pingGroq(key2, model, fetchImpl = fetch, timeoutMs = 2e4) {
+  const t0 = Date.now();
+  const r = await post(fetchImpl, key2, { model, max_completion_tokens: 16, temperature: 0, messages: [{ role: "user", content: "Reply with the single word OK." }] }, timeoutMs);
+  if ("fail" in r) return { ok: false, kind: r.fail, message: MSG2[r.fail] };
+  if (r.res.ok) {
+    await r.res.body?.cancel().catch(() => {
+    });
+    return { ok: true, kind: "ok", message: "Connected. Your key works with this model.", latencyMs: Date.now() - t0 };
+  }
+  const kind = classify2(r.res.status, r.code);
+  return { ok: false, kind, message: MSG2[kind], retryAfterMs: kind === "rate_limited" ? retryMs(r.res.headers) : void 0 };
+}
+var GROQ_CHAT_URL, BYOK_DEFAULT_MODEL, BYOK_MODEL_SUGGESTIONS, KEY_PATTERN, MODEL_PATTERN, MSG2, retryMs, ByokTransport;
+var init_byok = __esm({
+  "src/ai/byok.ts"() {
+    "use strict";
+    init_provider();
+    GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
+    BYOK_DEFAULT_MODEL = "openai/gpt-oss-120b";
+    BYOK_MODEL_SUGGESTIONS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+    KEY_PATTERN = /^[A-Za-z0-9_-]{20,256}$/;
+    MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/:-]{1,79}$/;
+    MSG2 = {
+      invalid_key: "Groq did not accept this key. Check that you copied the whole key and that it has not been deleted in your Groq account.",
+      forbidden: "Groq refused this key\u2019s access. The key may be restricted, or your Groq account or region may not allow it.",
+      model_unavailable: "Groq says that model is not available for your account. Pick another model in Settings.",
+      rate_limited: "Your Groq account has reached its usage limit for now. Wait a little, or check your limits in your Groq account.",
+      network: "Could not reach Groq from this site\u2019s server. Check your connection and try again.",
+      timeout: "Groq did not answer in time. Try again.",
+      service: "Groq reported a temporary problem. Try again in a minute.",
+      rejected: "Groq rejected the request."
+    };
+    retryMs = (h) => {
+      const n = Number(h.get("retry-after"));
+      return Number.isFinite(n) && n > 0 ? Math.min(36e5, Math.ceil(n * 1e3)) : void 0;
+    };
+    ByokTransport = class {
+      constructor(key2, defaultModel, fetchImpl = fetch) {
+        this.key = key2;
+        this.defaultModel = defaultModel;
+        this.fetchImpl = fetchImpl;
+      }
+      key;
+      defaultModel;
+      fetchImpl;
+      provider = "groq";
+      async complete(req) {
+        if (req.attachments?.length) throw new AIError("rejected", "Images and PDFs are not sent through this path.", void 0, "not_sent");
+        const model = req.model || this.defaultModel;
+        const r = await post(this.fetchImpl, this.key, { model, max_completion_tokens: req.maxTokens, temperature: 0.2, response_format: { type: "json_object" }, messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] }, req.timeoutMs);
+        if ("fail" in r) throw new AIError(r.fail === "timeout" ? "timeout" : "unavailable", MSG2[r.fail], void 0, r.fail === "timeout" ? "unknown" : "not_sent");
+        if (!r.res.ok) {
+          const kind = classify2(r.res.status, r.code);
+          if (r.res.status === 400 && r.code === "json_validate_failed") return { text: "", model, stopReason: "stop", requestId: null, usage: null };
+          const code = kind === "invalid_key" || kind === "forbidden" ? "not_configured" : kind === "rate_limited" ? "rate_limited" : kind === "service" ? "unavailable" : "rejected";
+          throw new AIError(code, MSG2[kind], kind === "rate_limited" ? retryMs(r.res.headers) ?? 3e4 : void 0, "none_reported");
+        }
+        let j;
+        try {
+          j = await r.res.json();
+        } catch {
+          throw new AIError("malformed", "Groq sent an unreadable answer.", void 0, "unknown");
+        }
+        const u = j.usage;
+        return { text: j.choices?.[0]?.message?.content ?? "", model: j.model ?? model, stopReason: j.choices?.[0]?.finish_reason ?? null, requestId: null, usage: u && typeof u.prompt_tokens === "number" ? { input: u.prompt_tokens, output: u.completion_tokens ?? 0, cacheRead: 0, cacheWrite: 0 } : null };
+      }
+    };
+  }
+});
+
 // src/core/guest/dates.ts
 var init_dates = __esm({
   "src/core/guest/dates.ts"() {
@@ -11327,7 +11426,19 @@ function mountPublic(app, o) {
   const pub = o.cfg.publicGuest;
   const perMin = new RateLimiter(pub.perIpPerMin, 6e4, o.now), statusLimiter = new RateLimiter(60, 6e4, o.now);
   const ipKey = (req) => "public:" + createHash9("sha256").update(o.cfg.authSecret + "|" + o.ipOf(req)).digest("hex").slice(0, 24);
-  const canAi = () => !!o.llm && typeof o.llm.json === "function";
+  const canAi = () => pub.operatorAi && !!o.llm && typeof o.llm.json === "function";
+  const byokLimiter = new RateLimiter(pub.byokPerMin, 6e4, o.now), testLimiter = new RateLimiter(pub.byokTestPerMin, 6e4, o.now), byokGate = new Gate(40, 2, "Your previous request is still running. Wait for it to finish.");
+  const visitorKey = (req) => {
+    const raw = req.headers["x-groq-key"];
+    if (raw === void 0) return null;
+    if (!pub.byok) throw new HttpError(403, "byok_disabled", "This site does not accept your own Groq key.");
+    const key2 = Array.isArray(raw) ? "" : raw.trim();
+    if (!KEY_PATTERN.test(key2)) throw new HttpError(400, "byok_bad_key", "That does not look like a Groq key. Check it in Settings.", { setup: true });
+    const m = req.headers["x-groq-model"];
+    const model = typeof m === "string" && m.trim() ? m.trim() : BYOK_DEFAULT_MODEL;
+    if (!MODEL_PATTERN.test(model)) throw new HttpError(400, "byok_bad_model", "That model name is not valid. Check it in Settings.", { setup: true });
+    return { key: key2, model };
+  };
   const r = express3.Router();
   r.use((_req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
@@ -11337,7 +11448,7 @@ function mountPublic(app, o) {
     const k = statusLimiter.check(ipKey(req));
     if (!k.ok) return res.status(429).json({ error: { code: "rate_limited", message: "Too many requests. Wait a minute." } });
     const wait = activeCapacity()?.snapshot().waitMs ?? 0;
-    res.json({ enabled: true, ai: { available: canAi() && wait === 0, cooling: wait > 0, waitMs: wait }, limits: { maxPasteChars: pub.maxPasteChars, aiChunkChars: pub.aiChunkChars, aiMaxChunks: pub.aiMaxChunks, perDay: pub.perIpDaily } });
+    res.json({ enabled: true, operatorAi: pub.operatorAi, byok: pub.byok ? { defaultModel: BYOK_DEFAULT_MODEL, models: BYOK_MODEL_SUGGESTIONS } : null, ai: { available: canAi() && wait === 0, cooling: pub.operatorAi && wait > 0, waitMs: pub.operatorAi ? wait : 0 }, limits: { maxPasteChars: pub.maxPasteChars, aiChunkChars: pub.aiChunkChars, aiMaxChunks: pub.aiMaxChunks, perDay: pub.perIpDaily } });
   });
   const admit = async (req) => {
     const key2 = ipKey(req);
@@ -11357,6 +11468,14 @@ function mountPublic(app, o) {
     return { key: key2, refund: () => refundQuota(o.pool, key2, "public_ai", quota).then(() => refundQuota(o.pool, "public:all", "public_ai", quota)) };
   };
   const run = async (req, task, purpose, schema, prompt) => {
+    const v = visitorKey(req);
+    if (v) {
+      const ip = ipKey(req);
+      const m = byokLimiter.check(ip);
+      if (!m.ok) throw new HttpError(429, "rate_limited", "You are going a bit fast. Wait a few seconds and try again.", { retryable: true, retryAfterMs: m.retryAfterMs });
+      return byokGate.run(ip, () => new LLMProvider(new ByokTransport(v.key, v.model, o.byokFetch ?? fetch), { timeoutMs: 3e4, tasks: { extract: { maxOutputTokens: 1800, effort: "low" }, generate: { maxOutputTokens: 1200, effort: "low" }, grade: { maxOutputTokens: 600, effort: "low" } } }).json(task, purpose, schema, prompt, {}, SYSTEM2));
+    }
+    if (!pub.operatorAi) throw new HttpError(503, "ai_setup_needed", "To use the assistant, add your own Groq key in Settings. Everything else here works without it.", { setup: true, offlineFallback: true });
     const a = await admit(req);
     const ledger = new PgLedger(o.pool, a.key, { ...o.cfg.limits, userConcurrentAi: 1, userDailyRequests: pub.perIpDaily * 2 }, o.now);
     try {
@@ -11413,14 +11532,35 @@ ${ex(b.excerpts)}
 ${block("answer", b.answer)}`);
     return out;
   }));
+  r.post("/byok/test", wrap(async (req) => {
+    const v = visitorKey(req);
+    if (!v) throw new HttpError(400, "byok_bad_key", "Enter your Groq key first.");
+    const ip = ipKey(req);
+    const t = testLimiter.check(ip);
+    if (!t.ok) throw new HttpError(429, "rate_limited", "You are testing too fast. Wait a few seconds.", { retryable: true, retryAfterMs: t.retryAfterMs });
+    const out = await byokGate.run(ip, () => pingGroq(v.key, v.model, o.byokFetch ?? fetch, 2e4));
+    return { ...out, model: v.model };
+  }));
+  r.post("/chat", wrap(async (req) => {
+    const b = ChatBody.parse(req.body);
+    return run(req, "generate", "public_chat", ChatOut, `PUBLIC_TASK: chat
+Answer the student's message helpfully and briefly (under 150 words) as a study coach. Use the excerpts only if they help. Do not do the student's graded work for them: guide, explain and ask a question back. If you are unsure, say so.
+JSON shape: {"reply":""}
+${prof(b.profile)}
+${ex(b.excerpts)}
+${b.history.map((h) => block(h.role === "user" ? "question" : "answer", h.content)).join("\n")}
+${block("question", b.message)}`);
+  }));
   r.use((_req, res) => res.status(404).json({ error: { code: "not_found", message: "Unknown endpoint." } }));
   app.use("/api/public", r);
 }
-var SYSTEM2, strip, excerpts, profileFields, ExtractBody, HintBody, QuizBody, CheckBody, HintOut, QuizOut, CheckOut, block, prof, ex;
+var SYSTEM2, strip, excerpts, profileFields, ExtractBody, HintBody, QuizBody, CheckBody, ChatBody, ChatOut, HintOut, QuizOut, CheckOut, block, prof, ex;
 var init_publicApi = __esm({
   "src/server/hosted/publicApi.ts"() {
     "use strict";
     init_provider();
+    init_byok();
+    init_llm();
     init_groqCapacity();
     init_aiSchema();
     init_common();
@@ -11436,6 +11576,8 @@ var init_publicApi = __esm({
     HintBody = z7.object({ question: z7.string().min(3).max(2e3), attempt: z7.string().max(2e3).optional(), excerpts: excerpts(3).default([]), profile: profileFields });
     QuizBody = z7.object({ topic: z7.string().max(120).default(""), excerpts: excerpts(4).min(1), count: z7.number().int().min(1).max(5).default(3), profile: profileFields });
     CheckBody = z7.object({ question: z7.string().min(3).max(500), reference: z7.string().max(600).optional(), answer: z7.string().min(1).max(1500), excerpts: excerpts(2).default([]) });
+    ChatBody = z7.object({ message: z7.string().min(1).max(1500), history: z7.array(z7.object({ role: z7.enum(["user", "assistant"]), content: z7.string().max(800) })).max(6).default([]), excerpts: excerpts(3).default([]), profile: profileFields });
+    ChatOut = z7.object({ reply: z7.string().min(1).transform((s2) => s2.slice(0, 1800)) });
     HintOut = z7.object({ hint: z7.string().min(1).transform((s2) => s2.slice(0, 900)), level: z7.enum(["nudge", "step"]).catch("nudge") });
     QuizOut = z7.object({ questions: z7.array(z7.object({ prompt: z7.string().min(3).transform((s2) => s2.slice(0, 300)), answer: z7.string().min(1).transform((s2) => s2.slice(0, 300)), hint: z7.string().transform((s2) => s2.slice(0, 200)).default("") })).min(1).max(5) });
     CheckOut = z7.object({ verdict: z7.enum(["correct", "partly", "incorrect", "unsure"]).catch("unsure"), feedback: z7.string().transform((s2) => s2.slice(0, 600)) });
@@ -11859,12 +12001,12 @@ async function buildHostedApp(d, pool, instance) {
         try {
           const s2 = await sessionOf(req);
           const open = await getSettingPg(pool, "pilot_enabled", false);
-          res.json({ signedIn: !!s2, email: s2?.guest ? null : s2?.email ?? null, guest: s2?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled, publicGuest: hcfg.publicGuest.enabled }, publicGuest: hcfg.publicGuest.enabled ? { maxPasteChars: hcfg.publicGuest.maxPasteChars, aiChunkChars: hcfg.publicGuest.aiChunkChars, aiMaxChunks: hcfg.publicGuest.aiMaxChunks } : null, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
+          res.json({ signedIn: !!s2, email: s2?.guest ? null : s2?.email ?? null, guest: s2?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled, publicGuest: hcfg.publicGuest.enabled }, publicGuest: hcfg.publicGuest.enabled ? { operatorAi: hcfg.publicGuest.operatorAi, byok: hcfg.publicGuest.byok, maxPasteChars: hcfg.publicGuest.maxPasteChars, aiChunkChars: hcfg.publicGuest.aiChunkChars, aiMaxChunks: hcfg.publicGuest.aiMaxChunks } : null, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
         } catch (e) {
           next(e);
         }
       });
-      if (hcfg.publicGuest.enabled) mountPublic(app2, { pool, now, cfg: hcfg, llm: d.llm ?? null, ipOf });
+      if (hcfg.publicGuest.enabled) mountPublic(app2, { pool, now, cfg: hcfg, llm: d.llm ?? null, ipOf, byokFetch: d.byokFetch });
       app2.post("/api/invite/check", async (req, res, next) => {
         try {
           const r = inviteLimiter.check(ipOf(req));
