@@ -23,7 +23,8 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
   const num = (k: string, d: number) => { const v = g(k); const n = v === null ? NaN : Number(v); return Number.isFinite(n) && n >= 0 ? n : d; };
   const environment = (g('APP_ENV') as Environment | null) ?? (env.NODE_ENV === 'production' ? 'production' : 'test');
   const problems: string[] = [];
-  const publicUrl = (g('PUBLIC_URL') ?? g('RENDER_EXTERNAL_URL') ?? '').replace(/\/+$/, '');
+  // PUBLIC_URL is best set by hand; hosts that publish the address they gave the service (Railway: RAILWAY_PUBLIC_DOMAIN) are a convenience fallback
+  const publicUrl = (g('PUBLIC_URL') ?? (g('RAILWAY_PUBLIC_DOMAIN') ? `https://${g('RAILWAY_PUBLIC_DOMAIN')}` : '')).replace(/\/+$/, '');
   const authSecret = g('BETTER_AUTH_SECRET') ?? '';
   if (!['production', 'staging', 'test'].includes(environment)) problems.push('APP_ENV must be production, staging or test.');
   if (!g('DATABASE_URL')) problems.push('DATABASE_URL is required in hosted mode.');
@@ -56,6 +57,7 @@ export function hostedConfigFromEnv(env: NodeJS.ProcessEnv = process.env): { cfg
     userDailyUploadMb: num('LIMIT_USER_DAILY_UPLOAD_MB', DEFAULT_LIMITS.userDailyUploadMb), userStorageMb: num('LIMIT_USER_STORAGE_MB', DEFAULT_LIMITS.userStorageMb),
     userDailyChat: num('LIMIT_USER_DAILY_CHAT', DEFAULT_LIMITS.userDailyChat), userDailyExtractions: num('LIMIT_USER_DAILY_EXTRACTIONS', DEFAULT_LIMITS.userDailyExtractions),
     globalConcurrentExtractions: num('LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS', DEFAULT_LIMITS.globalConcurrentExtractions),
+    globalDailyRequests: num('LIMIT_GLOBAL_DAILY_AI_REQUESTS', DEFAULT_LIMITS.globalDailyRequests), globalDailyTokens: num('LIMIT_GLOBAL_DAILY_TOKENS', DEFAULT_LIMITS.globalDailyTokens), userDailyTokens: num('LIMIT_USER_DAILY_TOKENS', DEFAULT_LIMITS.userDailyTokens),
   };
   return { cfg: { environment, databaseUrl: g('DATABASE_URL') ?? '', publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g('TRUST_PROXY') !== '0', operator, sessionDays: num('SESSION_DAYS', 7), dataLabel, rate: { apiPerMin: num('RATE_API_PER_MIN', 300), authPerMin: num('RATE_AUTH_PER_MIN', 40), invitePerMin: num('RATE_INVITE_PER_MIN', 20) } }, problems };
 }

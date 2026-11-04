@@ -11,6 +11,8 @@ import { Pool, tx } from './pg';
  */
 export interface Limits {
   userDailyRequests: number; userDailyUsd: number; globalDailyUsd: number;
+  /** Shared daily caps for a small provider allowance (for example Groq's Free tier). 0 = off. Tokens are the provider-reported input + output of the last 24 hours. */
+  globalDailyRequests: number; globalDailyTokens: number; userDailyTokens: number;
   userConcurrentAi: number; globalConcurrentAi: number;
   userDailyUploads: number; userDailyUploadMb: number; userStorageMb: number;
   userDailyChat: number; userDailyExtractions: number;
@@ -20,6 +22,7 @@ export interface Limits {
 }
 export const DEFAULT_LIMITS: Limits = {
   userDailyRequests: 60, userDailyUsd: 0.3, globalDailyUsd: 5,
+  globalDailyRequests: 0, globalDailyTokens: 0, userDailyTokens: 0,
   userConcurrentAi: 2, globalConcurrentAi: 6,
   userDailyUploads: 12, userDailyUploadMb: 60, userStorageMb: 150,
   userDailyChat: 40, userDailyExtractions: 15,
@@ -30,12 +33,17 @@ export const DEFAULT_LIMITS: Limits = {
 const DAY_MS = 86_400_000;
 const LOCK_LEDGER = 727_002;
 const MIN_REQUEST_USD = 0.01; // about what one ordinary request reserves
+/** A request with no reported usage (still running, abandoned, or billing unknown) is held at this many tokens so a crash cannot make the day look empty. */
+const ASSUMED_TOKENS = 3000;
+const TOKENS_SQL = `COALESCE(SUM(CASE WHEN status = 'settled' AND input_tokens IS NOT NULL THEN COALESCE(input_tokens,0) + COALESCE(output_tokens,0) WHEN status IN ('reserved','abandoned') OR billing = 'unknown' THEN ${ASSUMED_TOKENS} ELSE 0 END),0)::int`;
 
 /** Shown to students. It never names operators, models, keys or other students. */
 const MSG = {
   userRequests: 'You have used today’s study-assistant allowance. Everything else keeps working, and it resets within 24 hours.',
   userBudget: 'You have used today’s study-assistant allowance. Everything else keeps working, and it resets within 24 hours.',
   global: 'The study assistant is paused for everyone for now to keep costs under control. Practice, notes and reviews still work; try again later.',
+  sharedAllowance: 'The study assistant’s shared free allowance for today is used up. Practice, notes and reviews still work, your work is saved, and it should be back within 24 hours.',
+  userTokens: 'You have used your share of today’s study-assistant allowance so that everyone gets some. Everything else keeps working, and it resets within 24 hours.',
   off: 'The study assistant is switched off for now. Practice, notes and reviews still work.',
   busy: 'Your study assistant is already working on other requests. Wait a moment and try again.',
   busyGlobal: 'The study assistant is busy right now. Try again in a minute.',
@@ -61,8 +69,17 @@ export class PgLedger implements RequestLedger {
       await c.query("UPDATE ai_requests SET status = 'abandoned', unknown_usd = worst_usd, reserved_usd = 0, outcome = 'abandoned', billing = 'unknown' WHERE status = 'reserved' AND created_at < $1", [new Date(now.getTime() - L.reservationTtlMs)]);
       const since = new Date(now.getTime() - DAY_MS);
       const mine = (await c.query("SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, COUNT(*) FILTER (WHERE status = 'reserved')::int inflight FROM ai_requests WHERE user_id = $1 AND created_at > $2", [this.userId, since])).rows[0];
-      const all = (await c.query("SELECT COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, COUNT(*) FILTER (WHERE status = 'reserved')::int inflight FROM ai_requests WHERE created_at > $1", [since])).rows[0];
+      const all = (await c.query("SELECT COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, COUNT(*)::int n, COUNT(*) FILTER (WHERE status = 'reserved')::int inflight FROM ai_requests WHERE created_at > $1", [since])).rows[0];
       if (all.held + worst > L.globalDailyUsd) throw new AIError('budget_reached', MSG.global);
+      if (L.globalDailyRequests > 0 && all.n >= L.globalDailyRequests) throw new AIError('limit_reached', MSG.sharedAllowance);
+      if (L.globalDailyTokens > 0 || L.userDailyTokens > 0) {
+        const tk = (await c.query(`SELECT ${TOKENS_SQL} AS global, COALESCE(SUM(CASE WHEN user_id = $2 THEN 1 ELSE 0 END),0)::int AS mine_n FROM ai_requests WHERE created_at > $1`, [since, this.userId])).rows[0];
+        if (L.globalDailyTokens > 0 && tk.global + ASSUMED_TOKENS > L.globalDailyTokens) throw new AIError('limit_reached', MSG.sharedAllowance);
+        if (L.userDailyTokens > 0) {
+          const mineTok = (await c.query(`SELECT ${TOKENS_SQL} AS n FROM ai_requests WHERE created_at > $1 AND user_id = $2`, [since, this.userId])).rows[0].n as number;
+          if (mineTok + ASSUMED_TOKENS > L.userDailyTokens) throw new AIError('limit_reached', MSG.userTokens);
+        }
+      }
       if (all.inflight >= L.globalConcurrentAi) throw new AIError('rate_limited', MSG.busyGlobal, 3000);
       if (mine.n >= L.userDailyRequests) throw new AIError('limit_reached', MSG.userRequests);
       if (mine.held + worst > L.userDailyUsd) throw new AIError('budget_reached', MSG.userBudget);
@@ -91,14 +108,15 @@ export class PgLedger implements RequestLedger {
 }
 
 /** Student-facing numbers for the assistant allowance (never dollar amounts or model names). */
-export async function assistantState(pool: Pool, userId: string, limits: Limits, now: number) {
+export async function assistantState(pool: Pool, userId: string, limits: Limits, now: number, cooldownMs = 0) {
   const since = new Date(now - DAY_MS);
-  const mine = (await pool.query('SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held FROM ai_requests WHERE user_id = $1 AND created_at > $2', [userId, since])).rows[0];
-  const all = (await pool.query('SELECT COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held FROM ai_requests WHERE created_at > $1', [since])).rows[0];
+  const mine = (await pool.query(`SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, ${TOKENS_SQL} AS tokens FROM ai_requests WHERE user_id = $1 AND created_at > $2`, [userId, since])).rows[0];
+  const all = (await pool.query(`SELECT COUNT(*)::int n, COALESCE(SUM(usd + reserved_usd + unknown_usd),0) held, ${TOKENS_SQL} AS tokens FROM ai_requests WHERE created_at > $1`, [since])).rows[0];
   // "paused" when not even one more typical request would fit
-  const globalPaused = limits.globalDailyUsd - all.held < MIN_REQUEST_USD;
-  const userPaused = mine.n >= limits.userDailyRequests || limits.userDailyUsd - mine.held < MIN_REQUEST_USD;
-  return { state: globalPaused ? 'paused_global' : userPaused ? 'paused_user' : 'available', usedRequests: mine.n, dailyRequests: limits.userDailyRequests } as const;
+  const globalPaused = limits.globalDailyUsd - all.held < MIN_REQUEST_USD || (limits.globalDailyRequests > 0 && all.n >= limits.globalDailyRequests) || (limits.globalDailyTokens > 0 && all.tokens + ASSUMED_TOKENS > limits.globalDailyTokens);
+  const userPaused = mine.n >= limits.userDailyRequests || limits.userDailyUsd - mine.held < MIN_REQUEST_USD || (limits.userDailyTokens > 0 && mine.tokens + ASSUMED_TOKENS > limits.userDailyTokens);
+  // a short pause because the provider just asked everyone to slow down (the wait is the provider's own, not an estimate of ours)
+  return { state: globalPaused ? 'paused_global' : userPaused ? 'paused_user' : cooldownMs > 0 ? 'cooling' : 'available', usedRequests: mine.n, dailyRequests: limits.userDailyRequests, waitMs: cooldownMs > 0 ? cooldownMs : null } as const;
 }
 
 /** Operator report: totals only, never content. */

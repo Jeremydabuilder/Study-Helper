@@ -11,7 +11,7 @@ export function buildProvider(cfg: AppConfig): LLMProvider | null {
   for (const k of ['extract', 'generate', 'grade'] as const) tasks[k] = { ...DEFAULT_TASKS[k], ...cfg.aiTasks[k] };
   if (cfg.aiProvider === 'groq') {
     if (!cfg.groqKey) return null;
-    return new LLMProvider(new GroqTransport(cfg.groqKey, cfg.groqModel ?? GROQ_DEFAULT_MODEL), { timeoutMs: cfg.aiTimeoutMs, tasks });
+    return new LLMProvider(new GroqTransport(cfg.groqKey, cfg.groqModel ?? GROQ_DEFAULT_MODEL, undefined, cfg.groqCapacity), { timeoutMs: cfg.aiTimeoutMs, tasks });
   }
   if (!cfg.anthropicKey) return null;
   return new LLMProvider(new AnthropicTransport(cfg.anthropicKey, cfg.model, fetch, cfg.anthropicBaseUrl), { timeoutMs: cfg.aiTimeoutMs, tasks, ocr: cfg.ocr.enabled ? { model: cfg.ocr.model ?? undefined, maxOutputTokens: cfg.ocr.maxOutputTokens } : undefined });

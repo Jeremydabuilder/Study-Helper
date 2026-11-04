@@ -79,6 +79,8 @@ export async function restore(o: { pool: Pool; dataDir: string; bundleDir: strin
     for (const sfx of ['-wal', '-shm']) rmSync(dest + sfx, { force: true });
     const tmp = `${dest}.restoring`; writeFileSync(tmp, open(u.file)); renameSync(tmp, dest);
   }
+  // the data folder now holds the people the database holds: mark it, so the start-up check can tell a restored folder from a lost one
+  mkdirSync(o.dataDir, { recursive: true }); writeFileSync(join(o.dataDir, 'DATA_LABEL'), o.dataLabel);
   return { users: m.users.length, rows };
 }
 export { copyFileSync };

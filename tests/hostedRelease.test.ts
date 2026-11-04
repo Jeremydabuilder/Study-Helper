@@ -1,5 +1,6 @@
 /** Release-candidate checks that cross a server restart or a data correction, run in hosted mode against real PostgreSQL and real files. */
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { HostedHarness } from './hostedHarness';
@@ -99,5 +100,24 @@ d('sample workspace reset', () => {
     busy.release();
     expect((await s.post('/api/demo/reset', {})).status).toBe(200);
     expect(JSON.stringify((await s.get('/api/subjects')).body)).toContain('Real subject');
+  });
+});
+
+d('storage continuity', () => {
+  it('refuses to start when the database has people but the data folder is new (a missing or unmounted volume), and explains why', async () => {
+    const h = await HostedHarness.start({}); open.push(h);
+    await h.join('volume@example.test');
+    await h.stop({ keepDb: true }); open.pop();
+    const lost = mkdtempSync(join(tmpdir(), 'sh-lostvolume-'));
+    await expect(HostedHarness.start({ db: h.db, dir: lost })).rejects.toThrow(/data folder .* is empty and new[\s\S]*persistent volume/);
+    expect(existsSync(join(lost, 'DATA_LABEL'))).toBe(false);                      // nothing was written to the unexpected disk
+    process.env.ALLOW_EMPTY_DATA_DIR = '1';
+    try { const forced = await HostedHarness.start({ db: h.db, dir: lost }); open.push(forced); expect((await fetch(`${forced.url}/readyz`)).status).toBe(200); } finally { delete process.env.ALLOW_EMPTY_DATA_DIR; }
+  });
+  it('a first start on an empty database and an ordinary restart are not affected', async () => {
+    const h = await HostedHarness.start({}); open.push(h);
+    await h.join('ok@example.test'); await h.stop({ keepDb: true }); open.pop();
+    const again = await HostedHarness.start({ db: h.db, dir: h.dir }); open.push(again);
+    expect((await fetch(`${again.url}/readyz`)).status).toBe(200);
   });
 });

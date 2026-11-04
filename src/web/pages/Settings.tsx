@@ -280,7 +280,8 @@ function DataTab({ go, hosted }: { go: (p: string) => void; hosted?: boolean }) 
 const ASSISTANT: Record<string, { tone: 'good' | 'warn' | 'bad'; text: string; more: string }> = {
   available: { tone: 'good', text: 'Study assistant available', more: 'Question writing, grading of written answers, explanations and chat can use it. It can be wrong: explanations and checks are labelled.' },
   paused_user: { tone: 'warn', text: 'You have used today’s assistant allowance', more: 'It resets within 24 hours. Practice, notes and reviews keep working, and written answers are saved to be graded or self-graded.' },
-  paused_global: { tone: 'warn', text: 'Study assistant paused for everyone', more: 'It is paused to keep costs under control. Practice, notes and reviews still work. Try again later.' },
+  paused_global: { tone: 'warn', text: 'Study assistant paused for everyone', more: 'The shared allowance is used up for now (it is small and shared by everyone). Practice, notes and reviews still work, your work is saved, and it should be back within 24 hours.' },
+  cooling: { tone: 'warn', text: 'Study assistant is catching its breath', more: 'Many requests arrived at once, so it is waiting a short while before the next one. Your work is saved; try again in a minute.' },
 };
 /** What a student needs to know about the app's status: no model names, keys, tokens or dollar amounts. Those are operator settings. */
 function HostedStatus() {

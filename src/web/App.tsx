@@ -21,6 +21,7 @@ import { HomeworkDetail, HomeworkFrom, HomeworkList, NewHomework, WorkPhoto } fr
 import { Join } from './pages/Join';
 import { Privacy } from './pages/Privacy';
 import { ReportProblem } from './pages/Report';
+import { Operator } from './pages/Operator';
 
 const NAV: [string, string][] = [['/', 'Today'], ['/homework', 'Homework'], ['/subjects', 'Subjects'], ['/readings', 'Readings'], ['/chat', 'Chat'], ['/plan', 'Plan'], ['/progress', 'Progress'], ['/memory', 'Memory'], ['/settings', 'Settings']];
 
@@ -33,6 +34,7 @@ export function App() {
   const [ended, setEnded] = useState(false); const [paused, setPaused] = useState(false);
   useEffect(() => { const a = () => setEnded(true), b = () => setPaused(true); window.addEventListener('signed-out', a); window.addEventListener('pilot-paused', b); return () => { window.removeEventListener('signed-out', a); window.removeEventListener('pilot-paused', b); }; }, []);
   const [route] = useHashRoute();
+  if (route.startsWith('/operator')) return <div className="shell"><main><Operator /></main></div>; // the operator's own page: no student session involved
   if (sess.loading && !sess.data && !sess.error) return <div className="narrow" style={{ paddingTop: 80 }}><div className="skeleton" style={{ height: 120 }} /></div>;
   const hosted = !!sess.data && !sess.error;
   if (!hosted && sess.error && sess.error.code !== 'not_found') return <div className="narrow" style={{ paddingTop: 40 }}><ErrorBox error={sess.error} onRetry={sess.reload} /></div>;

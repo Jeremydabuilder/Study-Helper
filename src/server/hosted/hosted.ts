@@ -16,6 +16,8 @@ import * as port from '../services/portability';
 import { Auth, INVITE_COOKIE, createAuth, migrateAuth, readCookie } from './auth';
 import { HostedConfig } from './config';
 import { checkInvite, looksLikeCode, normalizeCode } from './invites';
+import { activeCapacity } from '../../ai/groqCapacity';
+import { mountOperator } from './operator';
 import { Gate, PgLedger, RateLimiter, assistantState, consumeQuota, refundQuota } from './limits';
 import { Logger, Metrics, makeLogger, requestObserver } from './ops';
 import { Pool, audit, createPool, getSettingPg, migrateControl } from './pg';
@@ -130,11 +132,18 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         const { spendReport } = await import('./limits');
         res.json({ ...metrics.snapshot(), spend: await spendReport(pool, now()), openDatabases: tenants.openCount });
       });
+      mountOperator(app, { pool, now, ipOf });
       // Browsers always send Origin on cross-site POSTs. Refuse state-changing authentication requests from any origin but this site, regardless of the library's own check.
       const siteOrigin = new URL(hcfg.publicUrl).origin;
       app.use('/api/auth', (req, res, next) => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin && req.headers.origin !== siteOrigin) return res.status(403).json({ error: { code: 'forbidden_origin', message: 'Cross-site requests are not allowed.' } }); next(); });
       // Better Auth endpoints (sign in/out, callbacks), rate limited per address
-      app.use('/api/auth/sign-in/anonymous', (_req, res, next) => { if (!hcfg.guestEnabled) return res.status(404).json({ error: { code: 'not_found', message: 'Guest entry is disabled.' } }); next(); });
+      // Guest entry is invitation-only, enforced here AND where the account is created (auth.ts validateUserInfo claims the code atomically). A direct call without a code never reaches the library.
+      app.use('/api/auth/sign-in/anonymous', (req, res, next) => {
+        if (!hcfg.guestEnabled) return res.status(404).json({ error: { code: 'not_found', message: 'Guest entry is disabled.' } });
+        const code = readCookie(req.headers.cookie, INVITE_COOKIE);
+        if (req.method === 'POST' && !(code && looksLikeCode(code))) return res.status(403).json({ error: { code: 'invite_required', message: 'Enter a valid invitation code first. Each code opens one private workspace.' } });
+        next();
+      });
       app.all('/api/auth/*', (req, res, next) => { const r = authLimiter.check(ipOf(req)); if (!r.ok) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many attempts. Wait a minute and try again.' } }); next(); }, toNodeHandler(auth));
     },
 
@@ -182,7 +191,7 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
 
       // ---- account: export, delete, assistant state, problem reports ----
       app.get('/api/account', (req, res) => { const s = studentOf(req); res.json({ email: s.guest ? null : s.email, guest: s.guest, environment: hcfg.environment, storageMb: Math.round((tenants.usageBytes(s.id) / MB) * 10) / 10, storageLimitMb: hcfg.limits.userStorageMb }); });
-      app.get('/api/account/assistant', async (req, res, next) => { try { res.json(await assistantState(pool, studentOf(req).id, hcfg.limits, now())); } catch (e) { next(e); } });
+      app.get('/api/account/assistant', async (req, res, next) => { try { res.json(await assistantState(pool, studentOf(req).id, hcfg.limits, now(), activeCapacity()?.snapshot().waitMs ?? 0)); } catch (e) { next(e); } });
       app.get('/api/account/export', async (req, res, next) => {
         try {
           const s = studentOf(req);
@@ -308,5 +317,11 @@ async function bindEnvironment(pool: Pool, hcfg: HostedConfig, dataDir: string) 
   mkdirSync(dataDir, { recursive: true });
   const f = join(dataDir, 'DATA_LABEL');
   if (existsSync(f)) { const l = readFileSync(f, 'utf8').trim(); if (l !== hcfg.dataLabel) throw new Error(`The data folder belongs to "${l}" but this server is configured as "${hcfg.dataLabel}". Refusing to start.`); }
-  else writeFileSync(f, hcfg.dataLabel);
+  else {
+    // A data folder with no marker is brand new. If the database already has people in it, the folder that held their files is gone: the classic
+    // mistake is a missing or unmounted persistent volume, which would silently run on a disk that is wiped at the next deploy. Refuse instead.
+    const people = (await pool.query('SELECT COUNT(*)::int n FROM "user"')).rows[0].n as number;
+    if (people > 0 && process.env.ALLOW_EMPTY_DATA_DIR !== '1') throw new Error(`The database has ${people} account(s) but the data folder (${dataDir}) is empty and new. Their files are missing: is the persistent volume attached and mounted at DATA_DIR? Refusing to start, so nothing is written to a disk that may be erased. (Restoring from a backup? Use the restore command, which prepares the folder.)`);
+    writeFileSync(f, hcfg.dataLabel);
+  }
 }
