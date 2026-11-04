@@ -1,17 +1,19 @@
-# Current release status — guest mode
+# Current release status — owner-only My Helper (and invitation-only friends mode)
 
-The historical report below describes Claude’s earlier invitation-only candidate. The current guest release is on `codex/guest-mode`, built on PR #9’s production tooling fixes. **PR #10** adds no-sign-in guest entry, isolation, export/deletion, Calendar restrictions, and browser tests. The latest commit and CI evidence are recorded on the PR; do not infer current results from the historical counts below.
+**Nothing is deployed.** Hosting is Railway (Render is blocked at school) — see [DEPLOYMENT.md](DEPLOYMENT.md). The two sections below stay separate: owner-only is `OWNER_ONLY=1`; friends mode is `AUTH_GUESTS=1` with invitation codes. They cannot be combined.
 
-The guest-only launch path needs no Google OAuth setup. Keep Calendar off. Configure the operator contact and hosting secrets, validate `render.staging.yaml`, and test the HTTPS staging URL with fictional data before enabling real classmates. An AI key and operator-chosen budget are still needed for live AI validation. No deployment or school approval is claimed.
+| Item | Status |
+|---|---|
+| Owner login, guests/registration/invitations disabled in the server, signed-out visitors refused | Tested locally (real PostgreSQL + browser): `tests/hostedOwner.test.ts`, `e2e-owner/` |
+| My Helper tabs, School → Open in Study Helper (one copy), idempotent import, reload and restart persistence | Tested locally: `tests/myhelper.test.ts`, `e2e-owner/` |
+| Groq capacity guard, cooldown, token caps | Tested against **scripted fakes only** (`tests/groqCapacity.test.ts`) |
+| Dockerfile build | **Not built** (sandbox network blocked `npm ci` inside Docker) |
+| Real Railway deployment, HTTPS cookies, volume persistence | **Not exercised** |
+| Live Groq request | **Not exercised** |
+| Access from the school network | **Unknown** |
+| Calendar and OCR | Off |
 
-Guest maintenance runs on startup and hourly: no unexpired session → seven-day grace → tenant-aware deletion. Active/busy workspaces are protected, and backup/restore preserves the grace clock. Global spend caps remain essential because clearing cookies can create a fresh per-user allowance.
-
-- Engineering checks: see PR #10 CI for the exact tested SHA. Guest tests include real PostgreSQL, restart, isolation, admission, retention, export/deletion and encrypted backup/restore; browser tests include no-sign-in entry and expired-account re-sign-in.
-- Render Blueprint specification: reviewed against the official reference on October 31, 2026 in PR #9; **dashboard/CLI validation and actual hosting remain unverified**.
-- Staging: outstanding — hosting account, HTTPS cookie/restart/persistence and hosted backup/restore validation.
-- Live AI and OCR: outstanding — real credentials and an explicit test budget. OCR stays off.
-- Google sign-in/Calendar: optional; remain unverified and unnecessary for guest mode.
-- Operator identity/contact, privacy review and applicable school/guardian decisions: outstanding; no-sign-in mode does not decide them.
+Do not call this live-ready until the real hosted HTTPS sign-in, persistence across a redeploy and a real Groq request have been exercised by the owner, using the "Try it" steps in DEPLOYMENT.md.
 
 ---
 
@@ -48,8 +50,7 @@ Status words: **Passed** (command, evidence) · **Failed** (problem, repair) · 
 | 19 | Pause switches and recovery | Passed | rehearsal: pilot off → 503 pause message while `/healthz` stays up and nothing is lost; on → same session works; sign-ups paused → invitations refused, existing students unaffected |
 | 20 | Calendar cannot block homework or studying | Passed | Calendar is off unless `CALENDAR_ENABLED=1`; the whole rehearsal (homework, study, uploads) ran with it off |
 | 21 | Load, bounded | Passed (limited meaning) | `npm run loadtest -- --students 30 --seconds 60`: 63 req/s, p95 186 ms (re-run with 20 students: 52 req/s, p95 332 ms), no server errors apart from the mock model running out of distinct questions; found and fixed a sign-up pool deadlock. One laptop-class sandbox, mock AI: not a capacity promise |
-| 22 | Render blueprints, structure | Passed | `tests/blueprints.test.ts`: one service/disk/database each, no cross-environment names, `numInstances: 1`, no secret values, the app accepts the configuration they imply |
-| 23 | Render blueprints against Render's current documentation | **Blocked** | `docs.render.com`/`render.com` unreachable from this environment (host not allowed). Needs: run `render blueprints validate render.staging.yaml` (or the dashboard's validation) once |
+| 22 | (Render blueprints removed — see DEPLOYMENT.md; `tests/deployFiles.test.ts` checks the Dockerfile and the owner settings) | Superseded | Render is blocked at school |
 | 24 | Obsolete documentation | Passed (was Failed) | README and `.env.example` still said "no login, authentication does not exist". Rewritten to separate **local mode** (no login, loopback only) from **hosted mode** (sign-in, invitations, per-student isolation) |
 
 Defects found by this round and repaired: restore into a brand-new database failed ("relation user does not exist"); `verify` accepted a wrong backup passphrase; one instance per database was documented but not enforced; Google sign-in would have switched Calendar on; the redirect URI in the first deployment notes was wrong (`/api/auth/callback/google` is correct); one blueprint file created staging **and** production; dev-tool vulnerabilities; `audit:prod` swallowed failures.

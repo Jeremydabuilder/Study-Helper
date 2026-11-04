@@ -5,11 +5,14 @@ import { uid } from '../db';
 import { Ctx, HttpError, clip, getAvailability, getProfile, parse } from './common';
 
 const TYPES = Object.keys(ACADEMIC_TYPE_LABEL) as AcademicType[];
-const EDITABLE = ['title', 'type', 'subjectId', 'due', 'topicsText', 'conceptIds', 'format', 'estimateMin', 'notes'] as const;
+export const MAX_INSTRUCTIONS = 20_000;
+const EDITABLE = ['title', 'type', 'subjectId', 'due', 'topicsText', 'conceptIds', 'format', 'estimateMin', 'notes', 'instructions'] as const;
 
 export interface ItemInput {
   title?: string; type?: string; subjectId?: string | null; dueDate?: string | null; dueTime?: string | null; topicsText?: string | null;
   conceptIds?: string[]; format?: string; estimateMin?: number | null; notes?: string;
+  /** the assignment's instructions as given; Study Helper opens with them already filled in */
+  instructions?: string;
 }
 
 function dueFields(ctx: Ctx, b: ItemInput): { due_kind: string; due_date: string | null; due_at: number | null } {
@@ -35,8 +38,8 @@ export function createItem(ctx: Ctx, b: ItemInput) {
   const id = uid(), now = ctx.now();
   const d = dueFields(ctx, b);
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO academic_items (id,subject_id,type,title,due_kind,due_date,due_at,topics_text,format,notes,status,source,estimate_min,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.subjectId ?? null, b.type, title, d.due_kind, d.due_date, d.due_at, b.topicsText ? clip(b.topicsText, 400) : null, clip(b.format, 200), clip(b.notes, 500), 'confirmed', 'manual', b.estimateMin ?? null, now, now);
+    ctx.db.run(`INSERT INTO academic_items (id,subject_id,type,title,due_kind,due_date,due_at,topics_text,format,notes,status,source,estimate_min,created_at,updated_at,instructions)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.subjectId ?? null, b.type, title, d.due_kind, d.due_date, d.due_at, b.topicsText ? clip(b.topicsText, 400) : null, clip(b.format, 200), clip(b.notes, 500), 'confirmed', 'manual', b.estimateMin ?? null, now, now, clip(b.instructions, MAX_INSTRUCTIONS));
     setConcepts(ctx, id, b.conceptIds);
   });
   return { id };
@@ -49,12 +52,12 @@ export function updateItem(ctx: Ctx, id: string, b: ItemInput) {
   const edited = new Set<string>(parse<string[]>(it.user_edited, []));
   const d = b.dueDate !== undefined ? dueFields(ctx, b) : { due_kind: it.due_kind, due_date: it.due_date, due_at: it.due_at };
   if (b.dueDate !== undefined) edited.add('due');
-  for (const k of ['title', 'type', 'subjectId', 'topicsText', 'conceptIds', 'format', 'estimateMin', 'notes'] as const) if (b[k] !== undefined) edited.add(k);
+  for (const k of ['title', 'type', 'subjectId', 'topicsText', 'conceptIds', 'format', 'estimateMin', 'notes', 'instructions'] as const) if (b[k] !== undefined) edited.add(k);
   ctx.db.tx(() => {
-    ctx.db.run(`UPDATE academic_items SET title=?, type=?, subject_id=?, due_kind=?, due_date=?, due_at=?, topics_text=?, format=?, notes=?, estimate_min=?, user_edited=?, updated_at=? WHERE id=?`,
+    ctx.db.run(`UPDATE academic_items SET title=?, type=?, subject_id=?, due_kind=?, due_date=?, due_at=?, topics_text=?, format=?, notes=?, estimate_min=?, user_edited=?, updated_at=?, instructions=? WHERE id=?`,
       b.title !== undefined ? clip(b.title, 120).trim() || it.title : it.title, b.type ?? it.type, b.subjectId === undefined ? it.subject_id : b.subjectId, d.due_kind, d.due_date, d.due_at,
       b.topicsText === undefined ? it.topics_text : b.topicsText ? clip(b.topicsText, 400) : null, b.format === undefined ? it.format : clip(b.format, 200), b.notes === undefined ? it.notes : clip(b.notes, 500),
-      b.estimateMin === undefined ? it.estimate_min : b.estimateMin, JSON.stringify([...edited]), ctx.now(), id);
+      b.estimateMin === undefined ? it.estimate_min : b.estimateMin, JSON.stringify([...edited]), ctx.now(), b.instructions === undefined ? it.instructions : clip(b.instructions, MAX_INSTRUCTIONS), id);
     setConcepts(ctx, id, b.conceptIds);
   });
 }
@@ -114,7 +117,7 @@ export function serializeItem(ctx: Ctx, it: any) {
     dueKind: it.due_kind, dueDate: it.due_kind === 'datetime' ? key : it.due_date, // timed deadlines are instants: show the date in the student's current zone
     dueTime: it.due_kind === 'datetime' ? new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(it.due_at)) : null,
     dueLabel: dueLabel(ctx, it), dueKey: key, daysLeft: key ? diffDaysKeys(today, key) : null,
-    topicsText: it.topics_text, conceptIds: concepts.map((c) => c.id), concepts, format: it.format, notes: it.notes, estimateMin: it.estimate_min, doneMin: it.done_min,
+    topicsText: it.topics_text, conceptIds: concepts.map((c) => c.id), concepts, format: it.format, notes: it.notes, instructions: it.instructions ?? '', estimateMin: it.estimate_min, doneMin: it.done_min,
     completed: !!it.completed_at, syncState: it.sync_state, syncNote: it.sync_note, unknown,
     event: ev ? { title: ev.title, description: ev.description, calendarName: ev.calendar_name, whenLabel: fmtWhen({ allDay: !!ev.all_day, startDate: ev.start_date, startUtc: ev.start_utc }, tz), allDay: !!ev.all_day, recurring: !!ev.recurring_event_id, recurringId: ev.recurring_event_id, status: ev.status } : null,
     proposal: proposal ? { reasons: proposal.reasons ?? [], dueBasis: proposal.due?.basis ?? null, subjectReason: proposal.subjectReason ?? null, confidence: proposal.confidence ?? null, topicsFromEvent: proposal.topicsText ?? null, possibleDuplicateOf: proposal.possibleDuplicateOf ?? null } : null,

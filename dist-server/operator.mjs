@@ -210,7 +210,7 @@ function createAuth(pool, cfg, now = Date.now, authPool = pool) {
     baseURL: cfg.publicUrl,
     basePath: "/api/auth",
     trustedOrigins: [cfg.publicUrl],
-    emailAndPassword: { enabled: cfg.passwordSignIn, minPasswordLength: 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
+    emailAndPassword: { enabled: cfg.passwordSignIn, disableSignUp: cfg.owner.enabled, minPasswordLength: cfg.owner.enabled ? 12 : 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
     account: { accountLinking: { enabled: false } },
     session: { expiresIn: cfg.sessionDays * 86400, updateAge: 86400, cookieCache: { enabled: false } },
     advanced: { useSecureCookies: secure, cookiePrefix: "sh", defaultCookieAttributes: { httpOnly: true, sameSite: "lax", secure }, ipAddress: { ipAddressHeaders: ["x-forwarded-for"] }, disableCSRFCheck: false },
@@ -219,9 +219,10 @@ function createAuth(pool, cfg, now = Date.now, authPool = pool) {
       validateUserInfo: async ({ source }, ctx) => {
         if (source.action === "link-account") return { error: "linking_disabled", errorDescription: "Linking sign-in methods is not supported." };
         if (source.action !== "create-user") return;
+        if (cfg.owner.enabled) return { error: "registration_closed", errorDescription: "This site has one owner and does not create accounts." };
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === "full" ? "pilot_full" : "pilot_closed", errorDescription: adm.reason === "full" ? "The pilot is full right now." : "The pilot is not accepting new students right now." };
-        if (source.method === "anonymous") return cfg.guestEnabled ? void 0 : { error: "guest_disabled", errorDescription: "Guest entry is disabled." };
+        if (source.method === "anonymous" && !cfg.guestEnabled) return { error: "guest_disabled", errorDescription: "Guest entry is disabled." };
         const code = readCookie(cookieOf(ctx), INVITE_COOKIE);
         const inviteId = code && looksLikeCode(code) ? await claimInvite(pool, code, now()) : null;
         if (!inviteId) return { error: "invite_required", errorDescription: "You need a valid invitation to create an account." };
@@ -373,6 +374,9 @@ var HomeworkCheck = z.object({
   suggested_edits: z.array(z.object({ original: z.string().max(300), suggestion: z.string().max(400), reason: z.string().max(200) })).max(5).default([])
 });
 
+// src/ai/groqCapacity.ts
+var MAX_COOLDOWN_MS = 6 * 36e5;
+
 // src/server/config.ts
 import { readFileSync, existsSync } from "node:fs";
 function loadEnvFile(path = ".env") {
@@ -417,6 +421,9 @@ var DEFAULT_LIMITS = {
   userDailyRequests: 60,
   userDailyUsd: 0.3,
   globalDailyUsd: 5,
+  globalDailyRequests: 0,
+  globalDailyTokens: 0,
+  userDailyTokens: 0,
   userConcurrentAi: 2,
   globalConcurrentAi: 6,
   userDailyUploads: 12,
@@ -429,6 +436,8 @@ var DEFAULT_LIMITS = {
   reservationTtlMs: 3 * 6e4
 };
 var DAY_MS = 864e5;
+var ASSUMED_TOKENS = 3e3;
+var TOKENS_SQL = `COALESCE(SUM(CASE WHEN status = 'settled' AND input_tokens IS NOT NULL THEN COALESCE(input_tokens,0) + COALESCE(output_tokens,0) WHEN status IN ('reserved','abandoned') OR billing = 'unknown' THEN ${ASSUMED_TOKENS} ELSE 0 END),0)::int`;
 async function spendReport(pool, now) {
   const since = new Date(now - DAY_MS);
   const g = (await pool.query("SELECT COUNT(*)::int n, COALESCE(SUM(usd),0) usd, COALESCE(SUM(unknown_usd),0) unknown, COALESCE(SUM(reserved_usd),0) reserved FROM ai_requests WHERE created_at > $1", [since])).rows[0];
@@ -447,7 +456,8 @@ function hostedConfigFromEnv(env = process.env) {
   };
   const environment = g("APP_ENV") ?? (env.NODE_ENV === "production" ? "production" : "test");
   const problems = [];
-  const publicUrl = (g("PUBLIC_URL") ?? g("RENDER_EXTERNAL_URL") ?? "").replace(/\/+$/, "");
+  const ownerEnabled = g("OWNER_ONLY") === "1";
+  const publicUrl = (g("PUBLIC_URL") ?? (g("RAILWAY_PUBLIC_DOMAIN") ? `https://${g("RAILWAY_PUBLIC_DOMAIN")}` : "")).replace(/\/+$/, "");
   const authSecret = g("BETTER_AUTH_SECRET") ?? "";
   if (!["production", "staging", "test"].includes(environment)) problems.push("APP_ENV must be production, staging or test.");
   if (!g("DATABASE_URL")) problems.push("DATABASE_URL is required in hosted mode.");
@@ -462,7 +472,7 @@ function hostedConfigFromEnv(env = process.env) {
   if (!g("APP_SECRET") || g("APP_SECRET").length < 32) problems.push("APP_SECRET must be at least 32 random characters (it protects stored Calendar tokens).");
   if (g("APP_SECRET") && g("APP_SECRET") === authSecret) problems.push("APP_SECRET and BETTER_AUTH_SECRET must be different values.");
   const clientId = g("AUTH_OIDC_CLIENT_ID") ?? g("GOOGLE_CLIENT_ID"), clientSecret = g("AUTH_OIDC_CLIENT_SECRET") ?? g("GOOGLE_CLIENT_SECRET");
-  const oidc = clientId && clientSecret ? {
+  const oidc = !ownerEnabled && clientId && clientSecret ? {
     providerId: g("AUTH_OIDC_PROVIDER_ID") ?? "google",
     clientId,
     clientSecret,
@@ -471,13 +481,19 @@ function hostedConfigFromEnv(env = process.env) {
     userInfoUrl: g("AUTH_OIDC_USERINFO_URL") ?? GOOGLE.userInfoUrl,
     scopes: ["openid", "email"]
   } : null;
-  const passwordSignIn = g("AUTH_PASSWORD") === "1";
-  const guestEnabled = g("AUTH_GUESTS") === "1";
-  if (!oidc && !passwordSignIn && !guestEnabled) problems.push("Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.");
-  if (environment === "production" && passwordSignIn && g("AUTH_PASSWORD_ALLOW_IN_PRODUCTION") !== "1") problems.push("AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).");
+  const ownerEmail = (g("OWNER_EMAIL") ?? "").toLowerCase(), ownerPassword = g("OWNER_PASSWORD");
+  const passwordSignIn = ownerEnabled ? true : g("AUTH_PASSWORD") === "1";
+  const guestEnabled = ownerEnabled ? false : g("AUTH_GUESTS") === "1";
+  if (ownerEnabled) {
+    if (g("AUTH_GUESTS") === "1") problems.push("OWNER_ONLY=1 cannot be combined with AUTH_GUESTS=1: an owner-only site has no guest entry.");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ownerEmail)) problems.push("OWNER_EMAIL must be the email address you sign in with.");
+    if (ownerPassword !== null && ownerPassword.length < 12) problems.push("OWNER_PASSWORD must be at least 12 characters.");
+  }
+  if (!ownerEnabled && !oidc && !passwordSignIn && !guestEnabled) problems.push("Configure at least one sign-in method: Google/OIDC credentials, AUTH_PASSWORD=1, or AUTH_GUESTS=1.");
+  if (!ownerEnabled && environment === "production" && passwordSignIn && g("AUTH_PASSWORD_ALLOW_IN_PRODUCTION") !== "1") problems.push("AUTH_PASSWORD=1 is not allowed in production unless AUTH_PASSWORD_ALLOW_IN_PRODUCTION=1 (accounts would then rely on invitations alone).");
   const dataLabel = g("DATA_LABEL") ?? environment;
   const operator = { name: g("OPERATOR_NAME") ?? "", contact: g("OPERATOR_CONTACT") ?? "" };
-  if (environment === "production" && (!operator.name || !operator.contact)) problems.push("OPERATOR_NAME and OPERATOR_CONTACT are required in production: the privacy notice must say who runs the site and how to reach them.");
+  if (!ownerEnabled && environment === "production" && (!operator.name || !operator.contact)) problems.push("OPERATOR_NAME and OPERATOR_CONTACT are required in production: the privacy notice must say who runs the site and how to reach them.");
   const limits = {
     ...DEFAULT_LIMITS,
     userDailyRequests: num("LIMIT_USER_DAILY_AI_REQUESTS", DEFAULT_LIMITS.userDailyRequests),
@@ -490,9 +506,12 @@ function hostedConfigFromEnv(env = process.env) {
     userStorageMb: num("LIMIT_USER_STORAGE_MB", DEFAULT_LIMITS.userStorageMb),
     userDailyChat: num("LIMIT_USER_DAILY_CHAT", DEFAULT_LIMITS.userDailyChat),
     userDailyExtractions: num("LIMIT_USER_DAILY_EXTRACTIONS", DEFAULT_LIMITS.userDailyExtractions),
-    globalConcurrentExtractions: num("LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS", DEFAULT_LIMITS.globalConcurrentExtractions)
+    globalConcurrentExtractions: num("LIMIT_GLOBAL_CONCURRENT_EXTRACTIONS", DEFAULT_LIMITS.globalConcurrentExtractions),
+    globalDailyRequests: num("LIMIT_GLOBAL_DAILY_AI_REQUESTS", DEFAULT_LIMITS.globalDailyRequests),
+    globalDailyTokens: num("LIMIT_GLOBAL_DAILY_TOKENS", DEFAULT_LIMITS.globalDailyTokens),
+    userDailyTokens: num("LIMIT_USER_DAILY_TOKENS", DEFAULT_LIMITS.userDailyTokens)
   };
-  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num("SESSION_DAYS", 7), dataLabel, rate: { apiPerMin: num("RATE_API_PER_MIN", 300), authPerMin: num("RATE_AUTH_PER_MIN", 40), invitePerMin: num("RATE_INVITE_PER_MIN", 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num("SESSION_DAYS", ownerEnabled ? 30 : 7), owner: { enabled: ownerEnabled, email: ownerEmail, password: ownerPassword, name: (g("OWNER_NAME") ?? "Jeremy").slice(0, 40) }, dataLabel, rate: { apiPerMin: num("RATE_API_PER_MIN", 300), authPerMin: num("RATE_AUTH_PER_MIN", 40), invitePerMin: num("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 
 // src/server/ops/cli.ts
@@ -810,6 +829,8 @@ async function restore(o) {
     writeFileSync(tmp, open(u.file));
     renameSync(tmp, dest);
   }
+  mkdirSync3(o.dataDir, { recursive: true });
+  writeFileSync(join4(o.dataDir, "DATA_LABEL"), o.dataLabel);
   return { users: m.users.length, rows };
 }
 
@@ -899,6 +920,16 @@ var ExportFile = z2.object({
 
 // src/server/pdf.ts
 var LIMITS = { maxPdfBytes: 15 * 1024 * 1024, maxImageBytes: 10 * 1024 * 1024, maxPages: 60, maxChars: 15e4, timeoutMs: 3e4 };
+
+// src/server/services/myhelper.ts
+import { z as z3 } from "zod";
+var Id = z3.union([z3.string().max(80), z3.number()]);
+var Legacy = z3.object({
+  tasks: z3.array(z3.object({ id: Id.optional(), title: z3.unknown(), category: z3.unknown().optional(), due: z3.unknown().optional(), done: z3.unknown().optional() }).passthrough()).max(5e3).optional(),
+  projects: z3.array(z3.object({ id: Id.optional(), name: z3.unknown(), desc: z3.unknown().optional(), notes: z3.unknown().optional(), nextAction: z3.unknown().optional(), stage: z3.unknown().optional() }).passthrough()).max(1e3).optional(),
+  memory: z3.array(z3.object({ id: Id.optional(), text: z3.unknown() }).passthrough()).max(1e3).optional()
+}).passthrough();
+var ImportPayload = z3.union([z3.object({ format: z3.literal("my-helper-export"), version: z3.literal(1), state: Legacy }).passthrough().transform((x) => x.state), Legacy]);
 
 // src/server/hosted/account.ts
 init_pg();

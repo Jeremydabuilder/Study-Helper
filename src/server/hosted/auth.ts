@@ -43,7 +43,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
   }
   return betterAuth({
     database: authPool, secret: cfg.authSecret, baseURL: cfg.publicUrl, basePath: '/api/auth', trustedOrigins: [cfg.publicUrl],
-    emailAndPassword: { enabled: cfg.passwordSignIn, minPasswordLength: 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
+    emailAndPassword: { enabled: cfg.passwordSignIn, disableSignUp: cfg.owner.enabled, minPasswordLength: cfg.owner.enabled ? 12 : 10, maxPasswordLength: 128, autoSignIn: true, requireEmailVerification: false },
     account: { accountLinking: { enabled: false } },
     session: { expiresIn: cfg.sessionDays * 86_400, updateAge: 86_400, cookieCache: { enabled: false } },
     advanced: { useSecureCookies: secure, cookiePrefix: 'sh', defaultCookieAttributes: { httpOnly: true, sameSite: 'lax', secure }, ipAddress: { ipAddressHeaders: ['x-forwarded-for'] }, disableCSRFCheck: false },
@@ -52,6 +52,7 @@ export function createAuth(pool: Pool, cfg: HostedConfig, now: () => number = Da
       validateUserInfo: async ({ source }: any, ctx: any) => {
         if (source.action === 'link-account') return { error: 'linking_disabled', errorDescription: 'Linking sign-in methods is not supported.' };
         if (source.action !== 'create-user') return;
+        if (cfg.owner.enabled) return { error: 'registration_closed', errorDescription: 'This site has one owner and does not create accounts.' };
         const adm = await admissionOpen(pool);
         if (!adm.open) return { error: adm.reason === 'full' ? 'pilot_full' : 'pilot_closed', errorDescription: adm.reason === 'full' ? 'The pilot is full right now.' : 'The pilot is not accepting new students right now.' };
         // A guest workspace is an account like any other: it needs its own unused invitation. (Guest entry still has to be switched on.)

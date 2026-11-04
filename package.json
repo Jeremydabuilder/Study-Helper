@@ -19,6 +19,7 @@
     "smoke:ai": "node --import tsx src/eval/smoke.ts",
     "doctor": "node --import tsx src/server/doctor.ts",
     "operator": "node dist-server/operator.mjs",
+    "test:e2e:owner": "npm run build && playwright test -c playwright.owner.config.ts",
     "test:e2e": "npm run build && playwright test",
     "build:server": "node scripts/build-server.mjs",
     "build:hosted": "npm run build && npm run build:server",

@@ -12,7 +12,10 @@ import { AIError } from '../src/ai/provider';
 
 const APP_PORT = Number(process.env.E2E_APP_PORT ?? 4180), CONTROL_PORT = Number(process.env.E2E_CONTROL_PORT ?? 4181);
 const limits = process.env.E2E_LIMITS ? JSON.parse(process.env.E2E_LIMITS) : {};
-const h = await HostedHarness.start({ port: APP_PORT, passwordSignIn: true, limits: { AUTH_GUESTS: '1', ...limits } });
+const OWNER = { email: 'owner@example.test', password: 'correct horse battery staple' };
+const ownerMode = process.env.E2E_OWNER === '1';
+const startOpts = ownerMode ? { port: APP_PORT, owner: OWNER, limits: { OWNER_NAME: 'Jeremy', ...limits } } : { port: APP_PORT, passwordSignIn: true, limits: { AUTH_GUESTS: '1', ...limits } };
+let h = await HostedHarness.start(startOpts);
 
 const loop = monitorEventLoopDelay({ resolution: 10 }); loop.enable();
 const json = (res: import('node:http').ServerResponse, body: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -21,6 +24,7 @@ createServer((req, res) => {
   req.on('end', async () => {
     const b = raw ? JSON.parse(raw) : {}; const path = new URL(req.url!, 'http://x').pathname;
     try {
+      if (path === '/control/restart') { const { db, dir } = h; await h.stop({ keepDb: true }); h = await HostedHarness.start({ ...startOpts, db, dir }); return json(res, { ok: true }); }
       if (path === '/control/invites') return json(res, { codes: await h.codes(b.count ?? 1, b.days ?? 7) });
       if (path === '/control/idp') { h.idp.nextEmail = b.email; return json(res, { ok: true }); }
       if (path === '/control/advance') { h.clock.now += b.ms; return json(res, { now: h.clock.now }); }

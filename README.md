@@ -14,6 +14,10 @@ AI generates and explains. **Application code** owns scheduling, persistence, ma
 
 > **Two modes — read this.** **Local mode** (default, `npm start`) is a single-user app with **no login**: it binds to `127.0.0.1`, refuses any other `HOST`, and rejects cross-origin writes; do not expose it to a network. **Hosted mode** (`APP_MODE=hosted`, built by `npm run build:hosted`) is the multi-student pilot: **Continue without an account** when `AUTH_GUESTS=1`, optional invitation-gated account sign-in, PostgreSQL for sessions and limits, one private database file per student, spend limits, account export/delete. Guests use a browser session cookie; losing it can lose access. Unreachable guest workspaces are cleaned after a seven-day grace period; see `docs/GUEST_MODE.md`. Hosted mode has **never been deployed or tested against live Google, AI or OCR services**; see `docs/LAUNCH_CHECKLIST.md` for what has and has not been verified, and `docs/DEPLOYMENT.md`.
 
+## My Helper (owner-only hosted site)
+
+`OWNER_ONLY=1` turns the hosted app into a private site for one person: a single email + password login, no guests, sign-up, invitations or Google, enforced in the server. After sign-in the owner sees **My Helper** (Today, School, Projects) with a **Study Helper** tab in place of "AI Helpers". **School** lists assignments; **Open in Study Helper** turns an assignment's instructions into a homework workspace linked to the *same* assignment (one copy). Old browser-only data is exported with `legacy/my-helper-with-export.html` and imported (with a preview, safely repeatable) on the **Import old data** page. Setup on Railway, the Groq key and the exact steps to try it: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Invitation-only friends mode: [docs/GUEST_MODE.md](docs/GUEST_MODE.md). Not deployed or exercised against real Railway/Groq yet.
+
 ## Start it
 
 Requires Node ≥ 22.13 (uses the built-in `node:sqlite`; no native modules).

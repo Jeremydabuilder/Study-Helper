@@ -22,6 +22,10 @@ import { Join } from './pages/Join';
 import { Privacy } from './pages/Privacy';
 import { ReportProblem } from './pages/Report';
 import { Operator } from './pages/Operator';
+import { pageFor } from './routes';
+import { MyHelperApp } from './myhelper/MyHelperApp';
+import { OwnerSignIn } from './myhelper/SignIn';
+import './myhelper/mh.css';
 
 const NAV: [string, string][] = [['/', 'Today'], ['/homework', 'Homework'], ['/subjects', 'Subjects'], ['/readings', 'Readings'], ['/chat', 'Chat'], ['/plan', 'Plan'], ['/progress', 'Progress'], ['/memory', 'Memory'], ['/settings', 'Settings']];
 
@@ -41,6 +45,10 @@ export function App() {
   if (!hosted) return <AppShell hosted={null} />;
   if (route.startsWith('/privacy')) return <div className="shell"><main><Privacy session={sess.data} /></main></div>;
   if (paused) return <div className="narrow" style={{ paddingTop: 60 }}><h1>Study Helper is paused</h1><p>Your work is saved. Please come back later.</p><button className="btn" onClick={() => { setPaused(false); sess.reload(); }}>Check again</button></div>;
+  if (sess.data.methods?.owner) {
+    if (!sess.data.signedIn || ended) return <OwnerSignIn onSignedIn={() => { setEnded(false); sess.reload(); }} />;
+    return <MyHelperApp session={sess.data} onSignOut={async () => { try { await post('/auth/sign-out', {}); } catch { /* already gone */ } setEnded(true); sess.reload(); }} />;
+  }
   if (!sess.data.signedIn || ended) return <div className="shell"><main><Join session={sess.data} onSignedIn={() => { setEnded(false); sess.reload(); }} /></main></div>;
   return <AppShell hosted={sess.data} onSignOut={async () => { if (sess.data?.guest && !window.confirm('Leaving ends access to this guest workspace. Download or delete your data in Settings first. Leave anyway?')) return; try { await post('/auth/sign-out', {}); } catch { /* the cookie may already be gone */ } setEnded(true); sess.reload(); }} />;
 }
@@ -52,28 +60,7 @@ function AppShell({ hosted, onSignOut }: { hosted: any; onSignOut?: () => void }
   const meta = useApi<any>('/meta', [ws]);
   const path = route.split('?')[0];
 
-  let page;
-  if (path.startsWith('/study/')) page = <Study id={path.split('/')[2]} go={go} />;
-  else if (path.startsWith('/read/')) page = <Reader id={path.split('/')[2]} go={go} />;
-  else if (path === '/readings') page = <Readings go={go} />;
-  else if (path.startsWith('/outline/')) page = <Outline id={path.split('/')[2]} go={go} />;
-  else if (path === '/homework') page = <HomeworkList go={go} />;
-  else if (path === '/homework/new') page = <NewHomework go={go} />;
-  else if (path.startsWith('/homework/from/')) page = <HomeworkFrom sourceId={path.split('/')[3]} go={go} />;
-  else if (path.startsWith('/homework/photo/')) page = <WorkPhoto hwId={path.split('/')[3]} qid={path.split('/')[4]} go={go} />;
-  else if (path.startsWith('/homework/')) page = <HomeworkDetail id={path.split('/')[2]} go={go} />;
-  else if (path === '/chat') page = <Chat go={go} />;
-  else if (path === '/start') page = <StartFlow go={go} />;
-  else if (path.startsWith('/prepare/')) page = <Prepare sourceId={path.split('/')[2]} go={go} />;
-  else if (path.startsWith('/review/')) page = <ReviewSource id={path.split('/')[2]} go={go} />;
-  else if (path.startsWith('/subjects/')) page = <SubjectDetail id={path.split('/')[2]} go={go} />;
-  else if (path === '/subjects') page = <Subjects go={go} />;
-  else if (path === '/plan') page = <Plan go={go} />;
-  else if (path === '/calendar') page = <CalendarPage guest={!!hosted?.guest} go={go} query={route.split('?')[1] ?? ''} />;
-  else if (path === '/progress') page = <Progress go={go} />;
-  else if (path === '/memory') page = <Memory go={go} />;
-  else if (path === '/settings') page = <Settings go={go} meta={meta.data} hosted={hosted} onSignOut={onSignOut} />;
-  else page = <Today go={go} meta={meta.data} />;
+  const page = pageFor(path, route, go, { meta: meta.data, hosted, onSignOut });
 
   const studying = path.startsWith('/study/');
   return (

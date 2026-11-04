@@ -18,8 +18,10 @@ export async function joinAs(page: Page, email: string) {
   await control('idp', { email });
   await page.goto('/#/join');
   await expect(page.getByRole('heading', { name: 'Join Study Helper' })).toBeVisible();
-  await page.getByLabel('Invitation code').fill(codes[0]);
-  await page.getByRole('button', { name: 'Check code' }).click();
+  // with guest entry on there are two code boxes (guest card and account card): this is the account one
+  const card = page.locator('section.card', { has: page.getByRole('heading', { name: '1. Your invitation code' }) });
+  await card.getByLabel('Invitation code').fill(codes[0]);
+  await card.getByRole('button', { name: 'Check code' }).click();
   await expect(page.getByText('Code accepted')).toBeVisible();
   await page.getByRole('button', { name: 'Continue with Google' }).click();
   await expect(page.getByRole('link', { name: 'Today' }).first()).toBeVisible();
