@@ -17,7 +17,10 @@ Turn on `PUBLIC_GUEST=1` on an **owner-only** site (`OWNER_ONLY=1`, see [DEPLOYM
 - Later assistant calls send only what is needed: a hint sends the question, the attempt, up to 3 short passages of notes chosen because they match the question, and at most the class name, first goal and usual difficulty. Practice questions send up to 4 short passages. The hint page shows exactly this before sending. The whole profile is never sent.
 - The server stores only counters (a keyed hash of the visitor's address, a day, a count). Addresses, text and answers are not stored or logged.
 
-## Protection of the shared Groq allowance
+## Who pays for the AI
+By default **visitors bring their own Groq key** (Settings; see [BRING_YOUR_OWN_KEY.md](BRING_YOUR_OWN_KEY.md)) and your Groq key is never used for strangers. Set `PUBLIC_OPERATOR_AI=1` only if you want visitors without a key to use your allowance too, within the caps below. A visitor who set their own key never falls back to yours.
+
+## Protection of the shared Groq allowance (applies when `PUBLIC_OPERATOR_AI=1`)
 Public routes are the only ones open to signed-out visitors (`/api/public/status|extract|hint|quiz|check`). Each AI route is limited, in order:
 1. request size (64 KB; an oversize body is refused before it is read) and strict field limits;
 2. per address per minute (`PUBLIC_IP_PER_MIN`, default 8);
@@ -28,7 +31,7 @@ An allowance that was taken but never reached the provider is given back. When a
 Behind a host's proxy the address comes from the proxy (`TRUST_PROXY`, on by default, one hop). Per-address limits are only as good as that header: they bound casual overuse, they do not stop a determined attacker with many addresses; the shared daily caps are what bound the owner's spend. Set `PUBLIC_GLOBAL_DAILY` to a number you are comfortable with, and keep the Groq account on its Free tier unless you decide otherwise.
 
 ## Settings
-`PUBLIC_GUEST=1` (needs `OWNER_ONLY=1`), `PUBLIC_MAX_PASTE_CHARS`, `PUBLIC_AI_CHUNK_CHARS`, `PUBLIC_AI_MAX_CHUNKS`, `PUBLIC_IP_PER_MIN`, `PUBLIC_IP_DAILY`, `PUBLIC_GLOBAL_DAILY`. Add them in the Railway **Variables** screen like the others; no secret is involved. Remove `PUBLIC_GUEST` to switch it off.
+`PUBLIC_GUEST=1` (needs `OWNER_ONLY=1`), `PUBLIC_OPERATOR_AI`, `PUBLIC_BYOK`, `PUBLIC_BYOK_PER_MIN`, `PUBLIC_BYOK_TEST_PER_MIN`, `PUBLIC_MAX_PASTE_CHARS`, `PUBLIC_AI_CHUNK_CHARS`, `PUBLIC_AI_MAX_CHUNKS`, `PUBLIC_IP_PER_MIN`, `PUBLIC_IP_DAILY`, `PUBLIC_GLOBAL_DAILY`. Add them in the Railway **Variables** screen like the others; no secret is involved. Remove `PUBLIC_GUEST` to switch it off.
 
 ## Checked, and not checked
 Checked locally (real PostgreSQL, real browser, scripted AI): `tests/guestEngine.test.ts`, `tests/hostedPublic.test.ts`, `e2e-public/`. **Not** checked: any live Groq request (extraction quality on real notes is unknown), any real deployment, HTTPS or proxy address handling, access from the school network, mobile Safari, and how well the plain rules read notes written in styles other than the examples. The rules are deliberately cautious: when they are unsure they ask in the preview.

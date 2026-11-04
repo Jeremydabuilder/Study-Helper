@@ -20,6 +20,7 @@
     "doctor": "node --import tsx src/server/doctor.ts",
     "operator": "node dist-server/operator.mjs",
     "test:e2e:public": "npm run build && playwright test -c playwright.public.config.ts",
+    "test:e2e:byok": "npm run build && playwright test -c playwright.byok.config.ts",
     "test:e2e:owner": "npm run build && playwright test -c playwright.owner.config.ts",
     "test:e2e": "npm run build && playwright test",
     "build:server": "node scripts/build-server.mjs",

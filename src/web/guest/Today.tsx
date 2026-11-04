@@ -6,7 +6,7 @@ import { buildPlan, fmtClock } from '../../core/guest/plan';
 import { dueCards } from '../../core/guest/practice';
 import { newId } from '../../core/guest/extract';
 import { PageTop } from '../myhelper/Shell';
-import { useGuest } from './store';
+import { useGuest, useProvider } from './store';
 
 export function AddAssignment({ onAdded }: { onAdded?: () => void }) {
   const { update, today } = useGuest();
@@ -27,7 +27,7 @@ export function AddAssignment({ onAdded }: { onAdded?: () => void }) {
 }
 
 export function GuestToday({ go }: { go: (p: string) => void }) {
-  const { profile, update, today, status } = useGuest();
+  const { profile, update, today } = useGuest(); const prov = useProvider();
   const basis = hasBasis(profile);
   const prog = interviewProgress(profile);
   const nowMin = (() => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); })();
@@ -62,6 +62,6 @@ export function GuestToday({ go }: { go: (p: string) => void }) {
             <a className="mh-task" href="#/review" style={{ textDecoration: 'none', color: 'inherit' }}><span className="mh-title">{due ? `${due} card${due === 1 ? '' : 's'} to review` : 'Short retrieval practice'}</span><span className="mh-link-btn">Open</span></a></div></section>
       </div></>}
     <div style={{ marginTop: 18 }}><AddAssignment /></div>
-    <p className="mh-meta" style={{ marginTop: 14 }}>{status?.ai.available ? 'The study assistant is on for hints and practice questions.' : 'The study assistant is not available right now. Plans, practice and review work without it.'}</p>
+    <p className="mh-meta" style={{ marginTop: 14 }}>{prov.ready ? `The study assistant is on (${prov.label}).` : <>The study assistant is off. <a href="#/settings">Add your Groq key in Settings</a> to turn it on; plans, practice and review work without it.</>}</p>
   </>);
 }

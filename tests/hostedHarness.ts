@@ -58,13 +58,14 @@ export const VISITOR_KEY = 'gsk_' + 'Visitor1234567890'.repeat(3);
 export class FakeGroq {
   calls: { url: string; redirect: string | undefined; key: string; body: any; headers: Record<string, string> }[] = [];
   mode: 'ok' | 'invalid_key' | 'forbidden' | 'model' | 'rate' | 'server' | 'network' | 'hang' | 'redirect' = 'ok';
-  valid = new Set([VISITOR_KEY]);
+  valid = new Set([VISITOR_KEY]); delayMs = 0;
   fetch: typeof fetch = async (url, init) => {
     const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), String(v)]));
     const key = (headers.authorization ?? '').replace(/^Bearer /, '');
     const body = init?.body ? JSON.parse(String(init.body)) : null;
     this.calls.push({ url: String(url), redirect: init?.redirect, key, body, headers });
     const json = (status: number, o: unknown, h: Record<string, string> = {}) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json', ...h } });
+    if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
     if (this.mode === 'network') throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
     if (this.mode === 'hang') return new Promise((_r, rej) => init?.signal?.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
     if (this.mode === 'redirect' && init?.redirect === 'error') throw new TypeError('fetch failed: redirect');

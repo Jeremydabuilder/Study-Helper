@@ -49,7 +49,7 @@ export function mountPublic(app: express.Express, o: { pool: Pool; now: () => nu
   const perMin = new RateLimiter(pub.perIpPerMin, 60_000, o.now), statusLimiter = new RateLimiter(60, 60_000, o.now);
   const ipKey = (req: Request) => 'public:' + createHash('sha256').update(o.cfg.authSecret + '|' + o.ipOf(req)).digest('hex').slice(0, 24);
   const canAi = () => pub.operatorAi && !!o.llm && typeof (o.llm as Json).json === 'function';
-  const byokLimiter = new RateLimiter(pub.byokPerMin, 60_000, o.now), testLimiter = new RateLimiter(6, 60_000, o.now), byokGate = new Gate(40, 2, 'Your previous request is still running. Wait for it to finish.');
+  const byokLimiter = new RateLimiter(pub.byokPerMin, 60_000, o.now), testLimiter = new RateLimiter(pub.byokTestPerMin, 60_000, o.now), byokGate = new Gate(40, 2, 'Your previous request is still running. Wait for it to finish.');
   /** The visitor's own key, from a request header only (never a URL, never the body). It is validated for shape, used for this request and dropped. */
   const visitorKey = (req: Request): { key: string; model: string } | null => {
     const raw = req.headers['x-groq-key'];
