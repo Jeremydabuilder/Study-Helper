@@ -36,6 +36,7 @@ jobs:
           npx playwright install --with-deps chromium
           npx playwright test
           npx playwright test -c playwright.owner.config.ts
+          npx playwright test -c playwright.public.config.ts
       - name: Production bundle starts and refuses unsafe configuration
         run: |
           ! APP_MODE=hosted node dist-server/main.mjs 2>err.txt; grep -q DATABASE_URL err.txt

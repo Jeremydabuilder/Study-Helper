@@ -25,6 +25,7 @@ import { Operator } from './pages/Operator';
 import { pageFor } from './routes';
 import { MyHelperApp } from './myhelper/MyHelperApp';
 import { OwnerSignIn } from './myhelper/SignIn';
+import { GuestApp } from './guest/GuestApp';
 import './myhelper/mh.css';
 
 const NAV: [string, string][] = [['/', 'Today'], ['/homework', 'Homework'], ['/subjects', 'Subjects'], ['/readings', 'Readings'], ['/chat', 'Chat'], ['/plan', 'Plan'], ['/progress', 'Progress'], ['/memory', 'Memory'], ['/settings', 'Settings']];
@@ -46,7 +47,8 @@ export function App() {
   if (route.startsWith('/privacy')) return <div className="shell"><main><Privacy session={sess.data} /></main></div>;
   if (paused) return <div className="narrow" style={{ paddingTop: 60 }}><h1>Study Helper is paused</h1><p>Your work is saved. Please come back later.</p><button className="btn" onClick={() => { setPaused(false); sess.reload(); }}>Check again</button></div>;
   if (sess.data.methods?.owner) {
-    if (!sess.data.signedIn || ended) return <OwnerSignIn onSignedIn={() => { setEnded(false); sess.reload(); }} />;
+    if ((!sess.data.signedIn || ended) && sess.data.methods.publicGuest && !route.startsWith('/owner')) return <GuestApp onOwner={() => { window.location.hash = '#/owner'; }} />;
+    if (!sess.data.signedIn || ended) return <OwnerSignIn back={!!sess.data.methods.publicGuest} onSignedIn={() => { setEnded(false); if (window.location.hash.startsWith('#/owner')) window.location.hash = '#/'; sess.reload(); }} />;
     return <MyHelperApp session={sess.data} onSignOut={async () => { try { await post('/auth/sign-out', {}); } catch { /* already gone */ } setEnded(true); sess.reload(); }} />;
   }
   if (!sess.data.signedIn || ended) return <div className="shell"><main><Join session={sess.data} onSignedIn={() => { setEnded(false); sess.reload(); }} /></main></div>;

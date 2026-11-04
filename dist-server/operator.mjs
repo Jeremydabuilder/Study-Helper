@@ -459,6 +459,8 @@ function hostedConfigFromEnv(env = process.env) {
   const ownerEnabled = g("OWNER_ONLY") === "1";
   const publicUrl = (g("PUBLIC_URL") ?? (g("RAILWAY_PUBLIC_DOMAIN") ? `https://${g("RAILWAY_PUBLIC_DOMAIN")}` : "")).replace(/\/+$/, "");
   const authSecret = g("BETTER_AUTH_SECRET") ?? "";
+  const publicEnabled = g("PUBLIC_GUEST") === "1";
+  if (publicEnabled && !ownerEnabled) problems.push("PUBLIC_GUEST=1 needs OWNER_ONLY=1: the public study profile is only offered next to a private owner login.");
   if (!["production", "staging", "test"].includes(environment)) problems.push("APP_ENV must be production, staging or test.");
   if (!g("DATABASE_URL")) problems.push("DATABASE_URL is required in hosted mode.");
   try {
@@ -511,7 +513,7 @@ function hostedConfigFromEnv(env = process.env) {
     globalDailyTokens: num("LIMIT_GLOBAL_DAILY_TOKENS", DEFAULT_LIMITS.globalDailyTokens),
     userDailyTokens: num("LIMIT_USER_DAILY_TOKENS", DEFAULT_LIMITS.userDailyTokens)
   };
-  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num("SESSION_DAYS", ownerEnabled ? 30 : 7), owner: { enabled: ownerEnabled, email: ownerEmail, password: ownerPassword, name: (g("OWNER_NAME") ?? "Jeremy").slice(0, 40) }, dataLabel, rate: { apiPerMin: num("RATE_API_PER_MIN", 300), authPerMin: num("RATE_AUTH_PER_MIN", 40), invitePerMin: num("RATE_INVITE_PER_MIN", 20) } }, problems };
+  return { cfg: { environment, databaseUrl: g("DATABASE_URL") ?? "", publicUrl, authSecret, oidc, passwordSignIn, guestEnabled, limits, trustProxy: g("TRUST_PROXY") !== "0", operator, sessionDays: num("SESSION_DAYS", ownerEnabled ? 30 : 7), publicGuest: { enabled: publicEnabled && ownerEnabled, maxPasteChars: Math.min(5e5, Math.max(5e3, num("PUBLIC_MAX_PASTE_CHARS", 2e5))), aiChunkChars: Math.min(12e3, Math.max(1e3, num("PUBLIC_AI_CHUNK_CHARS", 6e3))), aiMaxChunks: Math.min(12, Math.max(1, num("PUBLIC_AI_MAX_CHUNKS", 6))), perIpPerMin: num("PUBLIC_IP_PER_MIN", 8), perIpDaily: num("PUBLIC_IP_DAILY", 40), globalDaily: num("PUBLIC_GLOBAL_DAILY", 400) }, owner: { enabled: ownerEnabled, email: ownerEmail, password: ownerPassword, name: (g("OWNER_NAME") ?? "Jeremy").slice(0, 40) }, dataLabel, rate: { apiPerMin: num("RATE_API_PER_MIN", 300), authPerMin: num("RATE_AUTH_PER_MIN", 40), invitePerMin: num("RATE_INVITE_PER_MIN", 20) } }, problems };
 }
 
 // src/server/ops/cli.ts

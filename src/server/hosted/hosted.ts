@@ -21,6 +21,7 @@ import { mountOperator } from './operator';
 import { ensureOwner } from './owner';
 import { Gate, PgLedger, RateLimiter, assistantState, consumeQuota, refundQuota } from './limits';
 import { Logger, Metrics, makeLogger, requestObserver } from './ops';
+import { mountPublic } from './publicApi';
 import { Pool, audit, createPool, getSettingPg, migrateControl } from './pg';
 import { Tenants } from './tenants';
 import { exportAccount } from './account';
@@ -120,6 +121,8 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         if (secureCookie) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
         next();
       });
+      // public study help: small bodies only, refused before they are read
+      if (hcfg.publicGuest.enabled) app.use('/api/public', (req, res, next) => { if (Number(req.headers['content-length'] ?? 0) > 64 * 1024) return res.status(413).json({ error: { code: 'too_large', message: 'That request is too large. Send a shorter excerpt.' } }); next(); });
       app.get('/healthz', (_req, res) => res.json({ ok: true })); // liveness: the process is up (no dependencies, no data)
       app.get('/readyz', async (_req, res) => { // readiness: can serve students (database reachable and migrated, data directory writable)
         try {
@@ -172,9 +175,10 @@ async function buildHostedApp(d: HostedDeps, pool: Pool, instance: { release: ()
         try {
           const s = await sessionOf(req);
           const open = await getSettingPg<boolean>(pool, 'pilot_enabled', false);
-          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled }, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
+          res.json({ signedIn: !!s, email: s?.guest ? null : s?.email ?? null, guest: s?.guest ?? false, pilotOpen: open, environment: hcfg.environment, operator: hcfg.operator, retentionDays: { audit: 180, reports: 90, unreachableGuest: GUEST_GRACE_DAYS }, methods: { oidc: hcfg.oidc ? { providerId: hcfg.oidc.providerId } : null, password: hcfg.passwordSignIn && !hcfg.owner.enabled, guest: hcfg.guestEnabled, owner: hcfg.owner.enabled, publicGuest: hcfg.publicGuest.enabled }, publicGuest: hcfg.publicGuest.enabled ? { maxPasteChars: hcfg.publicGuest.maxPasteChars, aiChunkChars: hcfg.publicGuest.aiChunkChars, aiMaxChunks: hcfg.publicGuest.aiMaxChunks } : null, ownerName: hcfg.owner.enabled ? hcfg.owner.name : null });
         } catch (e) { next(e); }
       });
+      if (hcfg.publicGuest.enabled) mountPublic(app, { pool, now, cfg: hcfg, llm: d.llm ?? null, ipOf });
       app.post('/api/invite/check', async (req, res, next) => {
         try {
           const r = inviteLimiter.check(ipOf(req)); if (!r.ok) throw new HttpError(429, 'rate_limited', 'Too many attempts. Wait a minute and try again.');

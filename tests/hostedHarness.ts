@@ -58,6 +58,16 @@ export class ScriptedLlm implements LLMTransport {
     this.calls.push(r);
     if (this.delayMs) await new Promise((x) => setTimeout(x, this.delayMs));
     if (this.failNext) { const e = this.failNext; this.failNext = null; throw e; }
+    const pub = r.user.match(/PUBLIC_TASK: (\w+)/)?.[1];
+    if (pub) {
+      const dflt: Record<string, unknown> = {
+        extract_profile: { classes: ['Biology'], assignments: [{ title: 'Cell quiz', class: 'Biology', due_text: 'Friday', type: 'test' }], commitments: [], preferences: [], goals: ['remember more for tests'] },
+        hint: { hint: 'What is being done to x? Undo it one step at a time.', level: 'nudge' },
+        quiz: { questions: [{ prompt: 'What stores DNA?', answer: 'The nucleus', hint: 'Think of the control centre.' }] },
+        check: { verdict: 'partly', feedback: 'You have the main idea; add where it happens.' },
+      };
+      return { text: JSON.stringify(this.replies['public_' + pub] ?? dflt[pub] ?? {}), model: 'fake', stopReason: 'end_turn', requestId: null, usage: { input: 400, output: 120, cacheRead: 0, cacheWrite: 0 } };
+    }
     const u = r.user, j = (o: unknown) => JSON.stringify(o);
     const usage = { input: 400, output: 120, cacheRead: 0, cacheWrite: 0 };
     const wrap = (text: string) => ({ text, model: r.model, stopReason: 'end_turn', requestId: 'req_test', usage });

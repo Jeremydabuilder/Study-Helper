@@ -41,6 +41,8 @@ Owner-only mode (`OWNER_ONLY=1`): one account, created on first start from `OWNE
    | `AI_PROVIDER` | `groq` |
    | `GROQ_API_KEY` | your key from the Groq console (see below) |
 
+   **Optional: let anyone use the study profile without an account** (they never see your private data; see [PUBLIC_STUDY_PROFILE.md](PUBLIC_STUDY_PROFILE.md)): add `PUBLIC_GUEST` = `1`, and set `PUBLIC_GLOBAL_DAILY` (default 400 assistant requests a day for all visitors together) and `PUBLIC_IP_DAILY` (default 40 per address) to numbers you accept. Leave it unset to keep the whole site private.
+
    Optional limits that protect the shared Groq allowance (all optional; defaults are conservative): `LIMIT_GLOBAL_DAILY_AI_REQUESTS`, `LIMIT_GLOBAL_DAILY_TOKENS`, `LIMIT_USER_DAILY_TOKENS`, `GROQ_RPM`, `GROQ_TPM`, `GROQ_MAX_CONCURRENT`, `GROQ_MODEL`. Leave `AUTH_GUESTS`, `GOOGLE_*` and `OPERATOR_*` unset: `OWNER_ONLY=1` already refuses to start if `AUTH_GUESTS=1` is also set.
 7. **Health check:** Node service → **Settings → Deploy → Healthcheck Path** = `/readyz` (it checks the database and that `/data` is writable). **Replicas / instances: 1.**
 8. **Deploy** (Deployments → Redeploy). Watch **Logs**: you should see the server start, the owner account created (the log says that it exists, never the password), and no error lines. Then open the domain.
