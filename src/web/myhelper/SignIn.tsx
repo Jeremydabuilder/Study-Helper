@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ApiError, api } from '../api';
 
 /** The only door of the owner-only site: one email, one password. There is no sign-up, guest entry or invitation here. */
-export function OwnerSignIn({ onSignedIn }: { onSignedIn: () => void }) {
+export function OwnerSignIn({ onSignedIn, back = false }: { onSignedIn: () => void; back?: boolean }) {
   const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const submit = async (e: React.FormEvent) => {
@@ -17,12 +17,13 @@ export function OwnerSignIn({ onSignedIn }: { onSignedIn: () => void }) {
         <div className="mh-brand" style={{ paddingLeft: 0 }}><div className="mh-mark">M</div><div><h1>My Helper</h1><span>Private</span></div></div>
         <form className="mh-panel" onSubmit={submit} aria-labelledby="mh-signin">
           <h3 id="mh-signin">Sign in</h3>
-          <p className="mh-sub">This is a private site. Only the owner can sign in.</p>
+          <p className="mh-sub">This sign-in is for the owner of this site.</p>
           <div className="mh-field" style={{ marginTop: 16 }}><label htmlFor="mh-email">Email</label><input id="mh-email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></div>
           <div className="mh-field"><label htmlFor="mh-pw">Password</label><input id="mh-pw" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>
           {err && <div className="mh-notice bad" role="alert">{err}</div>}
           <div className="mh-row end" style={{ marginTop: 14 }}><button className="mh-primary" disabled={busy || !email || !password}>{busy ? 'Signing in…' : 'Sign in'}</button></div>
         </form>
+        {back && <p className="mh-sub" style={{ marginTop: 14 }}><a href="#/">← Back to Study Helper</a></p>}
       </main>
     </div>
   );

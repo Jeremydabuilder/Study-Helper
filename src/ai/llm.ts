@@ -146,6 +146,9 @@ export class LLMProvider implements AIProvider {
     throw new AIError('malformed', `The model returned an invalid response (${lastErr}).`);
   }
 
+  /** A one-off task with its own prompt and answer shape (used by the public study profile). The same ledger, repair retry and output checks as every other call. */
+  json<T>(task: AITask, purpose: string, schema: z.ZodType<T>, user: string, opts: CallOpts = {}, system?: string): Promise<T> { return this.call(task, purpose, schema, user, opts, { system }); }
+
   /** Cheapest possible proof of an authenticated HTTP round trip. Says nothing about whether study output is valid. */
   async verify(opts: CallOpts = {}, modelOverride?: string) {
     const model = modelOverride ?? this.modelFor('grade');

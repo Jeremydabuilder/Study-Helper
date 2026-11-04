@@ -14,7 +14,7 @@ const APP_PORT = Number(process.env.E2E_APP_PORT ?? 4180), CONTROL_PORT = Number
 const limits = process.env.E2E_LIMITS ? JSON.parse(process.env.E2E_LIMITS) : {};
 const OWNER = { email: 'owner@example.test', password: 'correct horse battery staple' };
 const ownerMode = process.env.E2E_OWNER === '1';
-const startOpts = ownerMode ? { port: APP_PORT, owner: OWNER, limits: { OWNER_NAME: 'Jeremy', ...limits } } : { port: APP_PORT, passwordSignIn: true, limits: { AUTH_GUESTS: '1', ...limits } };
+const startOpts = ownerMode ? { port: APP_PORT, owner: OWNER, limits: { OWNER_NAME: 'Jeremy', ...(process.env.E2E_PUBLIC === '1' ? { PUBLIC_GUEST: '1' } : {}), ...limits } } : { port: APP_PORT, passwordSignIn: true, limits: { AUTH_GUESTS: '1', ...limits } };
 let h = await HostedHarness.start(startOpts);
 
 const loop = monitorEventLoopDelay({ resolution: 10 }); loop.enable();
